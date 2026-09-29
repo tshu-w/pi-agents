@@ -1,0 +1,26 @@
+{
+	"compilerOptions": {
+		"allowImportingTsExtensions": true,
+		"lib": ["ES2023"],
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"noEmit": true,
+		"skipLibCheck": true,
+		"strict": true,
+		"target": "ES2023",
+		"types": ["node"],
+		"typeRoots": [
+			"/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@types"
+		],
+		"paths": {
+			"@earendil-works/pi-coding-agent": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"],
+			"@earendil-works/pi-ai": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/compat.d.ts"],
+			"@earendil-works/pi-ai/compat": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/compat.d.ts"],
+			"@earendil-works/pi-codemode": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-codemode/dist/index.d.ts"],
+			"@earendil-works/pi-tui": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.d.ts"],
+			"typebox": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/typebox/build/index.d.mts"],
+			"typebox/value": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/typebox/build/value/index.d.mts"]
+		}
+	},
+	"include": ["*.ts"]
+}
