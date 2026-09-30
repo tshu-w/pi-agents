@@ -72,7 +72,7 @@ export interface AgentNode {
 	sessionFile(): string | undefined;
 	agents: Agents;
 	/** Delivers a message to this node; used only for root Agents. */
-	receive(text: string, delivery: Delivery): void;
+	receive(text: string, delivery: Delivery, messageId?: string): void;
 	persistUsage(usage: Usage): void;
 }
 
@@ -83,6 +83,8 @@ export interface Entry {
 	cwd: string;
 	state: AgentState;
 	sessionFile?: string;
+	/** A root Agent loaded in another process. */
+	remote?: boolean;
 }
 
 interface Shared {
@@ -180,7 +182,11 @@ export function treeEntries(rootId: string): Entry[] {
 }
 
 export function resolveTarget(rootId: string, target: string): Entry {
-	const entries = treeEntries(rootId);
+	return resolveIn(treeEntries(rootId), target);
+}
+
+/** Resolves an ID or a unique name among the given visible Agents. */
+export function resolveIn(entries: Entry[], target: string): Entry {
 	const byId = entries.find((entry) => entry.id === target);
 	if (byId) return byId;
 	const matches = entries.filter((entry) => entry.name === target);
@@ -199,9 +205,7 @@ export function deliver(
 	body: string,
 ): { queued: boolean } {
 	const fromOwner = from !== undefined && target.ownerId === from.id;
-	const text = from === undefined
-		? body
-		: `Message from ${label(from)}${!fromOwner && delivery !== "write" ? ". Reply with send" : ""}:\n${body}`;
+	const text = from === undefined ? body : messageText(from, fromOwner, delivery, body);
 	if (target.ownerId === undefined) {
 		const node = shared.nodes.get(target.id);
 		if (!node) throw new Error(`${label(target)} is offline.`);
@@ -213,8 +217,26 @@ export function deliver(
 	return owner.agents.accept(target.id, text, delivery, { fromOwner, notification: from === undefined });
 }
 
-export function customMessage(text: string, delivery: Delivery) {
-	return { customType: MESSAGE_TYPE, content: text, display: true, details: { delivery } };
+/** A message under a header naming its sender; an input from a sender other than the owner asks for a reply. */
+export function messageText(from: { id: string; name?: string }, fromOwner: boolean, delivery: Delivery, body: string): string {
+	return `Message from ${label(from)}${!fromOwner && delivery !== "write" ? ". Reply with send" : ""}:\n${body}`;
+}
+
+/** `messageId` marks a message from a root Agent in another process, so it is added once. */
+export function customMessage(text: string, delivery: Delivery, messageId?: string) {
+	return { customType: MESSAGE_TYPE, content: text, display: true, details: { delivery, ...(messageId ? { messageId } : {}) } };
+}
+
+export function receivedMessageIds(ctx: ExtensionContext): string[] {
+	return ctx.sessionManager.getEntries().flatMap((entry) =>
+		entry.type === "custom_message" && entry.customType === MESSAGE_TYPE && typeof (entry.details as { messageId?: unknown })?.messageId === "string"
+			? [(entry.details as { messageId: string }).messageId]
+			: []);
+}
+
+/** Whether a tree has no inputs that have not ended. */
+export function treeIdle(rootId: string): boolean {
+	return shared.scheduler.outstanding(rootId) === 0;
 }
 
 function defaultSessionDirectory(cwd: string, agentDir: string): string {

@@ -1,4 +1,12 @@
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	AgentSession,
+	AgentSessionRuntime,
+	getAgentDir,
+	parseSessionEntries,
+	SessionManager,
+	type ExtensionAPI,
+	type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
@@ -9,22 +17,31 @@ import {
 	deliver,
 	label,
 	listLine,
+	messageText,
 	nodes,
-	resolveTarget,
+	receivedMessageIds,
+	resolveIn,
 	restoredUsage,
 	searchEntries,
 	setTreeUsage,
 	treeEntries,
+	treeIdle,
 	treeMetadata,
 	treeUsage,
 	usageEntry,
 	type AgentNode,
+	type Entry,
 	type Limits,
 	type Usage,
 	type WaitOutcome,
 	type WaitResult,
 } from "./agents.ts";
 import { boundText } from "./output.ts";
+import { installGuard } from "./roots/guard.mjs";
+import ownershipExtension from "./roots/ownership-extension.mjs";
+import { rootPaths } from "./roots/paths.mjs";
+import { createRootRuntime } from "./roots/runtime.ts";
+import { waitForBackground } from "./roots/wait-ui.ts";
 
 const DEFAULT_LIMITS: Limits = { maxConcurrent: 3, maxOutstanding: 8 };
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
@@ -116,6 +133,27 @@ export default function (pi: ExtensionAPI): void {
 	let node: AgentNode | undefined;
 	let ctx: ExtensionContext | undefined;
 
+	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: rootPaths().ownership });
+	const roots = createRootRuntime(pi, {
+		receive: (message) => {
+			const delivery = message.deliverAs ?? "followUp";
+			node?.receive(messageText(message.sender, false, delivery, message.body), delivery, message.id);
+		},
+		treeIdle: () => node === undefined || treeIdle(node.rootId),
+		receivedIds: receivedMessageIds,
+	});
+	ownershipExtension(pi, { start: (current: ExtensionContext) => roots.start(current), stop: () => roots.stop(), waitForBackground });
+
+	/** Agents visible to a node: its tree, and for a root Agent also the other root Agents. */
+	const visible = async (self: AgentNode, signal?: AbortSignal): Promise<Entry[]> => {
+		const tree = treeEntries(self.rootId);
+		if (self.ownerId !== undefined) return tree;
+		const others = (await roots.roots(signal))
+			.filter((root) => !tree.some((entry) => entry.id === root.id))
+			.map((root) => ({ ...root, remote: !nodes.has(root.id) }));
+		return [...tree, ...others];
+	};
+
 	const requireNode = (current: ExtensionContext): AgentNode => {
 		if (!node) throw new Error("pi-agents is not initialized");
 		ctx = current;
@@ -138,8 +176,8 @@ export default function (pi: ExtensionAPI): void {
 			cwd: () => ctx?.cwd ?? current.cwd,
 			busy: () => !(ctx?.isIdle() ?? true),
 			sessionFile: () => ctx?.sessionManager.getSessionFile(),
-			receive: (text, delivery) => {
-				pi.sendMessage(customMessage(text, delivery), delivery === "write"
+			receive: (text, delivery, messageId) => {
+				pi.sendMessage(customMessage(text, delivery, messageId), delivery === "write"
 					? { deliverAs: "steer" }
 					: { deliverAs: delivery, triggerTurn: true });
 			},
@@ -220,17 +258,25 @@ export default function (pi: ExtensionAPI): void {
 					const delivery = params.deliverAs ?? "followUp";
 					if (!targets?.length || !params.message?.trim()) throw new Error("send requires target and message");
 					if (targets.length > 1 && delivery !== "write") throw new Error("Only a write can go to several Agents.");
-					const entries = targets.map((target) => resolveTarget(self.rootId, target));
+					const tree = treeEntries(self.rootId);
+					const candidates = targets.every((target) => tree.some((entry) => entry.id === target)) ? tree : await visible(self, signal);
+					const entries = targets.map((target) => resolveIn(candidates, target));
 					if (entries.some((entry) => entry.id === self.id)) throw new Error("An Agent cannot send to itself.");
+					const body = params.message;
+					const send = async (entry: Entry) => {
+						if (!entry.remote) return deliver(caller, entry, delivery, body);
+						await roots.send({ id: entry.id, label: label(entry) }, delivery, body, signal);
+						return { queued: false };
+					};
 					if (delivery === "write") {
-						for (const entry of entries) deliver(caller, entry, delivery, params.message);
+						for (const entry of entries) await send(entry);
 						return {
 							content: [{ type: "text", text: `Write accepted by ${entries.map(label).join(", ")}.` }],
 							details: { ids: entries.map((entry) => entry.id) },
 						};
 					}
 					const entry = entries[0]!;
-					const { queued } = deliver(caller, entry, delivery, params.message);
+					const { queued } = await send(entry);
 					return {
 						content: [{ type: "text", text: `Input accepted by ${label(entry)}${queued ? `, queued: ${slotsBusy}` : ""}.` }],
 						details: { id: entry.id, queued },
@@ -248,7 +294,7 @@ export default function (pi: ExtensionAPI): void {
 					rejectFields(params, "list", ["name", "message", "cwd", "context", "model", "thinkingLevel", "target", "deliverAs", "history", "timeout"]);
 					const offset = params.offset ?? 0;
 					const limit = params.limit ?? 20;
-					const entries = treeEntries(self.rootId).filter((entry) => entry.id !== self.id && (!params.state || entry.state === params.state));
+					const entries = (await visible(self, signal)).filter((entry) => entry.id !== self.id && (!params.state || entry.state === params.state));
 					const items = searchEntries(entries, params.query);
 					const page = items.slice(offset, offset + limit);
 					if (page.length === 0) return { content: [{ type: "text", text: "No matching Agents." }], details: { total: items.length } };

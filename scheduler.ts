@@ -131,6 +131,10 @@ export class TreeScheduler {
 		return permit;
 	}
 
+	outstanding(rootId: string): number {
+		return this.outstandingByRoot.get(rootId)?.size ?? 0;
+	}
+
 	releaseOutstanding(rootId: string, permit: symbol): void {
 		const outstanding = this.outstandingByRoot.get(rootId);
 		if (!outstanding?.delete(permit)) return;

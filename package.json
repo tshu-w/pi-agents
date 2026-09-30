@@ -14,6 +14,12 @@
     "test": "node --test tests/",
     "typecheck": "tsc -p tsconfig.json"
   },
+  "allowScripts": {
+    "fs-ext": true
+  },
+  "dependencies": {
+    "fs-ext": "^2.1.1"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
