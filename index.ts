@@ -38,9 +38,10 @@ import {
 	type WaitOutcome,
 	type WaitResult,
 } from "./agents.ts";
-import { loadPiCodemode } from "./codemode.ts";
+import { loadCodemode, loadPiCodemode } from "./codemode.ts";
 import { boundBlocks, boundText } from "./output.ts";
 import { programScope } from "./program-agents.ts";
+import { prepareProgramLoadout, programDescription, programRenderers } from "./program-loadout.ts";
 import { executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./program-execute.ts";
 import { agentGlobals, withAgentPrefix } from "./program-sandbox.ts";
 import { programListLine, Programs, renderProgramWait, uuidv7 } from "./programs.ts";
@@ -151,7 +152,7 @@ interface AgentHandle {
 export default async function (pi: ExtensionAPI): Promise<void> {
 	const agentDir = getAgentDir();
 	const settings = readSettings(agentDir);
-	const piCodemode = await loadPiCodemode();
+	const [codemode, piCodemode] = await Promise.all([loadCodemode(), loadPiCodemode()]);
 	let node: AgentNode | undefined;
 	let programs: Programs | undefined;
 	let ctx: ExtensionContext | undefined;
@@ -395,7 +396,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	pi.registerTool({
 		name: PROGRAM_TOOL_NAME,
 		label: "Program",
-		description: `${PROGRAM_DESCRIPTION}\n\n${piCodemode.createCodemodeDescription([], { models: true })}`,
+		// Programs must not start Programs.
+		exposure: "model-only",
+		prepareLoadout: (loadout) => prepareProgramLoadout(pi, codemode, piCodemode, PROGRAM_DESCRIPTION, loadout),
+		...programRenderers(piCodemode),
+		description: programDescription(piCodemode, PROGRAM_DESCRIPTION),
 		promptSnippet: "Run JavaScript that composes tool calls and Agents",
 		promptGuidelines: [
 			"Use `program(action='run', code=...)` to call tools or Agents several times without a model turn between the calls, for example to read many files, filter large tool output, fan out Agents, or loop until a condition holds.",

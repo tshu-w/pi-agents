@@ -24,8 +24,8 @@ const bodyOf = (text) => text.split("\n").slice(1).join("\n").split("\n\nWhen do
  * Agents answer `answer:<body>`. A body `submit:<json>[|<json>]` calls `submit_result` with the
  * first value, and with the second after an error; `hold` answers once `state.release` is called.
  */
-async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), sessionFile = undefined, limits = {}) {
-	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
+async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), sessionFile = undefined, limits = {}, settings = {}) {
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ...settings, "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
 	writeFileSync(join(cwd, "note.txt"), "note");
 	const messages = [];
 	const pending = [];
@@ -185,4 +185,18 @@ test("a Program's Agents are invisible to the caller, count toward its limit, an
 	const result = await root.text({ action: "wait", target: id, timeout: 10 });
 	assert.match(result, /status="stopped">\n[\s\S]*Input rejected: 2 inputs have not ended/);
 	await root.close();
+});
+
+test("codemode.mode decides whether program lists the direct tools or they keep their own declarations", async () => {
+	const declared = (root) => Object.fromEntries(root.session.agent.state.tools.map((tool) => [tool.name, tool.description]));
+	const on = await startRoot();
+	let tools = declared(on);
+	assert.match(tools.read, /program tool declaration:\n```ts\ndeclare const tools: \{ read\(/);
+	assert.doesNotMatch(tools.program, /Nested tools:/);
+	await on.close();
+	const only = await startRoot(undefined, undefined, {}, { codemode: { mode: "only" } });
+	tools = declared(only);
+	assert.match(tools.program, /Nested tools: COMPLETE list \(2 tools\)\.[\s\S]*### `read`[\s\S]*### `agent`/);
+	assert.deepEqual([...only.session._hiddenDeclarations].sort(), ["agent", "read"]);
+	await only.close();
 });

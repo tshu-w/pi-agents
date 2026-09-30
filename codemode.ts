@@ -22,6 +22,7 @@ export function loadCodemode(): Promise<Codemode> {
 /** Parts of Pi's `codemode` tool that its package entry does not export. */
 export interface PiCodemode {
 	CODEMODE_STORE_ENTRY_TYPE: string;
+	DEFAULT_CODEMODE_INLINE_BUDGET: number;
 	MODEL_GLOBAL_DECLARATIONS: Array<{ name: string; description: string; signature: string }>;
 	createCodemodeDescription(tools: unknown[], options?: Record<string, unknown>): string;
 	getCodemodeCallableTools<T extends { name: string }>(tools: readonly T[]): T[];
@@ -33,6 +34,8 @@ export interface PiCodemode {
 	createToolSearchDocument(tool: unknown, namespace: unknown): unknown;
 	DEFAULT_TOOL_SEARCH_LIMIT: number;
 	combineUsage<T>(first: T, second: T): T;
+	/** Renders a script result: its nested calls, then its output without the header. */
+	renderResult(result: unknown, options: unknown, theme: unknown, context: unknown): unknown;
 }
 
 let internals: Promise<PiCodemode> | undefined;
@@ -42,15 +45,17 @@ export function loadPiCodemode(): Promise<PiCodemode> {
 	internals ??= (async () => {
 		const dist = join(getPackageDir(), "dist");
 		const load = (file: string) => import(pathToFileURL(join(dist, file)).href);
-		const [tool, execute, config, search, usage] = await Promise.all([
+		const [tool, execute, config, search, usage, renderer] = await Promise.all([
 			load("extensions/codemode/tool.js"),
 			load("extensions/codemode/execute.js"),
 			load("config.js"),
 			load("extensions/tool-search/tool.js"),
 			load("core/usage-totals.js"),
+			load("extensions/codemode/renderer.js"),
 		]);
 		return {
 			CODEMODE_STORE_ENTRY_TYPE: tool.CODEMODE_STORE_ENTRY_TYPE,
+			DEFAULT_CODEMODE_INLINE_BUDGET: tool.DEFAULT_CODEMODE_INLINE_BUDGET,
 			MODEL_GLOBAL_DECLARATIONS: tool.MODEL_GLOBAL_DECLARATIONS,
 			createCodemodeDescription: tool.createCodemodeDescription,
 			getCodemodeCallableTools: tool.getCodemodeCallableTools,
@@ -62,6 +67,7 @@ export function loadPiCodemode(): Promise<PiCodemode> {
 			createToolSearchDocument: search.createToolSearchDocument,
 			DEFAULT_TOOL_SEARCH_LIMIT: search.DEFAULT_TOOL_SEARCH_LIMIT,
 			combineUsage: usage.combineUsage,
+			renderResult: renderer.codemodeRenderers.renderResult,
 		};
 	})();
 	return internals;
