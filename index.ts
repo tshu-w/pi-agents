@@ -3,6 +3,7 @@ import {
 	AgentSessionRuntime,
 	ExtensionRunner,
 	getAgentDir,
+	keyHint,
 	parseSessionEntries,
 	SessionManager,
 	type ExtensionAPI,
@@ -41,7 +42,7 @@ import {
 } from "./agents.ts";
 import { loadCodemode, loadPiCodemode } from "./codemode.ts";
 import { installHostPatches } from "./host-patches.ts";
-import { renderToolCall } from "./render-call.ts";
+import { renderTextResult, renderToolCall, startDuration, type DurationState } from "./render-call.ts";
 import { boundBlocks, boundText } from "./output.ts";
 import { programScope } from "./program-agents.ts";
 import { prepareProgramLoadout, programDescription, programRenderers } from "./program-loadout.ts";
@@ -247,7 +248,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	pi.registerTool({
 		name: "agent",
 		label: "Agent",
-		renderCall: (args, theme, context) => renderToolCall("agent", args, theme, !context.isPartial, context.lastComponent),
+		renderCall: (args, theme, context) => {
+			startDuration(context.state as DurationState, args.action === "wait", context.executionStarted);
+			return renderToolCall("agent", args, theme, !context.isPartial, context.lastComponent);
+		},
+		// `wait` shows how long it has waited.
+		renderResult: (result, options, theme, context) => renderTextResult(result, options, theme, context, () => keyHint("app.tools.expand", "to expand")),
 		description: `Create, message, and coordinate Agents. \`spawn\` creates an owned Agent and sends its first input; \`send\` sends an input or a write to a visible Agent; \`wait\` waits for owned Agents and returns unread results; \`list\` finds visible Agents; \`abort\` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification naming the Agent and outcome; \`wait\` returns the result. Owned Agents under the same root share \`${maxConcurrent}\` execution slots and a limit of \`${maxOutstanding}\` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.`,
 		promptSnippet: "Create, message, and coordinate Agents",
 		promptGuidelines: [
@@ -272,7 +278,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, description: "Maximum Agents returned by `list` (default: 20, max: 200)." })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, description: "Number of Agents to skip for `list` (default: 0)." })),
 		}),
-		async execute(_toolCallId, params, signal, _onUpdate, current) {
+		async execute(_toolCallId, params, signal, onUpdate, current) {
 			const self = requireNode(current);
 			const agents = self.agents;
 			const caller = { id: self.id, name: self.name() };
@@ -326,6 +332,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 				case "wait": {
 					rejectFields(params, "wait", ["name", "message", "cwd", "context", "model", "thinkingLevel", "deliverAs", "query", "state", "limit", "offset"]);
 					const selected = targets?.map((target) => agents.ownedTarget(target));
+					// An empty partial result lets the row show the elapsed time.
+					onUpdate?.({ content: [], details: undefined });
 					const outcome = await agents.wait(selected, params.history ?? 0, params.timeout ?? 30, signal);
 					const rendered = renderWait(outcome);
 					agents.markRead(rendered.read);
@@ -449,6 +457,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 					const timeout = params.timeout ?? 30;
 					if (timeout < 10 || timeout > 3600) throw new Error("wait timeout must be between 10 and 3600 seconds");
 					const selected = programs.select(targets);
+					onUpdate?.({ content: [], details: undefined });
 					const waitFor = () => programs!.wait(selected, timeout, signal);
 					const outcome = programs.running(selected) ? await self.agents.whileSuspended(waitFor, signal) : await waitFor();
 					const rendered = renderProgramWait(outcome);

@@ -2,7 +2,7 @@ import { highlightCode, keyHint, type ExtensionAPI, type ToolDefinition } from "
 import { Text } from "@earendil-works/pi-tui";
 import type { PiCodemode } from "./codemode.ts";
 import { PROGRAM_TOOL_NAME, programCallableTools } from "./program-execute.ts";
-import { formatToolCall } from "./render-call.ts";
+import { formatToolCall, renderTextResult, startDuration, type DurationState } from "./render-call.ts";
 
 type Codemode = typeof import("@earendil-works/pi-codemode");
 type Loadout = Parameters<NonNullable<ToolDefinition["prepareLoadout"]>>[0];
@@ -77,6 +77,7 @@ export function programRenderers(piCodemode: PiCodemode): Renderers {
 	return {
 		renderCall(args, theme, context) {
 			const { code, ...rest } = (args ?? {}) as Record<string, unknown>;
+			startDuration(context.state as DurationState, rest.action === "wait", context.executionStarted);
 			let text = formatToolCall(PROGRAM_TOOL_NAME, rest, theme);
 			if (typeof code === "string" && code) {
 				const lines = highlightCode(code.replace(/\r/g, "").replace(/\t/g, "   ").trimEnd(), "javascript");
@@ -91,6 +92,9 @@ export function programRenderers(piCodemode: PiCodemode): Renderers {
 			component.setText(text);
 			return component;
 		},
-		renderResult: (result, options, theme, context) => piCodemode.renderResult(result, options, theme, context) as Text,
+		// `wait` shows how long it has waited; the other results render like `codemode`.
+		renderResult: (result, options, theme, context) => (context.args as { action?: string }).action === "wait"
+			? renderTextResult(result, options, theme, context, () => keyHint("app.tools.expand", "to expand"))
+			: piCodemode.renderResult(result, options, theme, context) as Text,
 	};
 }
