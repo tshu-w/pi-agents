@@ -36,3 +36,21 @@ export function boundText(text: string, prefix: string): BoundedText {
 		details: { truncation, fullOutputPath },
 	};
 }
+
+/**
+ * Bounds result blocks joined by blank lines. The block that crosses the limit keeps its closing
+ * tag; `shown` counts the blocks that appear, and the caller names the omitted ones.
+ */
+export function boundBlocks(blocks: string[], tag: string, prefix: string): BoundedText & { shown: number } {
+	const bounded = boundText(blocks.join("\n\n"), prefix);
+	if (!bounded.details) return { ...bounded, shown: blocks.length };
+	const kept = bounded.kept;
+	let start = 0;
+	const shown = blocks.filter((block) => {
+		const visible = start < kept.length;
+		start += block.length + 2;
+		return visible;
+	}).length;
+	const open = kept.lastIndexOf(`<${tag} `) > kept.lastIndexOf(`</${tag}>`);
+	return { ...bounded, text: `${kept}${open ? `\n</${tag}>` : ""}${bounded.text.slice(kept.length)}`, shown };
+}

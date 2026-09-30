@@ -301,12 +301,12 @@ function takeQueued(agent: AgentSession["agent"]): QueuedMessage[] {
 	return [...steering, ...followUps].filter(ours);
 }
 
-interface Deferred {
+export interface Deferred {
 	promise: Promise<void>;
 	resolve(): void;
 }
 
-function deferred(): Deferred {
+export function deferred(): Deferred {
 	let resolve!: () => void;
 	const promise = new Promise<void>((done) => { resolve = done; });
 	return { promise, resolve };
@@ -716,13 +716,27 @@ export class Agents {
 			if (this.closing || record.notified || agent.waiters > 0) return;
 			record.notified = true;
 			this.persist(agent);
-			try {
-				deliver(undefined, { id: this.self.id, name: this.self.name(), ownerId: this.self.ownerId, cwd: "", state: "busy" },
-					"steer", `Agent ${label(agent.record)} ${record.state}.`);
-			} catch (error) {
-				console.warn(`[pi-agents] notification failed: ${error instanceof Error ? error.message : String(error)}`);
-			}
+			this.notify(`Agent ${label(agent.record)} ${record.state}.`);
 		});
+	}
+
+	/** Delivers a notification to this Agent as a steer. */
+	notify(text: string): void {
+		try {
+			deliver(undefined, { id: this.self.id, name: this.self.name(), ownerId: this.self.ownerId, cwd: "", state: "busy" }, "steer", text);
+		} catch (error) {
+			console.warn(`[pi-agents] notification failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/** Runs `work` while an owned caller gives up its slot, and takes one again before returning. */
+	async whileSuspended<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+		const suspended = this.self.ownerId !== undefined && shared.scheduler.suspend(this.self.rootId, this.self.id);
+		try {
+			return await work();
+		} finally {
+			if (suspended) await shared.scheduler.resume(this.self.rootId, this.self.id, this.limits.maxConcurrent, signal);
+		}
 	}
 
 	private pending(agent: Owned): boolean {

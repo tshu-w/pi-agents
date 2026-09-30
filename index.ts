@@ -36,7 +36,10 @@ import {
 	type WaitOutcome,
 	type WaitResult,
 } from "./agents.ts";
-import { boundText } from "./output.ts";
+import { loadPiCodemode } from "./codemode.ts";
+import { boundBlocks, boundText } from "./output.ts";
+import { executeProgram, PROGRAM_TOOL_NAME } from "./program-execute.ts";
+import { programListLine, Programs, renderProgramWait } from "./programs.ts";
 import { installGuard } from "./roots/guard.mjs";
 import ownershipExtension from "./roots/ownership-extension.mjs";
 import { rootPaths } from "./roots/paths.mjs";
@@ -89,24 +92,11 @@ export function renderWait(outcome: WaitOutcome): { text: string; read: WaitResu
 		const bounded = boundText(only.input.result ?? "", "pi-agents-wait");
 		return { text: bounded.text, read: results, details: { ...bounded.details } };
 	}
-	const blocks = results.map(resultBlock);
-	const bounded = boundText(blocks.join("\n\n"), "pi-agents-wait");
+	const bounded = boundBlocks(results.map(resultBlock), "agent-result", "pi-agents-wait");
 	let text = bounded.text;
-	let read = results;
-	if (bounded.details) {
-		const kept = bounded.kept;
-		let start = 0;
-		const shown = blocks.filter((block) => {
-			const visible = start < kept.length;
-			start += block.length + 2;
-			return visible;
-		}).length;
-		read = results.slice(0, shown);
-		const omitted = results.slice(shown);
-		const open = kept.lastIndexOf("<agent-result ") > kept.lastIndexOf("</agent-result>");
-		text = `${kept}${open ? "\n</agent-result>" : ""}${bounded.text.slice(kept.length)}`;
-		if (omitted.length > 0) text += `\n\n[Results omitted: ${omitted.map((result) => label(result.agent)).join(", ")}. Use wait with fewer targets.]`;
-	}
+	const read = results.slice(0, bounded.shown);
+	const omitted = results.slice(bounded.shown);
+	if (omitted.length > 0) text += `\n\n[Results omitted: ${omitted.map((result) => label(result.agent)).join(", ")}. Use wait with fewer targets.]`;
 	if (pendingLine) text += `\n\n${pendingLine}`;
 	return { text, read, details: { pending: pending.map((agent) => agent.id), ...bounded.details } };
 }
@@ -127,10 +117,16 @@ function rejectFields(params: Record<string, unknown>, action: string, fields: s
 	if (present.length > 0) throw new Error(`${action} does not accept: ${present.join(", ")}`);
 }
 
-export default function (pi: ExtensionAPI): void {
+const PROGRAM_DESCRIPTION = `Run JavaScript that composes tool calls and Agents; only its output and return value reach the caller. \`run\` runs a Program in the foreground, or in the background with \`background\`; \`wait\` waits for background Programs and returns their results; \`list\` lists background Programs; \`stop\` stops a running Program. When a background Program ends while its caller is not waiting for it, the caller receives a notification; \`wait\` returns the result.
+
+Program code is the body of an async function. It calls the caller's tools through \`tools.*\`, which excludes \`program\`.`;
+
+export default async function (pi: ExtensionAPI): Promise<void> {
 	const agentDir = getAgentDir();
 	const settings = readSettings(agentDir);
+	const piCodemode = await loadPiCodemode();
 	let node: AgentNode | undefined;
+	let programs: Programs | undefined;
 	let ctx: ExtensionContext | undefined;
 
 	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: rootPaths().ownership });
@@ -187,13 +183,21 @@ export default function (pi: ExtensionAPI): void {
 		};
 		nodes.set(id, node);
 		if (!metadata) setTreeUsage(id, restoredUsage(current));
+		programs = new Programs({
+			appendEntry: (customType, data) => pi.appendEntry(customType, data),
+			notify: (text) => agents.notify(text),
+		});
+		programs.restore(current);
 	});
 
 	pi.on("session_shutdown", async () => {
 		const closing = node;
 		if (!closing) return;
 		node = undefined;
+		const stopping = programs;
+		programs = undefined;
 		try {
+			await stopping?.shutdown();
 			await closing.agents.shutdown();
 		} finally {
 			if (nodes.get(closing.id) === closing) nodes.delete(closing.id);
@@ -318,6 +322,87 @@ export default function (pi: ExtensionAPI): void {
 		},
 	});
 
+	const programOptions = {
+		appendEntry: (customType: string, data: unknown) => pi.appendEntry(customType, data),
+		getToolNamespace: (name: string) => pi.getAllTools().find((tool) => tool.name === name)?.namespace,
+	};
+
+	pi.registerTool({
+		name: PROGRAM_TOOL_NAME,
+		label: "Program",
+		description: `${PROGRAM_DESCRIPTION}\n\n${piCodemode.createCodemodeDescription([], { models: true })}`,
+		promptSnippet: "Run JavaScript that composes tool calls and Agents",
+		promptGuidelines: [
+			"Use `program(action='run', code=...)` to call tools or Agents several times without a model turn between the calls, for example to read many files, filter large tool output, fan out Agents, or loop until a condition holds.",
+			"Use `Promise.allSettled` for independent calls. Return only what the caller needs; use `text()` for progress worth reading.",
+			"Use `background=true` for long Programs, and `program(action='wait', ...)` when the next step depends on their results.",
+		],
+		parameters: Type.Object({
+			action: StringEnum(["run", "wait", "list", "stop"] as const, { description: "Operation and applicable parameters: `run(code, background?, timeout?)`, `wait(target?, timeout?)`, `list(limit?, offset?)`, or `stop(target)`." }),
+			code: Type.Optional(Type.String({ description: "JavaScript async-function body for `run`." })),
+			background: Type.Optional(Type.Boolean({ description: "Whether `run` returns the Program ID at once (default: false)." })),
+			timeout: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Maximum seconds. For `run` (default: none), expiry stops the Program. For `wait` (default: 30, min: 10, max: 3600), expiry does not stop Programs." })),
+			target: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "Program ID for `wait` or `stop`. `wait` also accepts an array. When omitted for `wait`, selects running Programs and ended Programs whose result has not been returned." })),
+			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, description: "Maximum Programs returned by `list` (default: 20, max: 200)." })),
+			offset: Type.Optional(Type.Integer({ minimum: 0, description: "Number of Programs to skip for `list` (default: 0)." })),
+		}),
+		async execute(toolCallId, params, signal, onUpdate, current) {
+			const self = requireNode(current);
+			if (!programs) throw new Error("pi-agents is not initialized");
+			const targets = params.target === undefined ? undefined : Array.isArray(params.target) ? params.target : [params.target];
+			switch (params.action) {
+				case "run": {
+					rejectFields(params, "run", ["target", "limit", "offset"]);
+					if (!params.code?.trim()) throw new Error("run requires code");
+					const code = params.code;
+					if (params.background) {
+						const record = programs.start(toolCallId, code, current, { ...programOptions, timeout: params.timeout });
+						return { content: [{ type: "text", text: `Program ${record.id} started.` }], details: { id: record.id } };
+					}
+					const { result } = await self.agents.whileSuspended(() => executeProgram(toolCallId, code, signal ?? new AbortController().signal, current, {
+						...programOptions,
+						timeout: params.timeout,
+						onUpdate: (details) => onUpdate?.({ content: [], details }),
+					}), signal);
+					return result;
+				}
+				case "wait": {
+					rejectFields(params, "wait", ["code", "background", "limit", "offset"]);
+					const timeout = params.timeout ?? 30;
+					if (timeout < 10 || timeout > 3600) throw new Error("wait timeout must be between 10 and 3600 seconds");
+					const selected = programs.select(targets);
+					const waitFor = () => programs!.wait(selected, timeout, signal);
+					const outcome = programs.running(selected) ? await self.agents.whileSuspended(waitFor, signal) : await waitFor();
+					const rendered = renderProgramWait(outcome);
+					programs.markReturned(rendered.returned);
+					return { content: rendered.content, details: { running: outcome.running.map((record) => record.id) } };
+				}
+				case "list": {
+					rejectFields(params, "list", ["code", "background", "timeout", "target"]);
+					const offset = params.offset ?? 0;
+					const limit = params.limit ?? 20;
+					const records = programs.list();
+					if (records.length === 0) return { content: [{ type: "text", text: "No Programs." }], details: { total: 0 } };
+					const page = records.slice(offset, offset + limit);
+					const lines = page.map(programListLine);
+					const remaining = records.length - offset - page.length;
+					if (remaining > 0) lines.push(`[${remaining} more results. Use offset=${offset + page.length} to continue.]`);
+					return { content: [{ type: "text", text: lines.join("\n") }], details: { total: records.length } };
+				}
+				case "stop": {
+					rejectFields(params, "stop", ["code", "background", "timeout", "limit", "offset"]);
+					if (targets?.length !== 1) throw new Error("stop requires one target");
+					const program = programs.target(targets[0]!);
+					const stopped = await programs.stop(program);
+					return {
+						content: [{ type: "text", text: `Program ${program.record.id} ${stopped ? "stopped" : "has already ended"}.` }],
+						details: { id: program.record.id, stopped },
+					};
+				}
+			}
+		},
+	});
+
 	pi.registerCommand("tasks", {
 		description: "Show a summary of this Agent's owned Agents",
 		handler: async (_args, current) => {
@@ -327,7 +412,13 @@ export default function (pi: ExtensionAPI): void {
 				.filter(([count]) => count > 0)
 				.map(([count, text]) => `${count} ${text}`)
 				.join(" · ") || "0";
-			current.ui.notify(`Agents: ${counts}\nUsage: ${formatUsage(treeUsage(self?.rootId ?? ""))}`, "info");
+			const { running, unreturned } = programs?.summary() ?? { running: 0, unreturned: 0 };
+			const programCounts = ([[running, "running"], [unreturned, "unreturned results"]] as const)
+				.filter(([count]) => count > 0)
+				.map(([count, text]) => `${count} ${text}`)
+				.join(" · ");
+			const lines = [`Agents: ${counts}`, ...(programCounts ? [`Programs: ${programCounts}`] : []), `Usage: ${formatUsage(treeUsage(self?.rootId ?? ""))}`];
+			current.ui.notify(lines.join("\n"), "info");
 		},
 	});
 }
