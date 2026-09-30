@@ -24,7 +24,7 @@ const bodyOf = (text) => text.split("\n").slice(1).join("\n").split("\n\nWhen do
  * Agents answer `answer:<body>`. A body `submit:<json>[|<json>]` calls `submit_result` with the
  * first value, and with the second after an error; `hold` answers once `state.release` is called.
  */
-async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), sessionFile = undefined, limits = {}, settings = {}) {
+async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), sessionFile = undefined, limits = {}, settings = {}, extensions = []) {
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ...settings, "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
 	writeFileSync(join(cwd, "note.txt"), "note");
 	const messages = [];
@@ -64,7 +64,7 @@ async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), se
 	const settingsManager = pi.SettingsManager.create(cwd, agentDir, { projectTrusted: true });
 	const resourceLoader = new pi.DefaultResourceLoader({
 		cwd, agentDir, settingsManager, noExtensions: true,
-		additionalExtensionPaths: [fileURLToPath(new URL("../index.ts", import.meta.url))],
+		additionalExtensionPaths: [fileURLToPath(new URL("../index.ts", import.meta.url)), ...extensions],
 	});
 	await resourceLoader.reload();
 	const sessionManager = sessionFile ? pi.SessionManager.open(sessionFile) : pi.SessionManager.create(cwd, join(cwd, "sessions"));
@@ -128,6 +128,44 @@ test("stop and timeout stop background Programs", async () => {
 	assert.match(results, new RegExp(`<program-result id="${stopped}" status="stopped">\\n[\\s\\S]*Script aborted: Program stopped[\\s\\S]*?</program-result>`));
 	assert.match(results, new RegExp(`<program-result id="${timedOut}" status="stopped">\\n[\\s\\S]*Script timed out`));
 	await assert.rejects(root.text({ action: "stop", target: "missing" }), /No Program matches "missing"\. Use list to find Programs\./);
+	await root.close();
+});
+
+test("a background Program's calls keep distinct IDs across turns, and their hooks follow the Program's signal", async () => {
+	const hookExtension = fileURLToPath(new URL("./fixtures/hook-extension.mjs", import.meta.url));
+	const root = await startRoot(undefined, undefined, {}, {}, [hookExtension]);
+	const { hooks } = await import(hookExtension);
+	hooks.holdMs = 300;
+	const id = idOf(await root.text({ action: "run", background: true, code: "for (let i = 0; i < 4; i++) await tools.read({ path: 'note.txt' }); return 'done'" }));
+	// A caller turn that is aborted while the Program calls tools.
+	const turn = root.call({ action: "run", code: "await tools.read({ path: 'note.txt' }); return 'fg'" });
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	await root.session.abort();
+	await turn;
+	assert.match(await root.text({ action: "wait", target: id, timeout: 10 }), /Output:\ndone$/);
+	const runCallId = root.session.messages.find((message) => message.role === "toolResult" && textOf(message.content) === `Program ${id} started.`).toolCallId;
+	const background = hooks.calls.filter((call) => call.id.startsWith(`${runCallId}:`));
+	assert.equal(background.length, 4);
+	assert.equal(new Set(background.map((call) => call.id)).size, 4);
+	assert.ok(background.every((call) => call.signal && !call.aborted));
+	// Stopping the Program aborts the signal its hooks see.
+	hooks.calls.length = 0;
+	hooks.holdMs = 5000;
+	const stopped = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' })" }));
+	while (hooks.calls.length === 0) await new Promise((resolve) => setTimeout(resolve, 10));
+	await root.text({ action: "stop", target: stopped });
+	assert.equal(hooks.calls[0].aborted, true);
+	await root.close();
+});
+
+test("compaction lists the files of background Programs", async () => {
+	const root = await startRoot(undefined, undefined, {}, { compaction: { keepRecentTokens: 1 } });
+	const id = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' })" }));
+	await root.text({ action: "wait", target: id, timeout: 10 });
+	await root.text({ action: "list" });
+	await root.session.compact();
+	const compaction = root.sessionManager.getEntries().findLast((entry) => entry.type === "compaction");
+	assert.deepEqual(compaction.details.readFiles, ["note.txt"]);
 	await root.close();
 });
 

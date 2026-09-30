@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deferred, type Deferred } from "./agents.ts";
 import { boundBlocks, boundText } from "./output.ts";
-import type { ProgramOutcome, ProgramRunResult } from "./program-execute.ts";
+import type { ProgramFiles, ProgramOutcome, ProgramRunResult } from "./program-execute.ts";
 
 const PROGRAM_ENTRY = "pi-agents-program";
 const CLEANUP_TIMEOUT_MS = 10_000;
@@ -17,6 +17,8 @@ export interface ProgramRecord {
 	startedAt: number;
 	content?: Item[];
 	isError?: boolean;
+	/** Files the Program's tool calls used, for compaction. */
+	files?: ProgramFiles;
 	/** Whether `wait` has returned the result. */
 	returned: boolean;
 	notified: boolean;
@@ -93,7 +95,7 @@ export class Programs {
 		this.programs.set(record.id, program);
 		this.persist(record);
 		program.done = run(record.id, controller.signal).then(
-			({ outcome, result }) => this.end(program, outcome, result.content, result.isError === true),
+			({ outcome, result, files }) => this.end(program, outcome, result.content, result.isError === true, files),
 			(error: unknown) => this.end(program, "failed", [{ type: "text", text: `Script failed\nOutput:\nScript error:\n${error instanceof Error ? error.message : String(error)}` }], true),
 		);
 		return record;
@@ -203,11 +205,12 @@ export class Programs {
 		}
 	}
 
-	private end(program: Running, outcome: ProgramOutcome, content: Item[], isError: boolean): void {
+	private end(program: Running, outcome: ProgramOutcome, content: Item[], isError: boolean, files?: ProgramFiles): void {
 		const { record } = program;
 		record.state = outcome;
 		record.content = content;
 		record.isError = isError;
+		if (files && (files.read.length > 0 || files.written.length > 0 || files.edited.length > 0)) record.files = files;
 		program.controller = undefined;
 		this.persist(record);
 		if (program.waiters === 0) this.notify(record);
@@ -225,6 +228,28 @@ export class Programs {
 
 	private persist(record: ProgramRecord): void {
 		this.hooks.appendEntry(PROGRAM_ENTRY, record);
+	}
+}
+
+/**
+ * Adds the files of the background Programs that ended in the entries compaction summarizes: after
+ * the previous compaction's kept entries start and before `firstKeptEntryId`. Pi finds file
+ * operations in the nested calls of tool results, which do not hold calls made after `run` returns.
+ */
+export function addProgramFiles(
+	entries: Array<{ id: string; type: string; customType?: string; data?: unknown; firstKeptEntryId?: string }>,
+	firstKeptEntryId: string,
+	fileOps: { read: Set<string>; written: Set<string>; edited: Set<string> },
+): void {
+	const end = entries.findIndex((entry) => entry.id === firstKeptEntryId);
+	const previous = entries.findLast((entry) => entry.type === "compaction");
+	const start = previous ? Math.max(0, entries.findIndex((entry) => entry.id === previous.firstKeptEntryId)) : 0;
+	for (const entry of entries.slice(start, end < 0 ? undefined : end)) {
+		if (entry.type !== "custom" || entry.customType !== PROGRAM_ENTRY) continue;
+		const files = (entry.data as ProgramRecord).files;
+		for (const path of files?.read ?? []) fileOps.read.add(path);
+		for (const path of files?.written ?? []) fileOps.written.add(path);
+		for (const path of files?.edited ?? []) fileOps.edited.add(path);
 	}
 }
 

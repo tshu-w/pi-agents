@@ -34,9 +34,17 @@ export interface ProgramCall {
 	cost?: number;
 }
 
+/** Paths passed to `read`, `write`, and `edit`, which compaction lists like Pi's file operations. */
+export interface ProgramFiles {
+	read: string[];
+	written: string[];
+	edited: string[];
+}
+
 export interface ProgramRunResult {
 	outcome: ProgramOutcome;
 	result: AgentToolResult<{ calls: ProgramCall[]; fullOutputPath?: string }> & { isError?: boolean };
+	files: ProgramFiles;
 }
 
 export interface ProgramRunOptions {
@@ -47,6 +55,11 @@ export interface ProgramRunOptions {
 	/** Rewrites the code before it runs, such as prepending the `agent()` prelude. */
 	prepare?: (code: string) => string;
 	onUpdate?: (details: { calls: ProgramCall[] }) => void;
+	/**
+	 * Whether the Program runs after its tool call returns. Its calls then get their own IDs,
+	 * since Pi records nested calls only until the calling tool call returns.
+	 */
+	background?: boolean;
 	appendEntry(customType: string, data: unknown): void;
 	getToolNamespace(name: string): { name: string } | undefined;
 }
@@ -190,6 +203,13 @@ export async function executeProgram(
 	};
 	const snapshot = () => ({ calls: calls.map((call) => ({ ...call })) });
 	const publish = () => options.onUpdate?.(snapshot());
+	const files: ProgramFiles = { read: [], written: [], edited: [] };
+	const addFile = (name: string, args: unknown) => {
+		const path = (args as { path?: unknown } | undefined)?.path;
+		const list = name === "read" ? files.read : name === "write" ? files.written : name === "edit" ? files.edited : undefined;
+		if (typeof path === "string" && list && !list.includes(path)) list.push(path);
+	};
+	let detachedCalls = 0;
 	const callable = programCallableTools(pi, ctx.tools);
 	const samples = new Map(callable.map((tool) => [tool.name, codemode.renderToolSample(pi.toCodemodeDeclaration(tool) as never)]));
 	const sandboxTools: CodemodeTool[] = callable.map((tool) => ({
@@ -200,7 +220,9 @@ export async function executeProgram(
 			calls.push(record);
 			publish();
 			const callStartedAt = performance.now();
-			const outcome = await ctx.executeTool(tool.name, args, { signal: callSignal });
+			const callOptions = options.background ? { signal: callSignal, detachedCallerId: `${toolCallId}:${++detachedCalls}` } : { signal: callSignal };
+			if (options.background) addFile(tool.name, args);
+			const outcome = await ctx.executeTool(tool.name, args, callOptions);
 			record.id = outcome.toolCall.id;
 			record.durationMs = performance.now() - callStartedAt;
 			if (outcome.isError) {
@@ -255,6 +277,7 @@ export async function executeProgram(
 	if (truncated.fullOutputPath) details.fullOutputPath = truncated.fullOutputPath;
 	return {
 		outcome,
+		files,
 		result: {
 			content: [{ type: "text", text: header }, ...truncated.items],
 			details,

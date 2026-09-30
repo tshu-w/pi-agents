@@ -1,6 +1,7 @@
 import {
 	AgentSession,
 	AgentSessionRuntime,
+	ExtensionRunner,
 	getAgentDir,
 	parseSessionEntries,
 	SessionManager,
@@ -39,12 +40,14 @@ import {
 	type WaitResult,
 } from "./agents.ts";
 import { loadCodemode, loadPiCodemode } from "./codemode.ts";
+import { installHostPatches } from "./host-patches.ts";
+import { renderToolCall } from "./render-call.ts";
 import { boundBlocks, boundText } from "./output.ts";
 import { programScope } from "./program-agents.ts";
 import { prepareProgramLoadout, programDescription, programRenderers } from "./program-loadout.ts";
 import { executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./program-execute.ts";
 import { agentGlobals, withAgentPrefix } from "./program-sandbox.ts";
-import { programListLine, Programs, renderProgramWait, uuidv7 } from "./programs.ts";
+import { addProgramFiles, programListLine, Programs, renderProgramWait, uuidv7 } from "./programs.ts";
 import { installGuard } from "./roots/guard.mjs";
 import ownershipExtension from "./roots/ownership-extension.mjs";
 import { rootPaths } from "./roots/paths.mjs";
@@ -158,6 +161,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	let ctx: ExtensionContext | undefined;
 
 	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: rootPaths().ownership });
+	installHostPatches(AgentSession, ExtensionRunner, PROGRAM_TOOL_NAME);
 	const roots = createRootRuntime(pi, {
 		receive: (message) => {
 			const delivery = message.deliverAs ?? "followUp";
@@ -218,6 +222,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		programs.restore(current);
 	});
 
+	pi.on("session_before_compact", (event) => {
+		addProgramFiles(event.branchEntries as never, event.preparation.firstKeptEntryId, event.preparation.fileOps);
+	});
+
 	pi.on("session_shutdown", async () => {
 		const closing = node;
 		if (!closing) return;
@@ -239,6 +247,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	pi.registerTool({
 		name: "agent",
 		label: "Agent",
+		renderCall: (args, theme, context) => renderToolCall("agent", args, theme, !context.isPartial, context.lastComponent),
 		description: `Create, message, and coordinate Agents. \`spawn\` creates an owned Agent and sends its first input; \`send\` sends an input or a write to a visible Agent; \`wait\` waits for owned Agents and returns unread results; \`list\` finds visible Agents; \`abort\` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification naming the Agent and outcome; \`wait\` returns the result. Owned Agents under the same root share \`${maxConcurrent}\` execution slots and a limit of \`${maxOutstanding}\` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.`,
 		promptSnippet: "Create, message, and coordinate Agents",
 		promptGuidelines: [
@@ -358,7 +367,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		code: string,
 		signal: AbortSignal,
 		current: Parameters<typeof executeProgram>[3],
-		options: Pick<ProgramRunOptions, "timeout" | "onUpdate">,
+		options: Pick<ProgramRunOptions, "timeout" | "onUpdate" | "background">,
 	) => {
 		const scope = programScope(id, caller, pi, current, { agentDir, limits: settings, extensions: settings.extensions });
 		try {
@@ -426,7 +435,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 					if (!params.code?.trim()) throw new Error("run requires code");
 					const code = params.code;
 					if (params.background) {
-						const record = programs.start((id, programSignal) => runProgram(id, self, toolCallId, code, programSignal, current, { timeout: params.timeout }));
+						const record = programs.start((id, programSignal) => runProgram(id, self, toolCallId, code, programSignal, current, { timeout: params.timeout, background: true }));
 						return { content: [{ type: "text", text: `Program ${record.id} started.` }], details: { id: record.id } };
 					}
 					const { result } = await self.agents.whileSuspended(() => runProgram(uuidv7(), self, toolCallId, code, signal ?? new AbortController().signal, current, {

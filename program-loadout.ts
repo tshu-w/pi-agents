@@ -2,6 +2,7 @@ import { highlightCode, keyHint, type ExtensionAPI, type ToolDefinition } from "
 import { Text } from "@earendil-works/pi-tui";
 import type { PiCodemode } from "./codemode.ts";
 import { PROGRAM_TOOL_NAME, programCallableTools } from "./program-execute.ts";
+import { formatToolCall } from "./render-call.ts";
 
 type Codemode = typeof import("@earendil-works/pi-codemode");
 type Loadout = Parameters<NonNullable<ToolDefinition["prepareLoadout"]>>[0];
@@ -71,15 +72,12 @@ export function programDescription(piCodemode: PiCodemode, intro: string): strin
 	return `${intro}\n\n${forProgram(piCodemode.createCodemodeDescription([], { models: true }))}`;
 }
 
-/** `run` shows its script; the other actions show their arguments. Results render like `codemode`. */
+/** Calls render in function-call form, with the `run` script below it. Results render like `codemode`. */
 export function programRenderers(piCodemode: PiCodemode): Renderers {
 	return {
 		renderCall(args, theme, context) {
-			const { action, code, ...rest } = (args ?? {}) as Record<string, unknown>;
-			let text = theme.fg("toolTitle", theme.bold(PROGRAM_TOOL_NAME));
-			if (typeof action === "string") text += ` ${theme.fg("accent", action)}`;
-			const fields = Object.entries(rest).filter(([, value]) => value !== undefined).map(([key, value]) => `${key}=${JSON.stringify(value)}`);
-			if (fields.length > 0) text += ` ${theme.fg("muted", fields.join(" "))}`;
+			const { code, ...rest } = (args ?? {}) as Record<string, unknown>;
+			let text = formatToolCall(PROGRAM_TOOL_NAME, rest, theme);
 			if (typeof code === "string" && code) {
 				const lines = highlightCode(code.replace(/\r/g, "").replace(/\t/g, "   ").trimEnd(), "javascript");
 				const shown = context.expanded ? lines : lines.slice(0, CODE_PREVIEW_LINES);
@@ -88,6 +86,7 @@ export function programRenderers(piCodemode: PiCodemode): Renderers {
 					text += `\n${theme.fg("muted", `... (${lines.length - shown.length} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 				}
 			}
+			if (!context.isPartial) text += "\n";
 			const component = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 			component.setText(text);
 			return component;
