@@ -367,7 +367,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		code: string,
 		signal: AbortSignal,
 		current: Parameters<typeof executeProgram>[3],
-		options: Pick<ProgramRunOptions, "timeout" | "onUpdate" | "background">,
+		options: Pick<ProgramRunOptions, "timeout" | "onUpdate" | "background" | "abort">,
 	) => {
 		const scope = programScope(id, caller, pi, current, { agentDir, limits: settings, extensions: settings.extensions });
 		try {
@@ -435,7 +435,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 					if (!params.code?.trim()) throw new Error("run requires code");
 					const code = params.code;
 					if (params.background) {
-						const record = programs.start((id, programSignal) => runProgram(id, self, toolCallId, code, programSignal, current, { timeout: params.timeout, background: true }));
+						const record = programs.start((id, programSignal, abort) => runProgram(id, self, toolCallId, code, programSignal, current, { timeout: params.timeout, background: true, abort }));
 						return { content: [{ type: "text", text: `Program ${record.id} started.` }], details: { id: record.id } };
 					}
 					const { result } = await self.agents.whileSuspended(() => runProgram(uuidv7(), self, toolCallId, code, signal ?? new AbortController().signal, current, {

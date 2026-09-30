@@ -88,13 +88,13 @@ export class Programs {
 	}
 
 	/** Starts a background Program, which `run` executes with its ID, and returns its record. */
-	start(run: (id: string, signal: AbortSignal) => Promise<ProgramRunResult>): ProgramRecord {
+	start(run: (id: string, signal: AbortSignal, abort: () => void) => Promise<ProgramRunResult>): ProgramRecord {
 		const record: ProgramRecord = { id: uuidv7(), state: "running", startedAt: Date.now(), returned: false, notified: false };
 		const controller = new AbortController();
 		const program: Running = { record, controller, waiters: 0 };
 		this.programs.set(record.id, program);
 		this.persist(record);
-		program.done = run(record.id, controller.signal).then(
+		program.done = run(record.id, controller.signal, () => controller.abort(new Error("Program stopped"))).then(
 			({ outcome, result, files }) => this.end(program, outcome, result.content, result.isError === true, files),
 			(error: unknown) => this.end(program, "failed", [{ type: "text", text: `Script failed\nOutput:\nScript error:\n${error instanceof Error ? error.message : String(error)}` }], true),
 		);

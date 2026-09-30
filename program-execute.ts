@@ -60,6 +60,8 @@ export interface ProgramRunOptions {
 	 * since Pi records nested calls only until the calling tool call returns.
 	 */
 	background?: boolean;
+	/** Stops a background Program; `ctx.abort()` of its calls' hooks and tools calls it. */
+	abort?: () => void;
 	appendEntry(customType: string, data: unknown): void;
 	getToolNamespace(name: string): { name: string } | undefined;
 }
@@ -220,7 +222,7 @@ export async function executeProgram(
 			calls.push(record);
 			publish();
 			const callStartedAt = performance.now();
-			const callOptions = options.background ? { signal: callSignal, detachedCallerId: `${toolCallId}:${++detachedCalls}` } : { signal: callSignal };
+			const callOptions = options.background ? { signal: callSignal, detachedCallerId: `${toolCallId}:${++detachedCalls}`, detachedAbort: () => options.abort?.() } : { signal: callSignal };
 			if (options.background) addFile(tool.name, args);
 			const outcome = await ctx.executeTool(tool.name, args, callOptions);
 			record.id = outcome.toolCall.id;

@@ -155,6 +155,12 @@ test("a background Program's calls keep distinct IDs across turns, and their hoo
 	while (hooks.calls.length === 0) await new Promise((resolve) => setTimeout(resolve, 10));
 	await root.text({ action: "stop", target: stopped });
 	assert.equal(hooks.calls[0].aborted, true);
+	// ctx.abort() in a hook stops the Program, not the caller's turn.
+	hooks.holdMs = 300;
+	const aborted = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' }); await tools.read({ path: 'abort.txt' }); return 'unreachable'" }));
+	const caller = await root.call({ action: "run", code: "await tools.read({ path: 'note.txt' }); await tools.read({ path: 'note.txt' }); return 'fg'" });
+	assert.match(textOf(caller.content), /Output:\nfg$/);
+	assert.match(await root.text({ action: "wait", target: aborted, timeout: 10 }), /Script aborted: Program stopped/);
 	await root.close();
 });
 

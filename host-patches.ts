@@ -10,6 +10,7 @@ const MCP_UNREACHABLE = /^MCP tools are only reachable from the codemode or tool
 
 interface DetachedCall {
 	signal?: AbortSignal;
+	abort?: () => void;
 	active: boolean;
 }
 
@@ -19,6 +20,8 @@ const detached = new AsyncLocalStorage<DetachedCall>();
 export interface DetachedCallOptions {
 	/** Replaces the calling tool call's ID, so the call gets the ID `<callerId>/1`. */
 	detachedCallerId: string;
+	/** What `ctx.abort()` of hooks and tools does during the call. */
+	detachedAbort: () => void;
 }
 
 type Patchable = Record<PropertyKey, any>;
@@ -26,8 +29,8 @@ type Patchable = Record<PropertyKey, any>;
 /**
  * - A call with `detachedCallerId` runs under that ID: Pi numbers nested calls per caller and
  *   resets the numbers when the calling tool call returns and when the turn ends, which would
- *   repeat IDs across the calls of a background Program. While it runs, `ctx.signal` of hooks
- *   and tools is the call's signal instead of the caller's turn.
+ *   repeat IDs across the calls of a background Program. While it runs, `ctx.signal` and
+ *   `ctx.abort()` of hooks and tools act on the call instead of the caller's turn.
  * - The MCP warning that no tool reaches its tools is dropped while `program` is active,
  *   since Programs call them.
  */
@@ -41,7 +44,7 @@ export function installHostPatches(
 		sessionProto[PATCHED] = true;
 		const execute = sessionProto._executeNestedToolCall;
 		sessionProto._executeNestedToolCall = async function (this: Patchable, callerId: string, name: string, args: unknown, options: Record<string, unknown> = {}) {
-			const { detachedCallerId, ...rest } = options;
+			const { detachedCallerId, detachedAbort, ...rest } = options;
 			if (typeof detachedCallerId !== "string") return execute.call(this, callerId, name, args, options);
 			const extensions = this._extensionRunner as Patchable;
 			const getSignal = extensions.getSignalFn;
@@ -53,7 +56,16 @@ export function installHostPatches(
 				(patched as Patchable)[PATCHED] = true;
 				extensions.getSignalFn = patched;
 			}
-			const call: DetachedCall = { signal: rest.signal as AbortSignal | undefined, active: true };
+			const abort = extensions.abortFn;
+			if (!abort[PATCHED]) {
+				const patched = () => {
+					const call = detached.getStore();
+					return call?.active ? call.abort?.() : abort();
+				};
+				(patched as Patchable)[PATCHED] = true;
+				extensions.abortFn = patched;
+			}
+			const call: DetachedCall = { signal: rest.signal as AbortSignal | undefined, abort: detachedAbort as (() => void) | undefined, active: true };
 			try {
 				return await detached.run(call, () => execute.call(this, detachedCallerId, name, args, rest));
 			} finally {
