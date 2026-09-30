@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
-import type { ExtensionContext, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deferred, type Deferred } from "./agents.ts";
 import { boundBlocks, boundText } from "./output.ts";
-import { executeProgram, type ProgramOutcome, type ProgramRunOptions, type ProgramRunResult } from "./program-execute.ts";
+import type { ProgramOutcome, ProgramRunResult } from "./program-execute.ts";
 
 const PROGRAM_ENTRY = "pi-agents-program";
 const CLEANUP_TIMEOUT_MS = 10_000;
@@ -35,7 +35,7 @@ export interface ProgramWaitOutcome {
 }
 
 /** UUIDv7, like Pi's Session IDs. */
-function uuidv7(): string {
+export function uuidv7(): string {
 	const bytes = randomBytes(16);
 	const time = BigInt(Date.now());
 	for (let i = 0; i < 6; i++) bytes[i] = Number((time >> BigInt(8 * (5 - i))) & 0xffn);
@@ -85,14 +85,14 @@ export class Programs {
 		}
 	}
 
-	/** Starts a background Program and returns its ID. */
-	start(toolCallId: string, code: string, ctx: ExtensionToolContext, options: Omit<ProgramRunOptions, "onUpdate">): ProgramRecord {
+	/** Starts a background Program, which `run` executes with its ID, and returns its record. */
+	start(run: (id: string, signal: AbortSignal) => Promise<ProgramRunResult>): ProgramRecord {
 		const record: ProgramRecord = { id: uuidv7(), state: "running", startedAt: Date.now(), returned: false, notified: false };
 		const controller = new AbortController();
 		const program: Running = { record, controller, waiters: 0 };
 		this.programs.set(record.id, program);
 		this.persist(record);
-		program.done = executeProgram(toolCallId, code, controller.signal, ctx, options).then(
+		program.done = run(record.id, controller.signal).then(
 			({ outcome, result }) => this.end(program, outcome, result.content, result.isError === true),
 			(error: unknown) => this.end(program, "failed", [{ type: "text", text: `Script failed\nOutput:\nScript error:\n${error instanceof Error ? error.message : String(error)}` }], true),
 		);

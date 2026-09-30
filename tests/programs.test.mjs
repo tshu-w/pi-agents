@@ -14,18 +14,48 @@ const textOf = (content) => typeof content === "string"
 	? content
 	: content.filter((block) => block.type === "text").map((block) => block.text).join("");
 
+/** The text an Agent received from its owner, without the header and the schema instruction. */
+const bodyOf = (text) => text.split("\n").slice(1).join("\n").split("\n\nWhen done, call")[0];
+
 /**
- * A root Session whose model calls `program` with the arguments of each `call`, and otherwise
+ * A root Session whose model calls a tool with the arguments of each `call`, and otherwise
  * records the message and answers "noted". Programs call tools only within the agent loop.
+ *
+ * Agents answer `answer:<body>`. A body `submit:<json>[|<json>]` calls `submit_result` with the
+ * first value, and with the second after an error; `hold` answers once `state.release` is called.
  */
-async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), sessionFile = undefined) {
+async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), sessionFile = undefined, limits = {}) {
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
 	writeFileSync(join(cwd, "note.txt"), "note");
 	const messages = [];
 	const pending = [];
+	const state = { busy: 0 };
+	let release;
+	const released = new Promise((resolve) => { release = resolve; });
+	state.release = release;
 	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "model" }], tokensPerSecond: 0 });
-	faux.setResponses(Array.from({ length: 100 }, () => (context) => {
+	faux.setResponses(Array.from({ length: 200 }, () => async (context, options) => {
 		const last = context.messages.at(-1);
-		if (last?.role === "user" && textOf(last.content) === "call") return ai.fauxAssistantMessage(ai.fauxToolCall("program", pending.shift()));
+		const first = textOf(context.messages.find((message) => message.role === "user")?.content ?? "");
+		if (first.startsWith("Message from")) {
+			const body = bodyOf(textOf(context.messages.findLast((message) => message.role === "user").content));
+			if (body.startsWith("submit:")) {
+				const [value, retry] = body.slice("submit:".length).split("|").map((json) => JSON.parse(json));
+				if (last.role !== "toolResult") return ai.fauxAssistantMessage(ai.fauxToolCall("submit_result", { value }));
+				if (last.isError && retry !== undefined) return ai.fauxAssistantMessage(ai.fauxToolCall("submit_result", { value: retry }));
+				return ai.fauxAssistantMessage(textOf(last.content));
+			}
+			if (body === "hold") {
+				state.busy += 1;
+				await Promise.race([released, new Promise((resolve) => options?.signal?.addEventListener("abort", resolve, { once: true }))]);
+				if (options?.signal?.aborted) return ai.fauxAssistantMessage("", { stopReason: "aborted" });
+			}
+			return ai.fauxAssistantMessage(`answer:${body}`);
+		}
+		if (last?.role === "user" && textOf(last.content) === "call") {
+			const [tool, args] = pending.shift();
+			return ai.fauxAssistantMessage(ai.fauxToolCall(tool, args));
+		}
 		if (last?.role !== "toolResult") messages.push(textOf(last?.content ?? ""));
 		return ai.fauxAssistantMessage("noted");
 	}));
@@ -39,18 +69,18 @@ async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), se
 	await resourceLoader.reload();
 	const sessionManager = sessionFile ? pi.SessionManager.open(sessionFile) : pi.SessionManager.create(cwd, join(cwd, "sessions"));
 	const { session } = await pi.createAgentSession({
-		cwd, agentDir, settingsManager, resourceLoader, sessionManager, modelRuntime, model: faux.getModel(), tools: ["read", "program"],
+		cwd, agentDir, settingsManager, resourceLoader, sessionManager, modelRuntime, model: faux.getModel(), tools: ["read", "program", "agent"],
 	});
 	await session.bindExtensions({ mode: "print" });
-	const call = async (args) => {
+	const call = async (args, tool = "program") => {
 		await session.waitForIdle();
-		pending.push(args);
+		pending.push([tool, args]);
 		await session.prompt("call");
 		const result = session.messages.findLast((message) => message.role === "toolResult");
 		return { content: result.content, isError: result.isError || undefined };
 	};
-	const text = async (args) => {
-		const result = await call(args);
+	const text = async (args, tool) => {
+		const result = await call(args, tool);
 		if (result.isError && !/^Script failed/.test(textOf(result.content))) throw new Error(textOf(result.content));
 		return textOf(result.content);
 	};
@@ -58,7 +88,7 @@ async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), se
 		await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		session.dispose();
 	};
-	return { cwd, session, sessionManager, call, text, messages, close };
+	return { cwd, session, sessionManager, call, text, messages, state, close };
 }
 
 const idOf = (text) => /^Program (\S+) started\.$/.exec(text)[1];
@@ -109,4 +139,50 @@ test("a caller going offline stops its Programs, and their results remain when i
 	const reopened = await startRoot(root.cwd, file);
 	assert.match(await reopened.text({ action: "wait", target: id, timeout: 10 }), new RegExp(`<program-result id="${id}" status="stopped">\\n[\\s\\S]*the caller went offline`));
 	await reopened.close();
+});
+
+test("agent() handles return answers and submitted values, and schema inputs fail without a valid submission", async () => {
+	const root = await startRoot();
+	const schema = "{ type: 'object', properties: { n: { type: 'number' } }, required: ['n'] }";
+	const result = await root.text({ action: "run", code: `
+		const a = agent({ name: 'w' });
+		const b = agent();
+		const answers = await Promise.all([a.send('hello'), b.send('submit:{"n":"x"}|{"n":2}', { schema: ${schema} })]);
+		const errors = [];
+		for (const run of [() => a.send('submit:{"m":1}', { schema: ${schema} }), () => a.send('plain', { schema: ${schema} }), () => a.send('x', { deliverAs: 'steer', schema: ${schema} })]) {
+			try { await run(); } catch (error) { errors.push(error.message); }
+		}
+		return { names: [a.name, b.name], answers, errors };
+	` });
+	const value = JSON.parse(result.slice(result.indexOf("Output:\n") + 8));
+	assert.deepEqual(value.names, ["w", "agent-1"]);
+	assert.deepEqual(value.answers, ["answer:hello", { n: 2 }]);
+	assert.match(value.errors[0], /^Agent w \(\S+\) failed: The turn ended without calling submit_result\.$/);
+	assert.match(value.errors[1], /failed: The turn ended without calling submit_result\.$/);
+	assert.equal(value.errors[2], 'send() accepts schema only with deliverAs "followUp"');
+	await root.close();
+});
+
+test("a Program's Agents are invisible to the caller, count toward its limit, and are aborted when it stops", async () => {
+	const root = await startRoot(undefined, undefined, { maxConcurrent: 2, maxOutstanding: 2 });
+	const waitBusy = async (count) => {
+		const deadline = Date.now() + 10000;
+		while (root.state.busy < count && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.equal(root.state.busy, count);
+	};
+	assert.match(await root.text({ action: "spawn", name: "outside", message: "hold" }, "agent"), /^Agent outside \(\S+\) started\.$/);
+	await waitBusy(1);
+	const id = idOf(await root.text({ action: "run", background: true, code: `
+		const a = agent(), b = agent();
+		const held = a.send('hold');
+		try { await b.send('x'); } catch (error) { text(error.message); }
+		await held;
+	` }));
+	await waitBusy(2);
+	// Other roots may be listed; the Program's Agents share the caller's cwd.
+	assert.match(await root.text({ action: "list", query: root.cwd }, "agent"), /^outside \(\S+\)  busy  \S+$/);
+	assert.equal(await root.text({ action: "stop", target: id }), `Program ${id} stopped.`);
+	const result = await root.text({ action: "wait", target: id, timeout: 10 });
+	assert.match(result, /status="stopped">\n[\s\S]*Input rejected: 2 inputs have not ended/);
+	await root.close();
 });

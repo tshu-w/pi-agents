@@ -10,6 +10,7 @@ import {
 	type ExtensionContext,
 	type ExtensionError,
 } from "@earendil-works/pi-coding-agent";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +22,8 @@ const TREE_ENTRY = "pi-agents-tree";
 const USAGE_ENTRY = "pi-agents-usage";
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 const EXTENSION_PATH = fileURLToPath(new URL("./index.ts", import.meta.url));
+export const SUBMIT_RESULT_TOOL_NAME = "submit_result";
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 
 export type Outcome = "completed" | "failed" | "aborted";
 export type AgentState = "busy" | "idle" | "offline";
@@ -39,6 +42,8 @@ export interface InputRecord {
 	id: string;
 	state: "queued" | "running" | Outcome;
 	result?: string;
+	/** The value submitted with `submit_result`, for an input with a schema. */
+	value?: unknown;
 	read: boolean;
 	notified: boolean;
 }
@@ -65,7 +70,11 @@ export interface Usage {
 export interface AgentNode {
 	id: string;
 	rootId: string;
+	/** The node whose tree this node sees: its root, or the Program its Agents belong to. */
+	scopeId: string;
 	ownerId?: string;
+	/** A Program that owns Agents; it is not an Agent and no Agent sees it. */
+	program?: boolean;
 	name(): string | undefined;
 	cwd(): string;
 	busy(): boolean;
@@ -150,20 +159,26 @@ export function usageEntry(usage: Usage): [string, Usage] {
 	return [USAGE_ENTRY, usage];
 }
 
-/** Owner and root recorded in an owned Agent's Session. */
-export function treeMetadata(ctx: ExtensionContext): { rootId: string; ownerId: string } | undefined {
-	let metadata: { rootId: string; ownerId: string } | undefined;
+export interface TreeMetadata {
+	rootId: string;
+	ownerId: string;
+	scopeId?: string;
+}
+
+/** Owner, root, and scope recorded in an owned Agent's Session. */
+export function treeMetadata(ctx: ExtensionContext): TreeMetadata | undefined {
+	let metadata: TreeMetadata | undefined;
 	for (const entry of ctx.sessionManager.getEntries()) {
 		if (entry.type === "custom" && entry.customType === TREE_ENTRY) metadata = entry.data as typeof metadata;
 	}
 	return metadata;
 }
 
-/** Visible Agents of a tree, root first, then owned Agents depth-first. */
-export function treeEntries(rootId: string): Entry[] {
-	const root = shared.nodes.get(rootId);
+/** Visible Agents of a scope, its root first, then owned Agents depth-first. */
+export function treeEntries(scopeId: string): Entry[] {
+	const root = shared.nodes.get(scopeId);
 	if (!root) return [];
-	const entries: Entry[] = [{
+	const entries: Entry[] = root.program ? [] : [{
 		id: root.id,
 		name: root.name(),
 		cwd: root.cwd(),
@@ -181,8 +196,8 @@ export function treeEntries(rootId: string): Entry[] {
 	return entries;
 }
 
-export function resolveTarget(rootId: string, target: string): Entry {
-	return resolveIn(treeEntries(rootId), target);
+export function resolveTarget(scopeId: string, target: string): Entry {
+	return resolveIn(treeEntries(scopeId), target);
 }
 
 /** Resolves an ID or a unique name among the given visible Agents. */
@@ -320,6 +335,9 @@ interface Input {
 	text: string;
 	record?: InputRecord;
 	permit?: symbol;
+	schema?: unknown;
+	submitted?: { value: unknown };
+	done?: Deferred;
 }
 
 interface Turn {
@@ -376,10 +394,12 @@ export class Agents {
 
 	constructor(
 		private pi: ExtensionAPI,
-		private self: { id: string; rootId: string; ownerId?: string; name(): string | undefined },
+		private self: { id: string; rootId: string; scopeId: string; ownerId?: string; name(): string | undefined },
 		private agentDir: string,
 		private limits: Limits,
 		private extensions: string[],
+		/** Agents of a Program: kept in memory only, with results returned by `request()` and no notifications. */
+		private program = false,
 	) {}
 
 	setContext(ctx: ExtensionContext): void {
@@ -408,42 +428,76 @@ export class Agents {
 
 	/** Resolves a visible target that this Agent owns. */
 	ownedTarget(target: string): Owned {
-		const entry = resolveTarget(this.self.rootId, target);
+		const entry = resolveTarget(this.self.scopeId, target);
 		const agent = this.agents.get(entry.id);
 		if (!agent) throw new Error(`${label(entry)} is not owned by the caller.`);
 		return agent;
 	}
 
 	spawn(request: SpawnRequest): { record: AgentRecord; queued: boolean } {
-		const name = request.name.trim();
-		const existing = [...this.agents.values()].find((agent) => agent.record.name === name);
-		if (existing) throw new Error(`Name "${name}" is already used by ${existing.record.id}.`);
 		const permit = this.reserve();
 		let agent: Owned;
 		try {
-			const prepared = this.prepare(request, name);
-			const sessionFile = prepared.sessionManager.getSessionFile()!;
-			agent = {
-				record: {
-					id: prepared.sessionManager.getSessionId(),
-					name,
-					sessionFile,
-					cwd: prepared.sessionManager.getCwd(),
-					createdAt: new Date().toISOString(),
-					inputs: [],
-				},
-				queue: [],
-				prepared,
-				waiters: 0,
-			};
+			agent = this.create(request);
 		} catch (error) {
 			shared.scheduler.releaseOutstanding(this.self.rootId, permit);
 			throw error;
 		}
-		this.agents.set(agent.record.id, agent);
 		const text = `Message from ${label({ id: this.self.id, name: this.self.name() })}:\n${request.message}`;
 		const queued = this.enqueue(agent, { text, permit, record: this.newRecord(agent) });
 		return { record: agent.record, queued };
+	}
+
+	/** Creates an idle Agent; `id` sets its ID. */
+	create(request: Omit<SpawnRequest, "message">, id?: string): Owned {
+		const name = request.name.trim();
+		const existing = [...this.agents.values()].find((agent) => agent.record.name === name);
+		if (existing) throw new Error(`Name "${name}" is already used by ${existing.record.id}.`);
+		const prepared = this.prepare(request, name, id);
+		const agent: Owned = {
+			record: {
+				id: prepared.sessionManager.getSessionId(),
+				name,
+				sessionFile: prepared.sessionManager.getSessionFile()!,
+				cwd: prepared.sessionManager.getCwd(),
+				createdAt: new Date().toISOString(),
+				inputs: [],
+			},
+			queue: [],
+			prepared,
+			waiters: 0,
+		};
+		this.agents.set(agent.record.id, agent);
+		return agent;
+	}
+
+	/**
+	 * Sends an input from the owner and resolves when it ends. With a schema, the Agent must call
+	 * `submit_result` with a matching value, which becomes the input's `value`.
+	 */
+	async request(id: string, text: string, delivery: "followUp" | "steer", schema?: unknown): Promise<InputRecord> {
+		const agent = this.agents.get(id);
+		if (!agent) throw new Error(`Agent ${id} is not owned by ${this.self.id}.`);
+		const input: Input = { text, permit: this.reserve(), record: this.newRecord(agent), done: deferred() };
+		if (schema !== undefined) {
+			input.schema = schema;
+			input.text += `\n\nWhen done, call \`${SUBMIT_RESULT_TOOL_NAME}\` with a \`value\` that matches this JSON Schema:\n${JSON.stringify(schema)}`;
+		}
+		if (delivery === "steer" && agent.turn) this.join(agent, agent.turn, input);
+		else this.enqueue(agent, input);
+		await input.done!.promise;
+		return input.record!;
+	}
+
+	/** Records a value from `submit_result` for the Agent's current input with a schema. */
+	submit(id: string, value: unknown): void {
+		const input = this.agents.get(id)?.turn?.inputs.find((candidate) => candidate.schema !== undefined);
+		if (!input) throw new Error("No current input asks for a result.");
+		const args = validateToolArguments(
+			{ name: SUBMIT_RESULT_TOOL_NAME, description: "", parameters: { type: "object", properties: { value: input.schema }, required: ["value"] } as never },
+			{ type: "toolCall", id: "", name: SUBMIT_RESULT_TOOL_NAME, arguments: { value } as never },
+		) as { value: unknown };
+		input.submitted = { value: args.value };
 	}
 
 	accept(id: string, text: string, delivery: Delivery, options: { fromOwner: boolean; notification: boolean }): { queued: boolean } {
@@ -705,13 +759,24 @@ export class Agents {
 		input.permit = undefined;
 		const record = input.record;
 		if (!record || ended(record)) return;
+		if (input.schema !== undefined && outcome !== "aborted") {
+			if (input.submitted) {
+				outcome = "completed";
+				record.value = input.submitted.value;
+			} else if (outcome === "completed") {
+				outcome = "failed";
+				result = `The turn ended without calling ${SUBMIT_RESULT_TOOL_NAME}.`;
+			}
+		}
 		record.state = outcome;
 		record.result = result;
 		this.persist(agent);
+		input.done?.resolve();
 		if (agent.waiters === 0) this.notifyLater(agent, record);
 	}
 
 	private notifyLater(agent: Owned, record: InputRecord): void {
+		if (this.program) return;
 		queueMicrotask(() => {
 			if (this.closing || record.notified || agent.waiters > 0) return;
 			record.notified = true;
@@ -756,6 +821,7 @@ export class Agents {
 	}
 
 	private persist(agent: Owned): void {
+		if (this.program) return;
 		if (this.closing && !agent.record.inputs.some((input) => !ended(input))) return;
 		this.pi.appendEntry(AGENT_ENTRY, agent.record);
 	}
@@ -771,7 +837,7 @@ export class Agents {
 		return this.ctx;
 	}
 
-	private prepare(request: SpawnRequest, name: string): Prepared {
+	private prepare(request: Omit<SpawnRequest, "message">, name: string, id?: string): Prepared {
 		const ctx = this.requireContext();
 		let model = ctx.model;
 		if (request.model !== undefined) {
@@ -785,9 +851,10 @@ export class Agents {
 		const thinkingLevel = request.thinkingLevel ?? this.pi.getThinkingLevel();
 		const cwd = path.resolve(ctx.cwd, request.cwd ?? ".");
 		const sessionManager = SessionManager.create(cwd, childSessionDirectory(cwd, ctx.cwd, ctx.sessionManager.getSessionDir(), this.agentDir), {
+			id,
 			parentSession: ctx.sessionManager.getSessionFile(),
 		});
-		sessionManager.appendCustomEntry(TREE_ENTRY, { rootId: this.self.rootId, ownerId: this.self.id });
+		sessionManager.appendCustomEntry(TREE_ENTRY, { rootId: this.self.rootId, ownerId: this.self.id, scopeId: this.self.scopeId } satisfies TreeMetadata);
 		sessionManager.appendSessionInfo(name);
 		sessionManager.appendModelChange(model.provider, model.id);
 		sessionManager.appendThinkingLevelChange(thinkingLevel);
@@ -840,7 +907,10 @@ export class Agents {
 			sessionManager,
 			model: agent.prepared?.model,
 			thinkingLevel: agent.prepared?.thinkingLevel,
-			tools: this.pi.getActiveTools(),
+			tools: [
+				...this.pi.getActiveTools().filter((name) => name !== SUBMIT_RESULT_TOOL_NAME),
+				...(this.program ? [SUBMIT_RESULT_TOOL_NAME] : []),
+			],
 			sessionStartEvent: { type: "session_start", reason: agent.prepared ? "new" : "resume" },
 		});
 		if (!session.model) {

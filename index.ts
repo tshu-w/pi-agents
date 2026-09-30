@@ -24,6 +24,8 @@ import {
 	restoredUsage,
 	searchEntries,
 	setTreeUsage,
+	SUBMIT_RESULT_TOOL_NAME,
+	THINKING_LEVELS,
 	treeEntries,
 	treeIdle,
 	treeMetadata,
@@ -38,8 +40,10 @@ import {
 } from "./agents.ts";
 import { loadPiCodemode } from "./codemode.ts";
 import { boundBlocks, boundText } from "./output.ts";
-import { executeProgram, PROGRAM_TOOL_NAME } from "./program-execute.ts";
-import { programListLine, Programs, renderProgramWait } from "./programs.ts";
+import { programScope } from "./program-agents.ts";
+import { executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./program-execute.ts";
+import { agentGlobals, withAgentPrefix } from "./program-sandbox.ts";
+import { programListLine, Programs, renderProgramWait, uuidv7 } from "./programs.ts";
 import { installGuard } from "./roots/guard.mjs";
 import ownershipExtension from "./roots/ownership-extension.mjs";
 import { rootPaths } from "./roots/paths.mjs";
@@ -47,7 +51,6 @@ import { createRootRuntime } from "./roots/runtime.ts";
 import { waitForBackground } from "./roots/wait-ui.ts";
 
 const DEFAULT_LIMITS: Limits = { maxConcurrent: 3, maxOutstanding: 8 };
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 
 interface Settings extends Limits {
 	extensions: string[];
@@ -119,7 +122,31 @@ function rejectFields(params: Record<string, unknown>, action: string, fields: s
 
 const PROGRAM_DESCRIPTION = `Run JavaScript that composes tool calls and Agents; only its output and return value reach the caller. \`run\` runs a Program in the foreground, or in the background with \`background\`; \`wait\` waits for background Programs and returns their results; \`list\` lists background Programs; \`stop\` stops a running Program. When a background Program ends while its caller is not waiting for it, the caller receives a notification; \`wait\` returns the result.
 
-Program code is the body of an async function. It calls the caller's tools through \`tools.*\`, which excludes \`program\`.`;
+Program code is the body of an async function. It calls the caller's tools through \`tools.*\`, which excludes \`program\`, and creates Agents through \`agent()\`. These Agents belong to the Program, are isolated from other Agents, and go offline when it ends.
+
+\`\`\`ts
+type JsonSchema = boolean | Record<string, unknown>;
+
+declare function agent(options?: {
+  name?: string;               // default: generated
+  cwd?: string;                // default: the caller's cwd
+  context?: "fresh" | "fork";  // default: fresh
+  model?: string;              // provider/modelId; default: the caller's
+  thinkingLevel?: string;      // default: the caller's
+}): AgentHandle;
+
+interface AgentHandle {
+  readonly id: string;
+  readonly name: string;
+  // Resolves with the answer, or with the submitted value when \`schema\`
+  // is set; throws if the input fails or is aborted.
+  send(message: string, options?: {
+    deliverAs?: "followUp" | "steer" | "write";  // default: followUp
+    schema?: JsonSchema;                         // followUp only
+  }): Promise<unknown>;
+  abort(): Promise<void>;
+}
+\`\`\``;
 
 export default async function (pi: ExtensionAPI): Promise<void> {
 	const agentDir = getAgentDir();
@@ -142,7 +169,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
 	/** Agents visible to a node: its tree, and for a root Agent also the other root Agents. */
 	const visible = async (self: AgentNode, signal?: AbortSignal): Promise<Entry[]> => {
-		const tree = treeEntries(self.rootId);
+		const tree = treeEntries(self.scopeId);
 		if (self.ownerId !== undefined) return tree;
 		const others = (await roots.roots(signal))
 			.filter((root) => !tree.some((entry) => entry.id === root.id))
@@ -162,7 +189,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		const id = current.sessionManager.getSessionId();
 		const metadata = treeMetadata(current);
 		const rootId = metadata?.rootId ?? id;
-		const self = { id, rootId, ownerId: metadata?.ownerId, name: () => pi.getSessionName() };
+		const self = { id, rootId, scopeId: metadata?.scopeId ?? rootId, ownerId: metadata?.ownerId, name: () => pi.getSessionName() };
 		const agents = new Agents(pi, self, agentDir, settings, settings.extensions);
 		agents.setContext(current);
 		agents.restore(current);
@@ -262,7 +289,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 					const delivery = params.deliverAs ?? "followUp";
 					if (!targets?.length || !params.message?.trim()) throw new Error("send requires target and message");
 					if (targets.length > 1 && delivery !== "write") throw new Error("Only a write can go to several Agents.");
-					const tree = treeEntries(self.rootId);
+					const tree = treeEntries(self.scopeId);
 					const candidates = targets.every((target) => tree.some((entry) => entry.id === target)) ? tree : await visible(self, signal);
 					const entries = targets.map((target) => resolveIn(candidates, target));
 					if (entries.some((entry) => entry.id === self.id)) throw new Error("An Agent cannot send to itself.");
@@ -322,10 +349,48 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		},
 	});
 
-	const programOptions = {
-		appendEntry: (customType: string, data: unknown) => pi.appendEntry(customType, data),
-		getToolNamespace: (name: string) => pi.getAllTools().find((tool) => tool.name === name)?.namespace,
+	/** Runs a Program whose Agents go offline when it ends. */
+	const runProgram = async (
+		id: string,
+		caller: AgentNode,
+		toolCallId: string,
+		code: string,
+		signal: AbortSignal,
+		current: Parameters<typeof executeProgram>[3],
+		options: Pick<ProgramRunOptions, "timeout" | "onUpdate">,
+	) => {
+		const scope = programScope(id, caller, pi, current, { agentDir, limits: settings, extensions: settings.extensions });
+		try {
+			return await executeProgram(toolCallId, code, signal, current, {
+				...options,
+				globals: agentGlobals(scope.host),
+				prepare: withAgentPrefix,
+				appendEntry: (customType, data) => pi.appendEntry(customType, data),
+				getToolNamespace: (name) => pi.getAllTools().find((tool) => tool.name === name)?.namespace,
+			});
+		} finally {
+			await scope.close();
+		}
 	};
+
+	pi.registerTool({
+		name: SUBMIT_RESULT_TOOL_NAME,
+		label: "Submit Result",
+		description: "Submit the result that the current input asks for. `value` must match the JSON Schema given in the input; an invalid value is rejected with the reasons.",
+		promptSnippet: "Submit the result that the current input asks for",
+		exposure: "model-only",
+		defaultActive: false,
+		parameters: Type.Object({
+			value: Type.Unknown({ description: "The result, matching the JSON Schema given in the input." }),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, current) {
+			const self = requireNode(current);
+			const owner = self.ownerId === undefined ? undefined : nodes.get(self.ownerId);
+			if (!owner) throw new Error("No current input asks for a result.");
+			owner.agents.submit(self.id, params.value);
+			return { content: [{ type: "text", text: "Result submitted." }], details: {} };
+		},
+	});
 
 	pi.registerTool({
 		name: PROGRAM_TOOL_NAME,
@@ -356,11 +421,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 					if (!params.code?.trim()) throw new Error("run requires code");
 					const code = params.code;
 					if (params.background) {
-						const record = programs.start(toolCallId, code, current, { ...programOptions, timeout: params.timeout });
+						const record = programs.start((id, programSignal) => runProgram(id, self, toolCallId, code, programSignal, current, { timeout: params.timeout }));
 						return { content: [{ type: "text", text: `Program ${record.id} started.` }], details: { id: record.id } };
 					}
-					const { result } = await self.agents.whileSuspended(() => executeProgram(toolCallId, code, signal ?? new AbortController().signal, current, {
-						...programOptions,
+					const { result } = await self.agents.whileSuspended(() => runProgram(uuidv7(), self, toolCallId, code, signal ?? new AbortController().signal, current, {
 						timeout: params.timeout,
 						onUpdate: (details) => onUpdate?.({ content: [], details }),
 					}), signal);
