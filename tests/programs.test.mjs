@@ -242,7 +242,8 @@ test("codemode.mode decides whether program lists the direct tools or they keep 
 	await only.close();
 });
 
-test("Programs reach MCP tools without the MCP warning that no tool reaches them", async () => {
+test("MCP activates program, and a Program waits for the MCP server its code names", async () => {
+	process.env.PI_AGENTS_TEST_MCP_DELAY = "1500";
 	const cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-"));
 	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "model" }], tokensPerSecond: 0 });
 	faux.setResponses([
@@ -256,8 +257,8 @@ test("Programs reach MCP tools without the MCP warning that no tool reaches them
 	const settingsManager = pi.SettingsManager.create(cwd, agentDir, { projectTrusted: true });
 	const resourceLoader = new pi.DefaultResourceLoader({
 		cwd, agentDir, settingsManager, noExtensions: true,
-		extensionFactories: [{ name: "mcp", builtin: true, factory: pi.createMcpExtension() }],
-		additionalExtensionPaths: ["builtin:mcp", fileURLToPath(new URL("../index.ts", import.meta.url)), fileURLToPath(new URL("./fixtures/mcp-extension.mjs", import.meta.url))],
+		extensionFactories: [{ name: "codemode", builtin: true, factory: pi.createCodemodeExtension() }, { name: "mcp", builtin: true, factory: pi.createMcpExtension() }],
+		additionalExtensionPaths: ["builtin:codemode", "builtin:mcp", fileURLToPath(new URL("../index.ts", import.meta.url)), fileURLToPath(new URL("./fixtures/mcp-extension.mjs", import.meta.url))],
 	});
 	await resourceLoader.reload();
 	const { session } = await pi.createAgentSession({ cwd, agentDir, settingsManager, resourceLoader, sessionManager: pi.SessionManager.inMemory(cwd), modelRuntime, model: faux.getModel() });
@@ -265,8 +266,10 @@ test("Programs reach MCP tools without the MCP warning that no tool reaches them
 	const noop = () => undefined;
 	const uiContext = { notify: (message) => notes.push(message), setStatus: noop, setWidget: noop, setFooter: noop, setTitle: noop, setWorkingMessage: noop, select: noop, confirm: noop, input: noop, editor: noop, custom: noop, onTerminalInput: () => noop };
 	await session.bindExtensions({ mode: "interactive", uiContext });
-	const deadline = Date.now() + 10000;
-	while (!session.getAllTools().some((tool) => tool.name === "mcp__echo__shout") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+	delete process.env.PI_AGENTS_TEST_MCP_DELAY;
+	assert.ok(session.getActiveToolNames().includes("program"));
+	assert.ok(!session.getActiveToolNames().includes("codemode"));
+	assert.ok(!session.getAllTools().some((tool) => tool.name === "mcp__echo__shout"));
 	await session.prompt("shout");
 	assert.match(textOf(session.messages.findLast((message) => message.role === "toolResult").content), /HI$/);
 	assert.deepEqual(notes.filter((note) => /MCP tools are only reachable/.test(note)), []);

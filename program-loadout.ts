@@ -20,17 +20,22 @@ export const PROGRAM_ONLY_FLAG = "program-only";
 // Owned Agents run in their owner's process without its CLI flags, so the flag holds for the process.
 const PROGRAM_ONLY = Symbol.for("pi-agents:program-only");
 
-/** Applies `--program-only` to this process once a Session sees it. */
+/** Applies `--program-only` to this process once a Session sees it, and activates `program`. */
 export function applyProgramOnlyFlag(pi: ExtensionAPI): void {
 	if (pi.getFlag(PROGRAM_ONLY_FLAG) === true) (globalThis as Record<symbol, unknown>)[PROGRAM_ONLY] = true;
+	const active = pi.getActiveTools();
+	if (programOnly(pi) && !active.includes(PROGRAM_TOOL_NAME)) pi.setActiveTools([...active, PROGRAM_TOOL_NAME]);
+}
+
+function programOnly(pi: ExtensionAPI): boolean {
+	return pi.getFlag(PROGRAM_ONLY_FLAG) === true || (globalThis as Record<symbol, unknown>)[PROGRAM_ONLY] === true;
 }
 
 function readSettings(pi: ExtensionAPI): { mode: "on" | "only"; inlineBudget?: number } {
 	const settings = pi.getSettings().codemode;
 	const budget = settings?.inlineBudget;
-	const programOnly = pi.getFlag(PROGRAM_ONLY_FLAG) === true || (globalThis as Record<symbol, unknown>)[PROGRAM_ONLY] === true;
 	return {
-		mode: programOnly || settings?.mode === "only" ? "only" : "on",
+		mode: programOnly(pi) || settings?.mode === "only" ? "only" : "on",
 		inlineBudget: typeof budget === "number" && Number.isFinite(budget) && budget >= 0 ? budget : undefined,
 	};
 }

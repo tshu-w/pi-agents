@@ -24,6 +24,8 @@ export interface PiCodemode {
 	/** Pi's `codemode` tool definition; `program` reuses its `prepareLoadout`. */
 	createCodemodeToolDefinition(options: Record<string, unknown>): ToolDefinition;
 	createCodemodeDescription(tools: unknown[], options?: Record<string, unknown>): string;
+	/** The `codemode` parameter schema, by which the MCP extension recognizes the tool. */
+	codemodeSchema: unknown;
 	executeCodemode(
 		toolCallId: string,
 		input: { code: string },
@@ -51,6 +53,7 @@ export function loadPiCodemode(): Promise<PiCodemode> {
 		return {
 			createCodemodeToolDefinition: tool.createCodemodeToolDefinition,
 			createCodemodeDescription: tool.createCodemodeDescription,
+			codemodeSchema: tool.codemodeSchema,
 			executeCodemode: execute.executeCodemode,
 			renderResult: renderer.codemodeRenderers.renderResult,
 		};

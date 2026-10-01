@@ -174,7 +174,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	let ctx: ExtensionContext | undefined;
 
 	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: rootPaths().ownership });
-	installHostPatches(AgentSession, ExtensionRunner, PROGRAM_TOOL_NAME);
+	installHostPatches(AgentSession, ExtensionRunner, PROGRAM_TOOL_NAME, piCodemode.codemodeSchema);
 	const roots = createRootRuntime(pi, {
 		receive: (message) => {
 			const delivery = message.deliverAs ?? "followUp";
@@ -430,6 +430,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		label: "Program",
 		// Programs must not start Programs.
 		exposure: "model-only",
+		defaultActive: false,
 		prepareLoadout: programLoadout(pi, piCodemode, PROGRAM_DESCRIPTION, AGENT_API),
 		...programRenderers(piCodemode),
 		description: programDescription(piCodemode, PROGRAM_DESCRIPTION, AGENT_API),

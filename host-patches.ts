@@ -6,7 +6,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentSession, ExtensionRunner } from "@earendil-works/pi-coding-agent";
 
 const PATCHED = Symbol.for("pi-agents:patched");
-const MCP_UNREACHABLE = /^MCP tools are only reachable from the codemode or tool_search tool/;
+const CODEMODE_TOOL_NAME = "codemode";
+const MCP_EXTENSION_PATH = "builtin:mcp";
 
 interface DetachedCall {
 	signal?: AbortSignal;
@@ -15,6 +16,8 @@ interface DetachedCall {
 }
 
 const detached = new AsyncLocalStorage<DetachedCall>();
+/** Set while the built-in MCP extension runs, including work it started. */
+const inMcp = new AsyncLocalStorage<true>();
 
 /** `ctx.executeTool()` options that run a call outside the calling tool call's record. */
 export interface DetachedCallOptions {
@@ -31,13 +34,15 @@ type Patchable = Record<PropertyKey, any>;
  *   resets the numbers when the calling tool call returns and when the turn ends, which would
  *   repeat IDs across the calls of a background Program. While it runs, `ctx.signal` and
  *   `ctx.abort()` of hooks and tools act on the call instead of the caller's turn.
- * - The MCP warning that no tool reaches its tools is dropped while `program` is active, since
- *   Programs call them.
+ * - The built-in MCP extension sees `program` as `codemode`: it activates `program` when its tools
+ *   need a script tool and neither is active, counts an active `program` as reaching its tools,
+ *   and makes a Program wait for the servers its code names, as it does for `codemode` scripts.
  */
 export function installHostPatches(
 	session: typeof AgentSession,
 	runner: typeof ExtensionRunner,
 	programToolName: string,
+	codemodeSchema: unknown,
 ): void {
 	const sessionProto = session.prototype as unknown as Patchable;
 	if (!sessionProto[PATCHED]) {
@@ -77,17 +82,47 @@ export function installHostPatches(
 	const runnerProto = runner.prototype as unknown as Patchable;
 	if (!runnerProto[PATCHED]) {
 		runnerProto[PATCHED] = true;
-		const setUIContext = runnerProto.setUIContext;
-		runnerProto.setUIContext = function (this: Patchable, ...args: unknown[]) {
-			setUIContext.apply(this, args);
-			const ui = this.uiContext as Patchable;
-			if (ui[PATCHED]) return;
-			ui[PATCHED] = true;
-			const notify = ui.notify;
-			ui.notify = (message: string, ...rest: unknown[]) => {
-				if (MCP_UNREACHABLE.test(message) && this.getActiveTools().includes(programToolName)) return;
-				return notify.call(ui, message, ...rest);
-			};
+		const bindCore = runnerProto.bindCore;
+		runnerProto.bindCore = function (this: Patchable, ...args: unknown[]) {
+			bindCore.apply(this, args);
+			const mcp = (this.extensions as Patchable[]).find((extension) => extension.path === MCP_EXTENSION_PATH);
+			if (mcp) aliasProgramForMcp(this, mcp, programToolName, codemodeSchema);
 		};
 	}
+}
+
+function aliasProgramForMcp(runner: Patchable, mcp: Patchable, programToolName: string, codemodeSchema: unknown): void {
+	if (!mcp[PATCHED]) {
+		mcp[PATCHED] = true;
+		const asCodemodeCall = (event: Patchable) => event.toolName === programToolName && event.input?.action === "run"
+			? { ...event, toolName: CODEMODE_TOOL_NAME, input: { code: event.input.code } }
+			: event;
+		for (const [type, handlers] of mcp.handlers as Map<string, Function[]>) {
+			handlers.forEach((handler, index) => {
+				handlers[index] = (event: Patchable, ctx: unknown) => inMcp.run(true, () => handler(type === "tool_call" ? asCodemodeCall(event) : event, ctx));
+			});
+		}
+		for (const command of (mcp.commands as Map<string, Patchable>).values()) {
+			const handler = command.handler;
+			command.handler = (args: unknown, ctx: unknown) => inMcp.run(true, () => handler(args, ctx));
+		}
+	}
+	// `bindCore` sets these each time, so wrap the current ones.
+	const runtime = runner.runtime as Patchable;
+	const { getActiveTools, getAllTools, setActiveTools } = runtime;
+	runtime.getActiveTools = () => {
+		const active: string[] = getActiveTools();
+		return inMcp.getStore() && active.includes(programToolName) && !active.includes(CODEMODE_TOOL_NAME) ? [...active, CODEMODE_TOOL_NAME] : active;
+	};
+	runtime.getAllTools = () => {
+		const tools: Patchable[] = getAllTools();
+		const program = inMcp.getStore() && tools.find((tool) => tool.name === programToolName);
+		return program ? [...tools, { ...program, name: CODEMODE_TOOL_NAME, parameters: codemodeSchema }] : tools;
+	};
+	runtime.setActiveTools = (names: string[]) => {
+		if (inMcp.getStore() && names.includes(CODEMODE_TOOL_NAME) && !getActiveTools().includes(CODEMODE_TOOL_NAME)) {
+			names = [...new Set(names.map((name) => name === CODEMODE_TOOL_NAME ? programToolName : name))];
+		}
+		return setActiveTools(names);
+	};
 }
