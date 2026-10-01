@@ -854,7 +854,9 @@ export class Agents {
 			id,
 			parentSession: ctx.sessionManager.getSessionFile(),
 		});
-		sessionManager.appendCustomEntry(TREE_ENTRY, { rootId: this.self.rootId, ownerId: this.self.id, scopeId: this.self.scopeId } satisfies TreeMetadata);
+		// Each of a Program's Agents heads its own scope, so it sees only itself and the Agents under it.
+		const scopeId = this.program ? sessionManager.getSessionId() : this.self.scopeId;
+		sessionManager.appendCustomEntry(TREE_ENTRY, { rootId: this.self.rootId, ownerId: this.self.id, scopeId } satisfies TreeMetadata);
 		sessionManager.appendSessionInfo(name);
 		sessionManager.appendModelChange(model.provider, model.id);
 		sessionManager.appendThinkingLevelChange(thinkingLevel);

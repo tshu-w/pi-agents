@@ -22,7 +22,8 @@ const bodyOf = (text) => text.split("\n").slice(1).join("\n").split("\n\nWhen do
  * records the message and answers "noted". Programs call tools only within the agent loop.
  *
  * Agents answer `answer:<body>`. A body `submit:<json>[|<json>]` calls `submit_result` with the
- * first value, and with the second after an error; `hold` answers once `state.release` is called.
+ * first value, and with the second after an error; `hold` answers once `state.release` is called;
+ * `call:<json>` calls `agent` with those arguments and answers with its result.
  */
 async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), sessionFile = undefined, limits = {}, settings = {}, extensions = []) {
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ...settings, "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
@@ -43,6 +44,10 @@ async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), se
 				const [value, retry] = body.slice("submit:".length).split("|").map((json) => JSON.parse(json));
 				if (last.role !== "toolResult") return ai.fauxAssistantMessage(ai.fauxToolCall("submit_result", { value }));
 				if (last.isError && retry !== undefined) return ai.fauxAssistantMessage(ai.fauxToolCall("submit_result", { value: retry }));
+				return ai.fauxAssistantMessage(textOf(last.content));
+			}
+			if (body.startsWith("call:")) {
+				if (last.role !== "toolResult") return ai.fauxAssistantMessage(ai.fauxToolCall("agent", JSON.parse(body.slice("call:".length))));
 				return ai.fauxAssistantMessage(textOf(last.content));
 			}
 			if (body === "hold") {
@@ -223,6 +228,22 @@ test("a Program's Agents are invisible to the caller, count toward its limit, an
 	assert.equal(await root.text({ action: "stop", target: id }), `Program ${id} stopped.`);
 	const result = await root.text({ action: "wait", target: id, timeout: 10 });
 	assert.match(result, /status="stopped">\n[\s\S]*Input rejected: 2 inputs have not ended/);
+	await root.close();
+});
+
+test("each of a Program's Agents sees only itself and the Agents under it", async () => {
+	const root = await startRoot();
+	const result = await root.text({ action: "run", code: `
+		const a = agent({ name: 'alpha' }), b = agent({ name: 'beta' });
+		await b.send('hello');
+		return [
+			await a.send('call:{"action":"list"}'),
+			await a.send('call:{"action":"send","target":"beta","message":"hi"}'),
+		];
+	` });
+	const [list, send] = JSON.parse(result.slice(result.indexOf("Output:\n") + 8));
+	assert.equal(list, "No matching Agents.");
+	assert.match(send, /^No visible Agent matches "beta"/);
 	await root.close();
 });
 

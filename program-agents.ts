@@ -12,8 +12,9 @@ export interface ProgramScope {
 }
 
 /**
- * The Agents a Program creates with `agent()`. They count toward the caller's tree, see only
- * one another, and are never persisted: when the Program ends they go offline for good.
+ * The Agents a Program creates with `agent()`. They count toward the caller's tree, each sees
+ * only itself and the Agents under it, and they are never persisted: when the Program ends they
+ * go offline for good.
  */
 export function programScope(
 	id: string,
