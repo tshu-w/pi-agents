@@ -24,7 +24,7 @@ const bodyOf = (text) => text.split("\n").slice(1).join("\n").split("\n\nWhen do
  * Agents answer `answer:<body>`. A body `submit:<json>[|<json>]` calls `submit_result` with the
  * first value, and with the second after an error; `hold` answers once `state.release` is called.
  */
-async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), sessionFile = undefined, limits = {}, settings = {}) {
+async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), sessionFile = undefined, limits = {}, settings = {}, extensions = []) {
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ...settings, "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
 	writeFileSync(join(cwd, "note.txt"), "note");
 	const messages = [];
@@ -64,7 +64,7 @@ async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), se
 	const settingsManager = pi.SettingsManager.create(cwd, agentDir, { projectTrusted: true });
 	const resourceLoader = new pi.DefaultResourceLoader({
 		cwd, agentDir, settingsManager, noExtensions: true,
-		additionalExtensionPaths: [fileURLToPath(new URL("../index.ts", import.meta.url))],
+		additionalExtensionPaths: [fileURLToPath(new URL("../index.ts", import.meta.url)), ...extensions],
 	});
 	await resourceLoader.reload();
 	const sessionManager = sessionFile ? pi.SessionManager.open(sessionFile) : pi.SessionManager.create(cwd, join(cwd, "sessions"));
@@ -127,6 +127,50 @@ test("stop and timeout stop background Programs", async () => {
 	const results = await root.text({ action: "wait", target: [stopped, timedOut], timeout: 10 });
 	assert.match(results, new RegExp(`<program-result id="${stopped}" status="stopped">`));
 	assert.match(results, new RegExp(`<program-result id="${timedOut}" status="stopped">`));
+	await root.close();
+});
+
+test("a background Program's calls keep distinct IDs across turns, and their hooks follow the Program's signal", async () => {
+	const hookExtension = fileURLToPath(new URL("./fixtures/hook-extension.mjs", import.meta.url));
+	const root = await startRoot(undefined, undefined, {}, {}, [hookExtension]);
+	const { hooks } = await import(hookExtension);
+	hooks.holdMs = 300;
+	const id = idOf(await root.text({ action: "run", background: true, code: "for (let i = 0; i < 4; i++) await tools.read({ path: 'note.txt' }); return 'done'" }));
+	// A caller turn that is aborted while the Program calls tools.
+	const turn = root.call({ action: "run", code: "await tools.read({ path: 'note.txt' }); return 'fg'" });
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	await root.session.abort();
+	await turn;
+	assert.match(await root.text({ action: "wait", target: id, timeout: 10 }), /done$/);
+	const runCallId = root.session.messages.find((message) => message.role === "toolResult" && textOf(message.content) === `Program ${id} started.`).toolCallId;
+	const background = hooks.calls.filter((call) => call.id.startsWith(`${runCallId}:`));
+	assert.equal(background.length, 4);
+	assert.equal(new Set(background.map((call) => call.id)).size, 4);
+	assert.ok(background.every((call) => call.signal && !call.aborted));
+	// Stopping the Program aborts the signal its hooks see.
+	hooks.calls.length = 0;
+	hooks.holdMs = 5000;
+	const stopped = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' })" }));
+	while (hooks.calls.length === 0) await new Promise((resolve) => setTimeout(resolve, 10));
+	await root.text({ action: "stop", target: stopped });
+	assert.equal(hooks.calls[0].aborted, true);
+	// ctx.abort() in a hook stops the Program, not the caller's turn.
+	hooks.holdMs = 300;
+	const aborted = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' }); await tools.read({ path: 'abort.txt' }); return 'unreachable'" }));
+	const caller = await root.call({ action: "run", code: "await tools.read({ path: 'note.txt' }); await tools.read({ path: 'note.txt' }); return 'fg'" });
+	assert.match(textOf(caller.content), /fg$/);
+	assert.match(await root.text({ action: "wait", target: aborted, timeout: 10 }), new RegExp(`<program-result id="${aborted}" status="stopped">`));
+	await root.close();
+});
+
+test("compaction lists the files of background Programs", async () => {
+	const root = await startRoot(undefined, undefined, {}, { compaction: { keepRecentTokens: 1 } });
+	const id = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' })" }));
+	await root.text({ action: "wait", target: id, timeout: 10 });
+	await root.text({ action: "list" });
+	await root.session.compact();
+	const compaction = root.sessionManager.getEntries().findLast((entry) => entry.type === "compaction");
+	assert.deepEqual(compaction.details.readFiles, ["note.txt"]);
 	await root.close();
 });
 
@@ -198,4 +242,40 @@ test("codemode.mode decides whether program lists the direct tools or they keep 
 	// Programs replace codemode, so no description points at it.
 	for (const description of Object.values(tools)) assert.doesNotMatch(description, /\bcodemode\b/);
 	await only.close();
+});
+
+test("Programs reach MCP tools, and the MCP prompt section and warning name program instead of codemode", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-"));
+	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "model" }], tokensPerSecond: 0 });
+	let systemPrompt;
+	faux.setResponses([
+		(context) => {
+			systemPrompt = JSON.stringify(context);
+			return ai.fauxAssistantMessage(ai.fauxToolCall("program", { action: "run", code: "return (await tools.mcp__echo__shout({ text: 'hi' })).content[0].text" }));
+		},
+		() => ai.fauxAssistantMessage("done"),
+	]);
+	const modelRuntime = await pi.ModelRuntime.create({ authPath: join(cwd, "auth.json"), modelsPath: null });
+	modelRuntime.registerNativeProvider(faux.provider);
+	const settingsManager = pi.SettingsManager.create(cwd, agentDir, { projectTrusted: true });
+	const resourceLoader = new pi.DefaultResourceLoader({
+		cwd, agentDir, settingsManager, noExtensions: true,
+		extensionFactories: [{ name: "mcp", builtin: true, factory: pi.createMcpExtension() }],
+		additionalExtensionPaths: ["builtin:mcp", fileURLToPath(new URL("../index.ts", import.meta.url)), fileURLToPath(new URL("./fixtures/mcp-extension.mjs", import.meta.url))],
+	});
+	await resourceLoader.reload();
+	const { session } = await pi.createAgentSession({ cwd, agentDir, settingsManager, resourceLoader, sessionManager: pi.SessionManager.inMemory(cwd), modelRuntime, model: faux.getModel() });
+	const notes = [];
+	const noop = () => undefined;
+	const uiContext = { notify: (message) => notes.push(message), setStatus: noop, setWidget: noop, setFooter: noop, setTitle: noop, setWorkingMessage: noop, select: noop, confirm: noop, input: noop, editor: noop, custom: noop, onTerminalInput: () => noop };
+	await session.bindExtensions({ mode: "interactive", uiContext });
+	const deadline = Date.now() + 10000;
+	while (!session.getAllTools().some((tool) => tool.name === "mcp__echo__shout") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+	await session.prompt("shout");
+	assert.match(textOf(session.messages.findLast((message) => message.role === "toolResult").content), /HI$/);
+	assert.match(systemPrompt, /<mcp_servers>/);
+	assert.doesNotMatch(systemPrompt.slice(systemPrompt.indexOf("<mcp_servers>"), systemPrompt.indexOf("</mcp_servers>")), /codemode/);
+	assert.deepEqual(notes.filter((note) => /MCP tools are only reachable/.test(note)), []);
+	await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+	session.dispose();
 });
