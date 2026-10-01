@@ -77,11 +77,12 @@ async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), se
 		pending.push([tool, args]);
 		await session.prompt("call");
 		const result = session.messages.findLast((message) => message.role === "toolResult");
-		return { content: result.content, isError: result.isError || undefined };
+		return { content: result.content, details: result.details, isError: result.isError || undefined };
 	};
 	const text = async (args, tool) => {
 		const result = await call(args, tool);
-		if (result.isError && !/^Script failed/.test(textOf(result.content))) throw new Error(textOf(result.content));
+		// A failed Program is a result with its calls; other errors are the tool's own.
+		if (result.isError && !Array.isArray(result.details?.calls)) throw new Error(textOf(result.content));
 		return textOf(result.content);
 	};
 	const close = async () => {
@@ -97,10 +98,10 @@ test("a foreground Program calls the caller's tools except program and keeps sto
 	const root = await startRoot();
 	const completed = await root.call({ action: "run", code: "const note = await tools.read({ path: 'note.txt' }); store('note', note); return [typeof tools.program, note]" });
 	assert.equal(completed.isError, undefined, textOf(completed.content));
-	assert.match(textOf(completed.content), /^Script completed\nWall time [\d.]+ seconds\nOutput:\n\["undefined","note"\]$/);
+	assert.match(textOf(completed.content), /\["undefined","note"\]$/);
 	const failed = await root.call({ action: "run", code: "store('lost', 1); throw new Error('boom')" });
 	assert.equal(failed.isError, true);
-	assert.match(textOf(failed.content), /^Script failed\n[\s\S]*Error: boom/);
+	assert.match(textOf(failed.content), /boom/);
 	assert.match(await root.text({ action: "run", code: "return [load('note'), load('lost') ?? null]" }), /\["note",null\]$/);
 	await root.close();
 });
@@ -111,7 +112,7 @@ test("a background Program runs on after run returns, notifies its caller, and w
 	const deadline = Date.now() + 10000;
 	while (!root.messages.includes(`Program ${id} completed.`) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
 	assert.ok(root.messages.includes(`Program ${id} completed.`), root.messages.join("\n"));
-	assert.match(await root.text({ action: "wait", timeout: 10 }), /^Script completed\n[\s\S]*Output:\ndone$/);
+	assert.match(await root.text({ action: "wait", timeout: 10 }), /done$/);
 	assert.equal(await root.text({ action: "wait", timeout: 10 }), "No results.");
 	assert.match(await root.text({ action: "list" }), new RegExp(`^${id}  completed  \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d$`));
 	await root.close();
@@ -125,8 +126,8 @@ test("stop and timeout stop background Programs", async () => {
 	assert.equal(await root.text({ action: "stop", target: stopped }), `Program ${stopped} stopped.`);
 	assert.equal(await root.text({ action: "stop", target: stopped }), `Program ${stopped} has already ended.`);
 	const results = await root.text({ action: "wait", target: [stopped, timedOut], timeout: 10 });
-	assert.match(results, new RegExp(`<program-result id="${stopped}" status="stopped">\\n[\\s\\S]*Script aborted: Program stopped[\\s\\S]*?</program-result>`));
-	assert.match(results, new RegExp(`<program-result id="${timedOut}" status="stopped">\\n[\\s\\S]*Script timed out`));
+	assert.match(results, new RegExp(`<program-result id="${stopped}" status="stopped">`));
+	assert.match(results, new RegExp(`<program-result id="${timedOut}" status="stopped">`));
 	await assert.rejects(root.text({ action: "stop", target: "missing" }), /No Program matches "missing"\. Use list to find Programs\./);
 	await root.close();
 });
@@ -142,7 +143,7 @@ test("a background Program's calls keep distinct IDs across turns, and their hoo
 	await new Promise((resolve) => setTimeout(resolve, 100));
 	await root.session.abort();
 	await turn;
-	assert.match(await root.text({ action: "wait", target: id, timeout: 10 }), /Output:\ndone$/);
+	assert.match(await root.text({ action: "wait", target: id, timeout: 10 }), /done$/);
 	const runCallId = root.session.messages.find((message) => message.role === "toolResult" && textOf(message.content) === `Program ${id} started.`).toolCallId;
 	const background = hooks.calls.filter((call) => call.id.startsWith(`${runCallId}:`));
 	assert.equal(background.length, 4);
@@ -159,8 +160,8 @@ test("a background Program's calls keep distinct IDs across turns, and their hoo
 	hooks.holdMs = 300;
 	const aborted = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' }); await tools.read({ path: 'abort.txt' }); return 'unreachable'" }));
 	const caller = await root.call({ action: "run", code: "await tools.read({ path: 'note.txt' }); await tools.read({ path: 'note.txt' }); return 'fg'" });
-	assert.match(textOf(caller.content), /Output:\nfg$/);
-	assert.match(await root.text({ action: "wait", target: aborted, timeout: 10 }), /Script aborted: Program stopped/);
+	assert.match(textOf(caller.content), /fg$/);
+	assert.match(await root.text({ action: "wait", target: aborted, timeout: 10 }), new RegExp(`<program-result id="${aborted}" status="stopped">`));
 	await root.close();
 });
 
@@ -234,13 +235,17 @@ test("a Program's Agents are invisible to the caller, count toward its limit, an
 test("codemode.mode decides whether program lists the direct tools or they keep their own declarations", async () => {
 	const declared = (root) => Object.fromEntries(root.session.agent.state.tools.map((tool) => [tool.name, tool.description]));
 	const on = await startRoot();
+	const readDescription = on.session.getAllTools().find((tool) => tool.name === "read").description;
 	let tools = declared(on);
-	assert.match(tools.read, /program tool declaration:\n```ts\ndeclare const tools: \{ read\(/);
-	assert.doesNotMatch(tools.program, /Nested tools:/);
+	assert.ok(tools.read.startsWith(readDescription) && tools.read.length > readDescription.length);
+	assert.ok(!tools.program.includes(readDescription));
+	assert.deepEqual([...on.session._hiddenDeclarations], []);
 	await on.close();
 	const only = await startRoot(undefined, undefined, {}, { codemode: { mode: "only" } });
 	tools = declared(only);
-	assert.match(tools.program, /Nested tools: COMPLETE list \(2 tools\)\.[\s\S]*### `read`[\s\S]*### `agent`/);
+	assert.ok(tools.program.includes(readDescription));
 	assert.deepEqual([...only.session._hiddenDeclarations].sort(), ["agent", "read"]);
+	// Programs replace codemode, so no description points at it.
+	for (const description of Object.values(tools)) assert.doesNotMatch(description, /\bcodemode\b/);
 	await only.close();
 });

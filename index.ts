@@ -40,12 +40,12 @@ import {
 	type WaitOutcome,
 	type WaitResult,
 } from "./agents.ts";
-import { loadCodemode, loadPiCodemode } from "./codemode.ts";
+import { loadPiCodemode } from "./codemode.ts";
 import { installHostPatches } from "./host-patches.ts";
 import { renderTextResult, renderToolCall, startDuration, type DurationState } from "./render-call.ts";
 import { boundBlocks, boundText } from "./output.ts";
 import { programScope } from "./program-agents.ts";
-import { prepareProgramLoadout, programDescription, programRenderers } from "./program-loadout.ts";
+import { programDescription, programLoadout, programRenderers } from "./program-loadout.ts";
 import { executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./program-execute.ts";
 import { agentGlobals, withAgentPrefix } from "./program-sandbox.ts";
 import { addProgramFiles, programListLine, Programs, renderProgramWait, uuidv7 } from "./programs.ts";
@@ -156,7 +156,7 @@ interface AgentHandle {
 export default async function (pi: ExtensionAPI): Promise<void> {
 	const agentDir = getAgentDir();
 	const settings = readSettings(agentDir);
-	const [codemode, piCodemode] = await Promise.all([loadCodemode(), loadPiCodemode()]);
+	const piCodemode = await loadPiCodemode();
 	let node: AgentNode | undefined;
 	let programs: Programs | undefined;
 	let ctx: ExtensionContext | undefined;
@@ -415,7 +415,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		label: "Program",
 		// Programs must not start Programs.
 		exposure: "model-only",
-		prepareLoadout: (loadout) => prepareProgramLoadout(pi, codemode, piCodemode, PROGRAM_DESCRIPTION, loadout),
+		prepareLoadout: programLoadout(pi, piCodemode, PROGRAM_DESCRIPTION),
 		...programRenderers(piCodemode),
 		description: programDescription(piCodemode, PROGRAM_DESCRIPTION),
 		promptSnippet: "Run JavaScript that composes tool calls and Agents",
@@ -448,7 +448,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 					}
 					const { result } = await self.agents.whileSuspended(() => runProgram(uuidv7(), self, toolCallId, code, signal ?? new AbortController().signal, current, {
 						timeout: params.timeout,
-						onUpdate: (details) => onUpdate?.({ content: [], details }),
+						onUpdate,
 					}), signal);
 					return result;
 				}

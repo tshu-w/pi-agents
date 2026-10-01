@@ -58,5 +58,5 @@ test("errors in a script with agent() report the line as written", async () => {
 	const sandbox = new CodemodeSandbox({ globals: agentGlobals({ create: async () => {}, send: async () => {}, abort: async () => {} }) });
 	const result = await sandbox.execute(withAgentPrefix("const a = agent();\nthrow new Error('boom');"));
 	assert.equal(result.ok, false);
-	assert.match(result.error.stack, /codemode\.js:2/);
+	assert.match(result.error.stack, /:2\b/);
 });

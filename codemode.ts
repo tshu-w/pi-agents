@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { getPackageDir } from "@earendil-works/pi-coding-agent";
+import { getPackageDir, type AgentToolResult, type AgentToolUpdateCallback, type ExtensionToolContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 type Codemode = typeof import("@earendil-works/pi-codemode");
 
@@ -21,19 +21,17 @@ export function loadCodemode(): Promise<Codemode> {
 
 /** Parts of Pi's `codemode` tool that its package entry does not export. */
 export interface PiCodemode {
-	CODEMODE_STORE_ENTRY_TYPE: string;
-	DEFAULT_CODEMODE_INLINE_BUDGET: number;
-	MODEL_GLOBAL_DECLARATIONS: Array<{ name: string; description: string; signature: string }>;
+	/** Pi's `codemode` tool definition; `program` reuses its `prepareLoadout`. */
+	createCodemodeToolDefinition(options: Record<string, unknown>): ToolDefinition;
 	createCodemodeDescription(tools: unknown[], options?: Record<string, unknown>): string;
-	getCodemodeCallableTools<T extends { name: string }>(tools: readonly T[]): T[];
-	toCodemodeDeclaration(tool: unknown): { name: string; description: string; inputSchema: unknown; outputSchema: unknown };
-	readCodemodeStore(branch: unknown[]): Record<string, unknown>;
-	getCodemodeWorkerUrl(): URL | undefined;
-	getQuickJSWasmPath(): string;
-	Bm25Ranker: new () => { rank(query: string, documents: unknown[], limit: number): Array<{ name: string }> };
-	createToolSearchDocument(tool: unknown, namespace: unknown): unknown;
-	DEFAULT_TOOL_SEARCH_LIMIT: number;
-	combineUsage<T>(first: T, second: T): T;
+	executeCodemode(
+		toolCallId: string,
+		input: { code: string },
+		signal: AbortSignal | undefined,
+		onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+		ctx: ExtensionToolContext,
+		options: Record<string, unknown>,
+	): Promise<AgentToolResult<unknown> & { isError?: boolean }>;
 	/** Renders a script result: its nested calls, then its output without the header. */
 	renderResult(result: unknown, options: unknown, theme: unknown, context: unknown): unknown;
 }
@@ -45,28 +43,15 @@ export function loadPiCodemode(): Promise<PiCodemode> {
 	internals ??= (async () => {
 		const dist = join(getPackageDir(), "dist");
 		const load = (file: string) => import(pathToFileURL(join(dist, file)).href);
-		const [tool, execute, config, search, usage, renderer] = await Promise.all([
+		const [tool, execute, renderer] = await Promise.all([
 			load("extensions/codemode/tool.js"),
 			load("extensions/codemode/execute.js"),
-			load("config.js"),
-			load("extensions/tool-search/tool.js"),
-			load("core/usage-totals.js"),
 			load("extensions/codemode/renderer.js"),
 		]);
 		return {
-			CODEMODE_STORE_ENTRY_TYPE: tool.CODEMODE_STORE_ENTRY_TYPE,
-			DEFAULT_CODEMODE_INLINE_BUDGET: tool.DEFAULT_CODEMODE_INLINE_BUDGET,
-			MODEL_GLOBAL_DECLARATIONS: tool.MODEL_GLOBAL_DECLARATIONS,
+			createCodemodeToolDefinition: tool.createCodemodeToolDefinition,
 			createCodemodeDescription: tool.createCodemodeDescription,
-			getCodemodeCallableTools: tool.getCodemodeCallableTools,
-			toCodemodeDeclaration: tool.toCodemodeDeclaration,
-			readCodemodeStore: execute.readCodemodeStore,
-			getCodemodeWorkerUrl: config.getCodemodeWorkerUrl,
-			getQuickJSWasmPath: config.getQuickJSWasmPath,
-			Bm25Ranker: search.Bm25Ranker,
-			createToolSearchDocument: search.createToolSearchDocument,
-			DEFAULT_TOOL_SEARCH_LIMIT: search.DEFAULT_TOOL_SEARCH_LIMIT,
-			combineUsage: usage.combineUsage,
+			executeCodemode: execute.executeCodemode,
 			renderResult: renderer.codemodeRenderers.renderResult,
 		};
 	})();
