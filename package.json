@@ -1,5 +1,6 @@
 {
   "name": "pi-agents",
+  "description": "Multi-agent runtime for Pi: background Agents, cross-Session messaging, and JavaScript Programs",
   "private": true,
   "type": "module",
   "keywords": [
