@@ -45,7 +45,7 @@ import { installHostPatches } from "./host-patches.ts";
 import { renderTextResult, renderToolCall, startDuration, type DurationState } from "./render-call.ts";
 import { boundBlocks, boundText } from "./output.ts";
 import { programScope } from "./program-agents.ts";
-import { programDescription, programLoadout, programRenderers } from "./program-loadout.ts";
+import { applyProgramOnlyFlag, PROGRAM_ONLY_FLAG, programDescription, programLoadout, programRenderers } from "./program-loadout.ts";
 import { executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./program-execute.ts";
 import { agentGlobals, withAgentPrefix } from "./program-sandbox.ts";
 import { addProgramFiles, programListLine, Programs, renderProgramWait, uuidv7 } from "./programs.ts";
@@ -190,7 +190,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		return node;
 	};
 
+	pi.registerFlag(PROGRAM_ONLY_FLAG, { type: "boolean", description: "Present tools as with codemode.mode \"only\": scripts reach them through program" });
+
 	pi.on("session_start", (_event, current) => {
+		applyProgramOnlyFlag(pi);
 		ctx = current;
 		const id = current.sessionManager.getSessionId();
 		const metadata = treeMetadata(current);

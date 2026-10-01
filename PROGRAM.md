@@ -261,3 +261,8 @@ Program <id> <outcome>.
     Programs: <running> running · <unreturned> unreturned results
 
 Only nonzero counts are shown; the line is omitted when both are zero.
+
+## 8. Configuration
+
+`codemode.mode` decides how the tool list is presented, as for `codemode`.
+`--program-only` uses `only` for the process, including its owned Agents.

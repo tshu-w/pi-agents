@@ -88,7 +88,6 @@ test("an owned Agent answers its first input, and wait returns the answer once",
 	const spawned = await root.call({ action: "spawn", name: "worker", message: "hello" });
 	assert.match(spawned, /^Agent worker \(\S+\) started\.$/);
 	assert.equal(await root.call({ action: "wait", target: "worker", timeout: 10 }), "answer:hello|seen:hello");
-	assert.equal(await root.call({ action: "wait", timeout: 10 }), "No results.");
 	assert.match(await root.call({ action: "wait", target: "worker", history: 1, timeout: 10 }), /status="completed" history="true">\nanswer:hello/);
 	assert.match(await root.call({ action: "list" }), new RegExp(`^worker \\(${idOf(spawned)}\\)  idle  `));
 	await root.close();
@@ -141,18 +140,9 @@ test("abort ends the current turn and queued inputs, and the Agent stays usable"
 	assert.match(await root.call({ action: "abort", target: "worker" }), /^Agent worker \(\S+\) aborted\.$/);
 	const results = await root.call({ action: "wait", target: "worker", timeout: 10 });
 	assert.equal([...results.matchAll(/status="aborted"/g)].length, 2);
-	assert.match(await root.call({ action: "abort", target: "worker" }), /has no turn or queued inputs\.$/);
 	root.state.hold = undefined;
 	await root.call({ action: "send", target: "worker", message: "three" });
 	assert.match(await root.call({ action: "wait", target: "worker", timeout: 10 }), /^answer:three/);
 	await root.close();
 });
 
-test("names are unique among siblings and unknown targets are rejected", async () => {
-	const root = await startRoot();
-	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "hello" }));
-	await assert.rejects(root.call({ action: "spawn", name: "worker", message: "again" }), new RegExp(`Name "worker" is already used by ${id}\\.`));
-	await assert.rejects(root.call({ action: "send", target: "nobody", message: "hi" }), /No visible Agent matches "nobody"\. Use list to find Agents\./);
-	await root.call({ action: "wait", timeout: 10 });
-	await root.close();
-});

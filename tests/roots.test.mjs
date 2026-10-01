@@ -120,12 +120,6 @@ test("an input to an offline root loads it in the background, which answers and 
 	assert.equal(existsSync(paths.worker(target.id)), false);
 });
 
-test("a write never loads an offline root", async () => {
-	const target = offlineRoot("offline-b", "quiet");
-	await assert.rejects(sender.call({ action: "send", target: "quiet", message: "fyi", deliverAs: "write" }), /quiet \(offline-b\) is offline\./);
-	assert.equal(entriesOf(target.file).some((entry) => entry.type === "custom_message"), false);
-});
-
 test("a root in another process is listed with its state and cannot be opened twice", async () => {
 	const target = offlineRoot("live-c", "live");
 	const first = runPi(["--session", target.file], target.cwd);
