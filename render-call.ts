@@ -12,9 +12,9 @@ export function formatToolCall(name: string, args: unknown, theme: ToolCallTheme
 	return `${theme.fg("toolTitle", theme.bold(name))}${theme.fg("text", `(${fields})`)}`;
 }
 
-export function renderToolCall(name: string, args: unknown, theme: ToolCallTheme, resultReady: boolean, lastComponent?: unknown): Text {
+export function renderToolCall(name: string, args: unknown, theme: ToolCallTheme, lastComponent?: unknown): Text {
 	const component = lastComponent instanceof Text ? lastComponent : new Text("", 0, 0);
-	component.setText(formatToolCall(name, args, theme) + (resultReady ? "\n" : ""));
+	component.setText(formatToolCall(name, args, theme));
 	return component;
 }
 
@@ -57,7 +57,8 @@ interface ResultTheme {
 }
 
 /**
- * The text output like Pi's default result, with the duration of a timed call below it.
+ * The text output like Pi's default result, with the duration of a timed call below it,
+ * separated from the call by a blank line.
  * `expandHint` renders the key hint for expanding a collapsed result.
  */
 export function renderTextResult(
@@ -79,6 +80,6 @@ export function renderTextResult(
 	const duration = updateDuration(context.state as DurationState, options.isPartial, context.invalidate);
 	if (duration) sections.push(theme.fg("muted", duration));
 	const component = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
-	component.setText(sections.join("\n"));
+	component.setText(sections.length > 0 ? `\n${sections.join("\n")}` : "");
 	return component;
 }

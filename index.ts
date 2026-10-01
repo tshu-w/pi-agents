@@ -274,7 +274,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		label: "Agent",
 		renderCall: (args, theme, context) => {
 			startDuration(context.state as DurationState, args.action === "wait", context.executionStarted);
-			return renderToolCall("agent", args, theme, !context.isPartial, context.lastComponent);
+			return renderToolCall("agent", args, theme, context.lastComponent);
 		},
 		// `wait` shows how long it has waited.
 		renderResult: (result, options, theme, context) => renderTextResult(result, options, theme, context, () => keyHint("app.tools.expand", "to expand")),

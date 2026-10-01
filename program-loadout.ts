@@ -90,7 +90,6 @@ export function programRenderers(piCodemode: PiCodemode): Renderers {
 					text += `\n${theme.fg("muted", `... (${lines.length - shown.length} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 				}
 			}
-			if (!context.isPartial) text += "\n";
 			const component = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 			component.setText(text);
 			return component;

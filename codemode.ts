@@ -2,20 +2,24 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { getKeybindings } from "@earendil-works/pi-tui";
 import { getPackageDir, type AgentToolResult, type AgentToolUpdateCallback, type ExtensionToolContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 type Codemode = typeof import("@earendil-works/pi-codemode");
 
 let loaded: Promise<Codemode> | undefined;
 
+/** Imports a package from Pi's own dependencies rather than the copy Pi aliases for extensions. */
+function importPiDependency(name: string) {
+	const dirs = createRequire(join(getPackageDir(), "package.json")).resolve.paths(name) ?? [];
+	const entry = dirs.map((dir) => join(dir, name, "dist/index.js")).find(existsSync);
+	if (!entry) throw new Error(`pi-agents requires Pi with ${name}`);
+	return import(pathToFileURL(entry).href);
+}
+
 /** Pi ships `@earendil-works/pi-codemode` but does not alias it for extensions, so load Pi's copy. */
 export function loadCodemode(): Promise<Codemode> {
-	loaded ??= (async () => {
-		const dirs = createRequire(join(getPackageDir(), "package.json")).resolve.paths("@earendil-works/pi-codemode") ?? [];
-		const entry = dirs.map((dir) => join(dir, "@earendil-works/pi-codemode/dist/index.js")).find(existsSync);
-		if (!entry) throw new Error("pi-agents requires Pi with @earendil-works/pi-codemode");
-		return import(pathToFileURL(entry).href);
-	})();
+	loaded ??= importPiDependency("@earendil-works/pi-codemode");
 	return loaded;
 }
 
@@ -45,17 +49,23 @@ export function loadPiCodemode(): Promise<PiCodemode> {
 	internals ??= (async () => {
 		const dist = join(getPackageDir(), "dist");
 		const load = (file: string) => import(pathToFileURL(join(dist, file)).href);
-		const [tool, execute, renderer] = await Promise.all([
+		const [tool, execute, renderer, tui] = await Promise.all([
 			load("extensions/codemode/tool.js"),
 			load("extensions/codemode/execute.js"),
 			load("extensions/codemode/renderer.js"),
+			importPiDependency("@earendil-works/pi-tui"),
 		]);
 		return {
 			createCodemodeToolDefinition: tool.createCodemodeToolDefinition,
 			createCodemodeDescription: tool.createCodemodeDescription,
 			codemodeSchema: tool.codemodeSchema,
 			executeCodemode: execute.executeCodemode,
-			renderResult: renderer.codemodeRenderers.renderResult,
+			// A bundled Pi keeps its keybindings in its embedded pi-tui, which `dist/` does not import;
+			// share them so key hints name the configured keys.
+			renderResult(...args: unknown[]) {
+				tui.setKeybindings(getKeybindings());
+				return renderer.codemodeRenderers.renderResult(...args);
+			},
 		};
 	})();
 	return internals;
