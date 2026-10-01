@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { deferred, type Deferred } from "./agents.ts";
-import { boundBlocks, boundText } from "./output.ts";
-import type { ProgramFiles, ProgramOutcome, ProgramRunResult } from "./program-execute.ts";
+import { deferred, type Deferred } from "../agents/agents.ts";
+import { boundBlocks, boundText } from "../output.ts";
+import type { ProgramFiles, ProgramOutcome, ProgramRunResult } from "./execute.ts";
 
 const PROGRAM_ENTRY = "pi-agents-program";
 const CLEANUP_TIMEOUT_MS = 10_000;

@@ -58,7 +58,7 @@ async function startRoot(limits = {}) {
 		agentDir,
 		settingsManager,
 		noExtensions: true,
-		additionalExtensionPaths: [fileURLToPath(new URL("../index.ts", import.meta.url))],
+		additionalExtensionPaths: [fileURLToPath(new URL("../src/index.ts", import.meta.url))],
 	});
 	await resourceLoader.reload();
 	const sessionManager = pi.SessionManager.create(cwd, join(cwd, "sessions"));

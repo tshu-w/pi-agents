@@ -21,7 +21,7 @@ const AGENT_ENTRY = "pi-agents-agent";
 const TREE_ENTRY = "pi-agents-tree";
 const USAGE_ENTRY = "pi-agents-usage";
 const SHUTDOWN_TIMEOUT_MS = 10_000;
-const EXTENSION_PATH = fileURLToPath(new URL("./index.ts", import.meta.url));
+const EXTENSION_PATH = fileURLToPath(new URL("../index.ts", import.meta.url));
 export const SUBMIT_RESULT_TOOL_NAME = "submit_result";
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 

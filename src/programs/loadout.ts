@@ -1,8 +1,8 @@
 import { highlightCode, keyHint, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { PiCodemode } from "./codemode.ts";
-import { PROGRAM_TOOL_NAME } from "./program-execute.ts";
-import { formatToolCall, renderTextResult, startDuration, type DurationState } from "./render-call.ts";
+import { PROGRAM_TOOL_NAME } from "./execute.ts";
+import { formatToolCall, renderTextResult, startDuration, type DurationState } from "../render-call.ts";
 
 const CODEMODE_TOOL_NAME = "codemode";
 /** The first line of the `codemode` description, which the `program` intro replaces. */

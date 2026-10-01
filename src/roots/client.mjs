@@ -21,7 +21,7 @@ export async function sendViaSupervisor(paths, message, { cli, sessionRoot, piIn
       try {
         const info = await log.stat();
         if (!info.isFile() || info.uid !== process.getuid() || (info.mode & 0o077)) throw new Error('Supervisor log must be a private regular file');
-        child = spawn(process.execPath, [fileURLToPath(new URL('../bin/supervisor.mjs', import.meta.url)), cli, sessionRoot, piIndex, extension], {
+        child = spawn(process.execPath, [fileURLToPath(new URL('../../bin/supervisor.mjs', import.meta.url)), cli, sessionRoot, piIndex, extension], {
           cwd: paths.directory, detached: true, stdio: ['ignore', log.fd, log.fd],
         });
       } finally { await log.close(); }

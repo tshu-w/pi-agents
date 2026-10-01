@@ -21,11 +21,11 @@ Object.assign(process.env, {
 	PI_TELEMETRY: "0",
 });
 const { pi, PI_PACKAGE } = await import("./pi.mjs");
-const { rootPaths } = await import("../roots/paths.mjs");
-const { request } = await import("../roots/transport.mjs");
-const { reserve } = await import("../roots/ownership.mjs");
+const { rootPaths } = await import("../src/roots/paths.mjs");
+const { request } = await import("../src/roots/transport.mjs");
+const { reserve } = await import("../src/roots/ownership.mjs");
 const paths = rootPaths();
-const extension = fileURLToPath(new URL("../index.ts", import.meta.url));
+const extension = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 const cli = join(PI_PACKAGE, "dist/bundle/cli.js");
 
 const textOf = (content) => content.filter((block) => block.type === "text").map((block) => block.text).join("\n");

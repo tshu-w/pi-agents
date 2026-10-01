@@ -1,13 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { acquireOwnership, reserve } from '../roots/ownership.mjs';
-import { rootPaths } from '../roots/paths.mjs';
-import { prepareDirectory, rememberedFiles } from '../roots/registry.mjs';
-import { discoverRoots } from '../roots/discovery.mjs';
-import { listenWorker, request } from '../roots/transport.mjs';
-import { recoverSocket } from '../roots/socket-recovery.mjs';
-import { createSupervisor } from '../roots/supervisor.mjs';
-import { launchWorker, stopWorker } from '../roots/launch-worker.mjs';
+import { acquireOwnership, reserve } from '../src/roots/ownership.mjs';
+import { rootPaths } from '../src/roots/paths.mjs';
+import { prepareDirectory, rememberedFiles } from '../src/roots/registry.mjs';
+import { discoverRoots } from '../src/roots/discovery.mjs';
+import { listenWorker, request } from '../src/roots/transport.mjs';
+import { recoverSocket } from '../src/roots/socket-recovery.mjs';
+import { createSupervisor } from '../src/roots/supervisor.mjs';
+import { launchWorker, stopWorker } from '../src/roots/launch-worker.mjs';
 
 // `extension` is the path Pi loaded pi-agents from, so a Worker whose settings also
 // load it gets the same path, which Pi loads once.

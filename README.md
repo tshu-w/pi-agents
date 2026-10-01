@@ -76,5 +76,5 @@ Settings live under `"pi-agents"` in the global `settings.json`:
 
 ## Specifications
 
-- [SPEC.md](SPEC.md): Agents, messages, visibility, and limits.
-- [PROGRAM.md](PROGRAM.md): Programs and the `agent()` API.
+- [SPEC.md](docs/SPEC.md): Agents, messages, visibility, and limits.
+- [PROGRAM.md](docs/PROGRAM.md): Programs and the `agent()` API.

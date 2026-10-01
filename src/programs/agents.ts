@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Agents, label, messageText, nodes, THINKING_LEVELS, type AgentNode, type Limits } from "./agents.ts";
-import type { AgentOptions, ProgramAgentHost, SendOptions } from "./program-sandbox.ts";
+import { Agents, label, messageText, nodes, THINKING_LEVELS, type AgentNode, type Limits } from "../agents/agents.ts";
+import type { AgentOptions, ProgramAgentHost, SendOptions } from "./sandbox.ts";
 
 const CLEANUP_TIMEOUT_MS = 10_000;
 const DELIVERIES = ["followUp", "steer", "write"];

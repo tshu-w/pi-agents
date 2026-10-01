@@ -69,7 +69,7 @@ async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), se
 	const settingsManager = pi.SettingsManager.create(cwd, agentDir, { projectTrusted: true });
 	const resourceLoader = new pi.DefaultResourceLoader({
 		cwd, agentDir, settingsManager, noExtensions: true,
-		additionalExtensionPaths: [fileURLToPath(new URL("../index.ts", import.meta.url)), ...extensions],
+		additionalExtensionPaths: [fileURLToPath(new URL("../src/index.ts", import.meta.url)), ...extensions],
 	});
 	await resourceLoader.reload();
 	const sessionManager = sessionFile ? pi.SessionManager.open(sessionFile) : pi.SessionManager.create(cwd, join(cwd, "sessions"));
@@ -279,7 +279,7 @@ test("MCP activates program, and a Program waits for the MCP server its code nam
 	const resourceLoader = new pi.DefaultResourceLoader({
 		cwd, agentDir, settingsManager, noExtensions: true,
 		extensionFactories: [{ name: "codemode", builtin: true, factory: pi.createCodemodeExtension() }, { name: "mcp", builtin: true, factory: pi.createMcpExtension() }],
-		additionalExtensionPaths: ["builtin:codemode", "builtin:mcp", fileURLToPath(new URL("../index.ts", import.meta.url)), fileURLToPath(new URL("./fixtures/mcp-extension.mjs", import.meta.url))],
+		additionalExtensionPaths: ["builtin:codemode", "builtin:mcp", fileURLToPath(new URL("../src/index.ts", import.meta.url)), fileURLToPath(new URL("./fixtures/mcp-extension.mjs", import.meta.url))],
 	});
 	await resourceLoader.reload();
 	const { session } = await pi.createAgentSession({ cwd, agentDir, settingsManager, resourceLoader, sessionManager: pi.SessionManager.inMemory(cwd), modelRuntime, model: faux.getModel() });
