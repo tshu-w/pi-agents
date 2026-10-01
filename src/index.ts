@@ -5,6 +5,7 @@ import {
 	getAgentDir,
 	parseSessionEntries,
 	SessionManager,
+	VERSION,
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -81,7 +82,17 @@ function formatUsage(usage: Usage): string {
 	return `${usage.turns} turns ↑${formatTokens(usage.input)} ↓${formatTokens(usage.output)} R${formatTokens(usage.cacheRead)} W${formatTokens(usage.cacheWrite)} $${usage.cost.toFixed(4)}`;
 }
 
+const MIN_PI_VERSION = "0.99.2";
+
+function olderThan(version: string, minimum: string): boolean {
+	const a = version.split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0);
+	const b = minimum.split(".").map(Number);
+	for (let i = 0; i < b.length; i++) if (a[i] !== b[i]) return (a[i] ?? 0) < b[i];
+	return false;
+}
+
 export default async function (pi: ExtensionAPI): Promise<void> {
+	if (olderThan(VERSION, MIN_PI_VERSION)) throw new Error(`pi-agents requires Pi ${MIN_PI_VERSION} or later, found ${VERSION}`);
 	const agentDir = getAgentDir();
 	const settings = readSettings(agentDir);
 	const piCodemode = await loadPiCodemode();
