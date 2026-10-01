@@ -1,10 +1,14 @@
 import { highlightCode, keyHint, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { PiCodemode } from "./codemode.ts";
-import { forProgram, PROGRAM_TOOL_NAME } from "./program-execute.ts";
+import { PROGRAM_TOOL_NAME } from "./program-execute.ts";
 import { formatToolCall, renderTextResult, startDuration, type DurationState } from "./render-call.ts";
 
 const CODEMODE_TOOL_NAME = "codemode";
+/** The first line of the `codemode` description, which the `program` intro replaces. */
+const CODEMODE_FIRST_LINE = "Run JavaScript code to orchestrate/compose tool calls\n";
+const MODEL_API_START = "\n\nModel API:";
+const TOOL_LIST_START = "\n\nNested tools:";
 
 type Loadout = Parameters<NonNullable<ToolDefinition["prepareLoadout"]>>[0];
 type Changes = ReturnType<NonNullable<ToolDefinition["prepareLoadout"]>>;
@@ -32,10 +36,22 @@ function readSettings(pi: ExtensionAPI): { mode: "on" | "only"; inlineBudget?: n
 }
 
 /**
+ * The `program` description: the intro, then the `codemode` script API with the Agent API before
+ * its Model API, or before its tool list when it has no Model API.
+ */
+function describeProgram(intro: string, agentApi: string, codemodeDescription: string): string {
+	const description = codemodeDescription.startsWith(CODEMODE_FIRST_LINE) ? codemodeDescription.slice(CODEMODE_FIRST_LINE.length) : codemodeDescription;
+	const modelApi = description.indexOf(MODEL_API_START);
+	const at = modelApi >= 0 ? modelApi : description.indexOf(TOOL_LIST_START);
+	const [before, after] = at < 0 ? [description, ""] : [description.slice(0, at), description.slice(at)];
+	return `${intro}\n\n${before}\n\n${agentApi}${after}`;
+}
+
+/**
  * Presents the loadout with Pi's `codemode` `prepareLoadout`, following `codemode.mode`, and
  * moves its `codemode` description to `program`.
  */
-export function programLoadout(pi: ExtensionAPI, piCodemode: PiCodemode, intro: string): (loadout: Loadout) => Changes {
+export function programLoadout(pi: ExtensionAPI, piCodemode: PiCodemode, intro: string, agentApi: string): (loadout: Loadout) => Changes {
 	const { prepareLoadout } = piCodemode.createCodemodeToolDefinition({
 		models: true,
 		getMode: () => readSettings(pi).mode,
@@ -43,18 +59,15 @@ export function programLoadout(pi: ExtensionAPI, piCodemode: PiCodemode, intro: 
 	});
 	return (loadout) => {
 		const changes = prepareLoadout!(loadout) ?? {};
-		const descriptions: Record<string, string> = {};
-		for (const [name, description] of Object.entries(changes.descriptions ?? {})) {
-			if (name === CODEMODE_TOOL_NAME) descriptions[PROGRAM_TOOL_NAME] = `${intro}\n\n${forProgram(description)}`;
-			else descriptions[name] = forProgram(description);
-		}
+		const { [CODEMODE_TOOL_NAME]: codemodeDescription, ...descriptions }: Record<string, string> = { ...changes.descriptions };
+		if (codemodeDescription !== undefined) descriptions[PROGRAM_TOOL_NAME] = describeProgram(intro, agentApi, codemodeDescription);
 		return { descriptions, hiddenDeclarations: changes.hiddenDeclarations };
 	};
 }
 
 /** The program description before the loadout is prepared. */
-export function programDescription(piCodemode: PiCodemode, intro: string): string {
-	return `${intro}\n\n${forProgram(piCodemode.createCodemodeDescription([], { models: true }))}`;
+export function programDescription(piCodemode: PiCodemode, intro: string, agentApi: string): string {
+	return describeProgram(intro, agentApi, piCodemode.createCodemodeDescription([], { models: true }));
 }
 
 /** Calls render in function-call form, with the `run` script below it. Results render like `codemode`. */

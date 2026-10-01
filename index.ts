@@ -129,28 +129,40 @@ const PROGRAM_DESCRIPTION = `Run JavaScript that composes tool calls and Agents;
 
 Program code is the body of an async function. It calls the caller's tools through \`tools.*\`, which excludes \`program\`, and creates Agents through \`agent()\`. These Agents belong to the Program, are isolated from other Agents, and go offline when it ends.
 
+\`program\` replaces the \`codemode\` tool; wherever \`codemode\` is mentioned, use \`program\`.`;
+
+const AGENT_API = `Agent API:
 \`\`\`ts
 type JsonSchema = boolean | Record<string, unknown>;
-
-declare function agent(options?: {
-  name?: string;               // default: generated
-  cwd?: string;                // default: the caller's cwd
-  context?: "fresh" | "fork";  // default: fresh
-  model?: string;              // provider/modelId; default: the caller's
-  thinkingLevel?: string;      // default: the caller's
-}): AgentHandle;
-
+interface AgentOptions {
+  /** Default: generated, unique within the Program. */
+  name?: string;
+  /** Default: the caller's cwd. */
+  cwd?: string;
+  /** \`fresh\` starts without the caller's conversation; \`fork\` snapshots it. Default: \`fresh\`. */
+  context?: "fresh" | "fork";
+  /** provider/modelId. Default: the caller's model. */
+  model?: string;
+  /** Default: the caller's level. */
+  thinkingLevel?: string;
+}
+interface SendOptions {
+  /** Default: \`followUp\`. */
+  deliverAs?: "followUp" | "steer" | "write";
+  /** \`followUp\` only. The Agent must submit a value matching it. */
+  schema?: JsonSchema;
+}
 interface AgentHandle {
   readonly id: string;
   readonly name: string;
-  // Resolves with the answer, or with the submitted value when \`schema\`
-  // is set; throws if the input fails or is aborted.
-  send(message: string, options?: {
-    deliverAs?: "followUp" | "steer" | "write";  // default: followUp
-    schema?: JsonSchema;                         // followUp only
-  }): Promise<unknown>;
+  /** Resolves with the answer, or with the submitted value when \`schema\` is set; a write resolves with undefined once accepted. Throws if the input fails or is aborted. */
+  send(message: string, options?: SendOptions): Promise<unknown>;
+  /** Aborts the Agent's current turn and queued inputs; the Agent stays usable. */
   abort(): Promise<void>;
 }
+
+/** Creates an idle Agent that belongs to the Program. */
+declare function agent(options?: AgentOptions): AgentHandle;
 \`\`\``;
 
 export default async function (pi: ExtensionAPI): Promise<void> {
@@ -418,9 +430,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		label: "Program",
 		// Programs must not start Programs.
 		exposure: "model-only",
-		prepareLoadout: programLoadout(pi, piCodemode, PROGRAM_DESCRIPTION),
+		prepareLoadout: programLoadout(pi, piCodemode, PROGRAM_DESCRIPTION, AGENT_API),
 		...programRenderers(piCodemode),
-		description: programDescription(piCodemode, PROGRAM_DESCRIPTION),
+		description: programDescription(piCodemode, PROGRAM_DESCRIPTION, AGENT_API),
 		promptSnippet: "Run JavaScript that composes tool calls and Agents",
 		promptGuidelines: [
 			"Use `program(action='run', code=...)` to call tools or Agents several times without a model turn between the calls, for example to read many files, filter large tool output, fan out Agents, or loop until a condition holds.",

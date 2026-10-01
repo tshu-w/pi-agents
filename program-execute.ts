@@ -10,11 +10,6 @@ import { loadCodemode, loadPiCodemode } from "./codemode.ts";
 
 export const PROGRAM_TOOL_NAME = "program";
 
-/** Points codemode API text at `program`. */
-export function forProgram(text: string): string {
-	return text.replaceAll("codemode tool declaration:", "program tool declaration:").replaceAll("`codemode` calls", "`program` runs");
-}
-
 export type ProgramOutcome = "completed" | "failed" | "stopped";
 
 /** Paths passed to `read`, `write`, and `edit`, which compaction lists like Pi's file operations. */
@@ -74,15 +69,6 @@ async function withSandboxExtras<T>(extras: SandboxExtras, run: () => Promise<T>
 			const current = sandboxExtras.getStore();
 			if (!current || current.used) return execute.call(this, code, options);
 			current.used = true;
-			// Tool descriptions reach scripts through ALL_TOOLS and the discovery globals.
-			for (const tool of this.toolsByName.values()) if (typeof tool.description === "string") tool.description = forProgram(tool.description);
-			const rewrite = (value: unknown): unknown => typeof value === "string"
-				? forProgram(value)
-				: Array.isArray(value) ? value.map((entry) => ({ ...entry, description: forProgram(String(entry.description ?? "")) })) : value;
-			for (const name of ["describeTool", "searchTools"]) {
-				const global = this.globalsByName.get(name);
-				if (global) this.globalsByName.set(name, { ...global, execute: async (...args: unknown[]) => rewrite(await global.execute(...args)) });
-			}
 			for (const global of current.globals) this.globalsByName.set(global.name, global);
 			const timeoutMs = Math.min(current.timeoutMs, (options.timeoutMs as number | undefined) ?? this.timeoutMs);
 			return execute.call(this, current.prepare(code), { ...options, timeoutMs }).then((result: CodemodeResult) => {

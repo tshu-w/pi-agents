@@ -120,32 +120,48 @@ through `tools.*`, which excludes `program`, and creates Agents through
 `agent()`. These Agents belong to the Program, are isolated from other
 Agents, and go offline when it ends.
 
+`program` replaces the `codemode` tool; wherever `codemode` is mentioned,
+use `program`.
+
+[the script API of `codemode`, without its Model API]
+
+Agent API:
 ```ts
 type JsonSchema = boolean | Record<string, unknown>;
-
-declare function agent(options?: {
-  name?: string;               // default: generated
-  cwd?: string;                // default: the caller's cwd
-  context?: "fresh" | "fork";  // default: fresh
-  model?: string;              // provider/modelId; default: the caller's
-  thinkingLevel?: string;      // default: the caller's
-}): AgentHandle;
-
+interface AgentOptions {
+  /** Default: generated, unique within the Program. */
+  name?: string;
+  /** Default: the caller's cwd. */
+  cwd?: string;
+  /** `fresh` starts without the caller's conversation; `fork` snapshots it. Default: `fresh`. */
+  context?: "fresh" | "fork";
+  /** provider/modelId. Default: the caller's model. */
+  model?: string;
+  /** Default: the caller's level. */
+  thinkingLevel?: string;
+}
+interface SendOptions {
+  /** Default: `followUp`. */
+  deliverAs?: "followUp" | "steer" | "write";
+  /** `followUp` only. The Agent must submit a value matching it. */
+  schema?: JsonSchema;
+}
 interface AgentHandle {
   readonly id: string;
   readonly name: string;
-  // Resolves with the answer, or with the submitted value when `schema`
-  // is set; throws if the input fails or is aborted.
-  send(message: string, options?: {
-    deliverAs?: "followUp" | "steer" | "write";  // default: followUp
-    schema?: JsonSchema;                         // followUp only
-  }): Promise<unknown>;
+  /** Resolves with the answer, or with the submitted value when `schema` is set; a write resolves with undefined once accepted. Throws if the input fails or is aborted. */
+  send(message: string, options?: SendOptions): Promise<unknown>;
+  /** Aborts the Agent's current turn and queued inputs; the Agent stays usable. */
   abort(): Promise<void>;
 }
+
+/** Creates an idle Agent that belongs to the Program. */
+declare function agent(options?: AgentOptions): AgentHandle;
 ```
 
-The description continues with the script API and the tool list, which
-follows the `codemode.mode` setting.
+[the Model API of `codemode`]
+
+[the tool list, as set by `codemode.mode`]
 
 promptSnippet:
 

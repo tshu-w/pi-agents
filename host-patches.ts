@@ -7,7 +7,6 @@ import type { AgentSession, ExtensionRunner } from "@earendil-works/pi-coding-ag
 
 const PATCHED = Symbol.for("pi-agents:patched");
 const MCP_UNREACHABLE = /^MCP tools are only reachable from the codemode or tool_search tool/;
-const MCP_SERVERS_SECTION = "mcp_servers";
 
 interface DetachedCall {
 	signal?: AbortSignal;
@@ -32,9 +31,8 @@ type Patchable = Record<PropertyKey, any>;
  *   resets the numbers when the calling tool call returns and when the turn ends, which would
  *   repeat IDs across the calls of a background Program. While it runs, `ctx.signal` and
  *   `ctx.abort()` of hooks and tools act on the call instead of the caller's turn.
- * - While `program` is active and `codemode` is not, the MCP warning that no tool reaches its
- *   tools is dropped, and the system prompt section listing MCP servers names `program` where it
- *   names `codemode`, since Programs call their tools.
+ * - The MCP warning that no tool reaches its tools is dropped while `program` is active, since
+ *   Programs call them.
  */
 export function installHostPatches(
 	session: typeof AgentSession,
@@ -90,16 +88,6 @@ export function installHostPatches(
 				if (MCP_UNREACHABLE.test(message) && this.getActiveTools().includes(programToolName)) return;
 				return notify.call(ui, message, ...rest);
 			};
-		};
-		const emitBeforeAgentStart = runnerProto.emitBeforeAgentStart;
-		runnerProto.emitBeforeAgentStart = async function (this: Patchable, ...args: unknown[]) {
-			const result = await emitBeforeAgentStart.apply(this, args);
-			const sections = result.systemPromptOptions?.sections as Record<string, string> | undefined;
-			const active: string[] = this.getActiveTools();
-			if (sections?.[MCP_SERVERS_SECTION] && active.includes(programToolName) && !active.includes("codemode")) {
-				sections[MCP_SERVERS_SECTION] = sections[MCP_SERVERS_SECTION].replace(/\bcodemode\b/g, programToolName);
-			}
-			return result;
 		};
 	}
 }

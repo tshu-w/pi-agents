@@ -239,18 +239,14 @@ test("codemode.mode decides whether program lists the direct tools or they keep 
 	tools = declared(only);
 	assert.ok(tools.program.includes(readDescription));
 	assert.deepEqual([...only.session._hiddenDeclarations].sort(), ["agent", "read"]);
-	// Programs replace codemode, so no description points at it.
-	for (const description of Object.values(tools)) assert.doesNotMatch(description, /\bcodemode\b/);
 	await only.close();
 });
 
-test("Programs reach MCP tools, and the MCP prompt section and warning name program instead of codemode", async () => {
+test("Programs reach MCP tools without the MCP warning that no tool reaches them", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-"));
 	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "model" }], tokensPerSecond: 0 });
-	let systemPrompt;
 	faux.setResponses([
-		(context) => {
-			systemPrompt = JSON.stringify(context);
+		() => {
 			return ai.fauxAssistantMessage(ai.fauxToolCall("program", { action: "run", code: "return (await tools.mcp__echo__shout({ text: 'hi' })).content[0].text" }));
 		},
 		() => ai.fauxAssistantMessage("done"),
@@ -273,8 +269,6 @@ test("Programs reach MCP tools, and the MCP prompt section and warning name prog
 	while (!session.getAllTools().some((tool) => tool.name === "mcp__echo__shout") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
 	await session.prompt("shout");
 	assert.match(textOf(session.messages.findLast((message) => message.role === "toolResult").content), /HI$/);
-	assert.match(systemPrompt, /<mcp_servers>/);
-	assert.doesNotMatch(systemPrompt.slice(systemPrompt.indexOf("<mcp_servers>"), systemPrompt.indexOf("</mcp_servers>")), /codemode/);
 	assert.deepEqual(notes.filter((note) => /MCP tools are only reachable/.test(note)), []);
 	await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 	session.dispose();
