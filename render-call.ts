@@ -57,8 +57,8 @@ interface ResultTheme {
 }
 
 /**
- * The text output like Pi's default result, with the duration of a timed call below it,
- * separated from the call by a blank line.
+ * The text output like Pi's default result, with the duration of a timed call below it.
+ * Like Pi's `bash` result, a blank line precedes the output and the duration.
  * `expandHint` renders the key hint for expanding a collapsed result.
  */
 export function renderTextResult(
@@ -80,6 +80,6 @@ export function renderTextResult(
 	const duration = updateDuration(context.state as DurationState, options.isPartial, context.invalidate);
 	if (duration) sections.push(theme.fg("muted", duration));
 	const component = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
-	component.setText(sections.length > 0 ? `\n${sections.join("\n")}` : "");
+	component.setText(sections.map((section) => `\n${section}`).join("\n"));
 	return component;
 }
