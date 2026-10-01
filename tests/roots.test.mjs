@@ -131,7 +131,7 @@ test("a root in another process is listed with its state and cannot be opened tw
 
 	const second = runPi(["--session", target.file], target.cwd);
 	await second.exited;
-	assert.match(second.output(), /Session .* is occupied/);
+	assert.match(second.output(), /Session live-c is open in another Pi process \(PID \d+\)\. Close it there before reopening it\./);
 	assert.equal(first.child.exitCode, null);
 
 	await sender.call({ action: "send", target: "live-c", message: "note", deliverAs: "write" });

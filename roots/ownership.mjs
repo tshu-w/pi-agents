@@ -6,9 +6,19 @@ import {
 import { basename, dirname, join, resolve } from 'node:path';
 import { flockSync } from 'fs-ext';
 
+/** The Session ID of a lock key: `id:<id>`, or `path:<file>` whose name ends with `_<id>.jsonl`. */
+function sessionLabel(key) {
+  const name = key.replace(/^admission:/, '');
+  if (name.startsWith('id:')) return name.slice(3);
+  return basename(name.slice(5), '.jsonl').split('_').pop();
+}
+
 export class SessionOccupiedError extends Error {
   constructor(sessionId, owner) {
-    super(`Session ${sessionId} is occupied${owner ? ` (last reported owner: PID ${owner.pid}, ${owner.sessionFile})` : ' (owner information unavailable)'}. Close its current runtime before reopening it.`);
+    const label = sessionLabel(sessionId);
+    super(owner?.background
+      ? `Session ${label} is being handled by a background Worker (PID ${owner.pid}), which exits once its inputs end. To open it now, start \`pi\` and use /resume, which waits for the Worker.`
+      : `Session ${label} is open in another Pi process${owner ? ` (PID ${owner.pid})` : ''}. Close it there before reopening it.`);
     this.name = 'SessionOccupiedError';
     this.code = 'SESSION_OCCUPIED';
     this.sessionId = sessionId;

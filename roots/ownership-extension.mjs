@@ -121,9 +121,6 @@ export default function ownershipExtension(pi, runtime = {}) {
       blocked = undefined;
     } catch (error) {
       blocked = error.message;
-      if (event.reason === 'startup' && error.code === 'SESSION_OCCUPIED' && ctx.mode === 'tui') {
-        blocked += ' Startup cannot safely take over an occupied Session. Open another Session and use /resume to wait for the background Worker.';
-      }
       notify(ctx, blocked);
       // A thrown session_start error is swallowed by Pi. Explicitly quarantine
       // normal input/tool execution while the host performs graceful shutdown.
