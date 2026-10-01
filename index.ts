@@ -204,8 +204,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
 	pi.registerFlag(PROGRAM_ONLY_FLAG, { type: "boolean", description: "Present tools as with codemode.mode \"only\": scripts reach them through program" });
 
+	let warnedBothScriptTools = false;
 	pi.on("session_start", (_event, current) => {
 		applyProgramOnlyFlag(pi);
+		warnedBothScriptTools = false;
 		ctx = current;
 		const id = current.sessionManager.getSessionId();
 		const metadata = treeMetadata(current);
@@ -236,6 +238,13 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			notify: (text) => agents.notify(text),
 		});
 		programs.restore(current);
+	});
+
+	pi.on("before_agent_start", (_event, current) => {
+		const active = pi.getActiveTools();
+		if (warnedBothScriptTools || !active.includes(PROGRAM_TOOL_NAME) || !active.includes("codemode")) return;
+		warnedBothScriptTools = true;
+		current.ui.notify("Both `program` and `codemode` are active and do a similar job; disable `codemode` to avoid declaring the script API twice.", "warning");
 	});
 
 	pi.on("session_before_compact", (event) => {

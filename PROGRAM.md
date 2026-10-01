@@ -280,5 +280,8 @@ Only nonzero counts are shown; the line is omitted when both are zero.
 
 ## 8. Configuration
 
+`program` is inactive by default, like `codemode`; enable it with `"defaultTools": ["+program"]` or `--tools`.
+MCP treats `program` as `codemode`: it activates `program` when its servers need a script tool and neither is active, unless `autoEnableCodemode` is false, and a Program waits for the MCP servers its code names.
+When both `program` and `codemode` are active, Pi warns once per Session, since they do a similar job.
 `codemode.mode` decides how the tool list is presented, as for `codemode`.
-`--program-only` uses `only` for the process, including its owned Agents.
+`--program-only` activates `program` and uses `only` for the process, including its owned Agents.
