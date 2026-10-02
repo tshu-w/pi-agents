@@ -19,7 +19,7 @@ On [BrowseComp](https://arxiv.org/abs/2504.12516), async agents improved 7 of 8 
 pi install git:github.com/tshu-w/pi-agents
 ```
 
-Requires Pi 0.99.2 or later. Enable `program` with `{ "defaultTools": ["+program"] }` in `settings.json`.
+Requires Pi 1.0.0 or later. Enable `program` with `{ "defaultTools": ["+program"] }` in `settings.json`.
 
 ## Configuration
 

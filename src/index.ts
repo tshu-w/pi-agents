@@ -82,7 +82,7 @@ function formatUsage(usage: Usage): string {
 	return `${usage.turns} turns ↑${formatTokens(usage.input)} ↓${formatTokens(usage.output)} R${formatTokens(usage.cacheRead)} W${formatTokens(usage.cacheWrite)} $${usage.cost.toFixed(4)}`;
 }
 
-const MIN_PI_VERSION = "0.99.2";
+const MIN_PI_VERSION = "1.0.0";
 
 function olderThan(version: string, minimum: string): boolean {
 	const a = version.split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0);

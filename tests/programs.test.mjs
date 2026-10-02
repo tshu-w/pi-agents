@@ -101,9 +101,9 @@ const idOf = (text) => /^Program (\S+) started\.$/.exec(text)[1];
 
 test("a foreground Program calls the caller's tools except program and keeps store writes only when it completes", async () => {
 	const root = await startRoot();
-	const completed = await root.call({ action: "run", code: "const note = await tools.read({ path: 'note.txt' }); store('note', note); return [typeof tools.program, note]" });
+	const completed = await root.call({ action: "run", code: "const note = await tools.read({ path: 'note.txt' }); store('note', note); return ['program' in tools, note]" });
 	assert.equal(completed.isError, undefined, textOf(completed.content));
-	assert.match(textOf(completed.content), /\["undefined","note"\]$/);
+	assert.match(textOf(completed.content), /\[false,"note"\]$/);
 	const failed = await root.call({ action: "run", code: "store('lost', 1); throw new Error('boom')" });
 	assert.equal(failed.isError, true);
 	assert.match(textOf(failed.content), /boom/);
