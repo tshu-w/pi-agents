@@ -42,11 +42,29 @@ function readId(path) {
   }
 }
 
+const switchers = globalThis[Symbol.for('pi-agents.switch-session')] ??= { byManager: new WeakMap(), patched: false };
+
+/**
+ * Pi gives `switchSession` only to command handlers. Keep the one it binds to each runner, by
+ * Session manager, so a handover can switch without a command. Relies on a private member of
+ * `ExtensionRunner`; check it when Pi is updated.
+ */
+function captureSwitchSession(Runner) {
+  if (switchers.patched) return;
+  switchers.patched = true;
+  const bind = Runner.prototype.bindCommandContext;
+  Runner.prototype.bindCommandContext = function (actions) {
+    if (actions?.switchSession) switchers.byManager.set(this.sessionManager, actions.switchSession);
+    return bind.call(this, actions);
+  };
+}
+
 /**
  * Holds the current Session's ownership so one runtime uses a Session at a time.
  * An occupied Session is quarantined; /resume waits for a background Worker to exit.
  */
 export default function ownershipExtension(pi, runtime = {}) {
+  if (runtime.runner) captureSwitchSession(runtime.runner);
   const paths = rootPaths();
   const stateDir = paths.ownership;
   let blocked = 'Session ownership has not been acquired';
@@ -72,15 +90,17 @@ export default function ownershipExtension(pi, runtime = {}) {
     else console.error(message);
   }
 
-  pi.registerCommand('agents-reopen-internal', {
-    description: 'Finish a pending background Session handover (internal)',
-    handler: async (_args, ctx) => {
-      if (!reopen) return;
+  function scheduleReopen(ctx) {
+    // Session replacement must run after the current hooks.
+    setTimeout(async () => {
+      if (!alive || !reopen) return;
       const { file, value } = reopen;
       reopen = undefined;
       replacing = true;
       try {
-        const result = await ctx.switchSession(file);
+        const switchSession = switchers.byManager.get(ctx.sessionManager);
+        if (!switchSession) throw new Error('Session handover is unavailable; reopen the Session with /resume.');
+        const result = await switchSession(file);
         if (result.cancelled) {
           notify(ctx, 'Session handover reload was cancelled.');
           blocked = undefined;
@@ -92,13 +112,6 @@ export default function ownershipExtension(pi, runtime = {}) {
         replacing = false;
         discardPending(file, value);
       }
-    },
-  });
-
-  function scheduleReopen() {
-    // Session replacement must run from a command, after the current hooks.
-    setTimeout(() => {
-      if (alive && reopen) pi.sendUserMessage('/agents-reopen-internal', { expandPromptTemplates: true });
     }, 0);
   }
 
@@ -147,8 +160,8 @@ export default function ownershipExtension(pi, runtime = {}) {
         const value = savePending(file, id, lease);
         reopen = { file, value };
         blocked = 'Switching to the latest Session';
-        // Re-enter through a command so later cancellation releases the lease.
-        scheduleReopen();
+        // Switch again later so a cancellation releases the lease.
+        scheduleReopen(ctx);
         return { cancel: true };
       };
       try {

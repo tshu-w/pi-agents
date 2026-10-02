@@ -104,7 +104,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		treeIdle: () => node === undefined || treeIdle(node.rootId),
 		receivedIds: receivedMessageIds,
 	});
-	ownershipExtension(pi, { start: (current: ExtensionContext) => roots.start(current), stop: () => roots.stop(), waitForBackground });
+	ownershipExtension(pi, { start: (current: ExtensionContext) => roots.start(current), stop: () => roots.stop(), waitForBackground, runner: ExtensionRunner });
 
 	const requireNode = (current: ExtensionContext): AgentNode => {
 		if (!node) throw new Error("pi-agents is not initialized");
