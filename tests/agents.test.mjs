@@ -103,6 +103,24 @@ test("the owner is notified when an input ends while it is not waiting", async (
 	await root.close();
 });
 
+test("the user's input from the viewer reaches the Agent without a sender header and gives its owner no result", async () => {
+	const root = await startRoot();
+	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "one" }));
+	assert.equal(await root.call({ action: "wait", target: id, timeout: 10 }), "answer:one|seen:one");
+	const owner = globalThis[Symbol.for("pi-agents:runtime")].nodes.get(root.session.sessionManager.getSessionId());
+	owner.agents.prompt(id, "two", "steer");
+	const deadline = Date.now() + 10000;
+	const answered = () => owner.agents.conversation(id).messages.filter((message) => message.role === "assistant").length === 2;
+	while (!answered() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+	const messages = owner.agents.conversation(id).messages;
+	assert.ok(messages.some((message) => message.role === "custom" && message.content === "two" && message.details.user), JSON.stringify(messages));
+	assert.equal(messages.at(-1).role, "assistant");
+	await root.session.waitForIdle();
+	assert.ok(!root.state.rootMessages.some((text) => text.startsWith("Agent worker")), root.state.rootMessages.join("\n"));
+	assert.equal(await root.call({ action: "wait", target: id, timeout: 10 }), "No results.");
+	await root.close();
+});
+
 test("inputs queue for a slot and are rejected beyond the input limit", async () => {
 	const root = await startRoot({ maxConcurrent: 1, maxOutstanding: 2 });
 	root.state.hold = gate();

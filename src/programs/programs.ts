@@ -67,6 +67,8 @@ export class Programs {
 		private hooks: {
 			appendEntry(customType: string, data: unknown): void;
 			notify(text: string): void;
+			/** Called when a Program starts, ends, or has its result returned. */
+			changed?(): void;
 		},
 	) {}
 
@@ -94,6 +96,7 @@ export class Programs {
 		const program: Running = { record, controller, waiters: 0 };
 		this.programs.set(record.id, program);
 		this.persist(record);
+		this.hooks.changed?.();
 		program.done = run(record.id, controller.signal, () => controller.abort(new Error("Program stopped"))).then(
 			({ outcome, result, files }) => this.end(program, outcome, result.content, result.isError === true, files),
 			(error: unknown) => this.end(program, "failed", [{ type: "text", text: `Script failed\nOutput:\nScript error:\n${error instanceof Error ? error.message : String(error)}` }], true),
@@ -189,6 +192,7 @@ export class Programs {
 			record.returned = true;
 			this.persist(record);
 		}
+		this.hooks.changed?.();
 	}
 
 	async shutdown(): Promise<void> {
@@ -217,6 +221,7 @@ export class Programs {
 		const previous = this.change;
 		this.change = deferred();
 		previous.resolve();
+		this.hooks.changed?.();
 	}
 
 	private notify(record: ProgramRecord): void {

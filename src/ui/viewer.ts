@@ -1,0 +1,400 @@
+import {
+	AssistantMessageComponent,
+	CompactionSummaryMessageComponent,
+	CustomEditor,
+	CustomMessageComponent,
+	DynamicBorder,
+	getMarkdownTheme,
+	getSelectListTheme,
+	keyText,
+	ToolExecutionComponent,
+	UserMessageComponent,
+	type AgentSession,
+	type ExtensionContext,
+	type Theme,
+} from "@earendil-works/pi-coding-agent";
+import {
+	Container,
+	fuzzyFilter,
+	Input,
+	Loader,
+	matchesKey,
+	SelectList,
+	Spacer,
+	Text,
+	truncateToWidth,
+	type Component,
+	type Focusable,
+	type KeybindingsManager,
+	type SelectItem,
+	type TUI,
+} from "@earendil-works/pi-tui";
+import { firstInput, MESSAGE_TYPE, nodes, onTreeChange, treeEntries, type AgentNode, type Entry } from "../agents/agents.ts";
+import { formatTokens } from "./panel.ts";
+
+type Message = AgentSession["messages"][number];
+type ToolResult = Parameters<ToolExecutionComponent["updateResult"]>[0];
+type StatusIndicator = Parameters<CustomEditor["setWorkingStatusIndicator"]>[0];
+
+/** A spinner and message for the editor's top border, like Pi's working status. */
+class WorkingStatus extends Loader {
+	renderInBorder(width: number): string {
+		const line = super.render(width + 2)[1] ?? "";
+		return truncateToWidth(line.startsWith(" ") ? line.slice(1).trimEnd() : line.trimEnd(), width, "");
+	}
+
+	renderSpinnerInBorder(width: number): string {
+		return truncateToWidth(this.getRenderedIndicator(), width, "");
+	}
+
+	dispose(): void {
+		this.stop();
+	}
+}
+
+/** The user's view of one owned Agent: its conversation, and an editor whose text goes to it. */
+class AgentViewer implements Component, Focusable {
+	private readonly editor: CustomEditor;
+	private readonly transcript = new Container();
+	private session?: AgentSession;
+	private streaming?: Message;
+	private running = new Map<string, { name: string; partial?: ToolResult }>();
+	private expanded = false;
+	/** Lines scrolled up from the end. */
+	private scroll = 0;
+	private dirty = true;
+	private status = "";
+	private indicator?: WorkingStatus;
+	/** Inputs sent from the viewer that the Agent has not received yet, as Pi shows queued messages. */
+	private outbox: Array<{ text: string; delivery: "followUp" | "steer"; after: number }> = [];
+	private disposers: Array<() => void> = [];
+	private _focused = false;
+
+	constructor(
+		private tui: TUI,
+		private theme: Theme,
+		keys: KeybindingsManager,
+		private ctx: ExtensionContext,
+		private owner: AgentNode,
+		private entry: Entry,
+		private done: () => void,
+	) {
+		this.editor = new CustomEditor(tui, { borderColor: (text) => theme.fg("border", text), selectList: getSelectListTheme() }, keys as never, {
+			paddingX: 1,
+			embedWorkingStatus: true,
+		});
+		this.editor.onSubmit = (text) => this.send(text, "steer");
+		this.editor.onEscape = () => void this.owner.agents.abortAgent(this.entry.id);
+		this.editor.onAction("app.clear", () => {
+			if (this.editor.getText()) this.editor.setText("");
+			else this.done();
+		});
+		this.editor.onAction("app.message.followUp", () => this.send(this.editor.getText(), "followUp"));
+		this.editor.onAction("app.tools.expand", () => {
+			this.expanded = !this.expanded;
+			this.dirty = true;
+			this.tui.requestRender();
+		});
+		this.disposers.push(onTreeChange(() => this.refresh()));
+		this.attach();
+	}
+
+	get focused(): boolean {
+		return this._focused;
+	}
+
+	set focused(value: boolean) {
+		this._focused = value;
+		this.editor.focused = value;
+	}
+
+	handleInput(data: string): void {
+		const page = Math.max(1, this.tui.terminal.rows - 8);
+		if (matchesKey(data, "pageUp")) this.scroll += page;
+		else if (matchesKey(data, "pageDown")) this.scroll = Math.max(0, this.scroll - page);
+		else this.editor.handleInput(data);
+		this.tui.requestRender();
+	}
+
+	render(width: number): string[] {
+		const conversation = this.owner.agents.conversation(this.entry.id);
+		if (this.dirty) this.rebuild(conversation);
+		this.syncStatus(conversation);
+		const queue = this.outbox.map(({ text, delivery }) =>
+			truncateToWidth(this.theme.fg("dim", ` ${delivery === "steer" ? "Steering" : "Follow-up"}: ${text.replace(/\s+/g, " ")}`), width));
+		const editor = this.editor.render(width);
+		const footer = this.footer(conversation, width);
+		const budget = Math.max(1, this.tui.terminal.rows - queue.length - editor.length - footer.length - 1);
+		const lines = this.transcript.render(width);
+		this.scroll = Math.min(this.scroll, Math.max(0, lines.length - budget));
+		const end = lines.length - this.scroll;
+		const shown = lines.slice(Math.max(0, end - budget), end);
+		// Fill the screen so the Session behind the viewer does not show through.
+		const blank = " ".repeat(width);
+		const padding = Array.from({ length: budget - shown.length }, () => blank);
+		return [...padding, ...shown, blank, ...queue, ...editor, ...footer];
+	}
+
+	invalidate(): void {
+		this.dirty = true;
+		this.editor.invalidate();
+	}
+
+	dispose(): void {
+		this.indicator?.dispose();
+		for (const dispose of this.disposers.splice(0)) dispose();
+	}
+
+	private send(text: string, delivery: "followUp" | "steer"): void {
+		const trimmed = text.trim();
+		if (!trimmed) return;
+		try {
+			const after = this.owner.agents.conversation(this.entry.id)?.messages.length ?? 0;
+			this.owner.agents.prompt(this.entry.id, trimmed, delivery);
+			this.outbox.push({ text: trimmed, delivery, after });
+			this.editor.addToHistory(trimmed);
+			this.editor.setText("");
+			this.scroll = 0;
+			this.dirty = true;
+		} catch (error) {
+			this.ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+		}
+	}
+
+	/** Follows the Agent's Session once it is loaded. */
+	private attach(): void {
+		const session = this.owner.agents.conversation(this.entry.id)?.session;
+		if (!session || session === this.session) return;
+		this.session = session;
+		this.disposers.push(session.subscribe((event) => {
+			if (event.type === "message_start" || event.type === "message_update") this.streaming = event.message;
+			else if (event.type === "message_end") this.streaming = undefined;
+			else if (event.type === "tool_execution_start") this.running.set(event.toolCallId, { name: event.toolName });
+			else if (event.type === "tool_execution_update") {
+				const tool = this.running.get(event.toolCallId);
+				if (tool) tool.partial = event.partialResult as ToolResult;
+			} else if (event.type === "tool_execution_end") this.running.delete(event.toolCallId);
+			this.dirty = true;
+			this.tui.requestRender();
+		}));
+	}
+
+	private refresh(): void {
+		this.attach();
+		this.dirty = true;
+		this.tui.requestRender();
+	}
+
+	/** The working status in the editor's border, and its color from the Agent's thinking level, as in Pi. */
+	private syncStatus(conversation: ReturnType<AgentNode["agents"]["conversation"]>): void {
+		this.editor.borderColor = this.theme.getThinkingBorderColor((conversation?.thinkingLevel ?? "off") as never);
+		const busy = this.owner.agents.counts(this.entry.id)?.busy === true;
+		const tool = [...this.running.values()].at(-1);
+		const abort = `${keyText("app.interrupt")} to abort`;
+		const text = !busy ? "" : tool ? `Running ${tool.name}... (${abort})` : `Working... (${abort})`;
+		if (text === this.status) return;
+		this.status = text;
+		this.indicator?.dispose();
+		this.indicator = text
+			? new WorkingStatus(this.tui, (part) => this.editor.borderColor(part), (part) => this.theme.fg("muted", part), text)
+			: undefined;
+		this.editor.setWorkingStatusIndicator(this.indicator as unknown as StatusIndicator);
+	}
+
+	/** Usage and context, then the Agent's name, model, and keys, like Pi's footer. */
+	private footer(conversation: ReturnType<AgentNode["agents"]["conversation"]>, width: number): string[] {
+		let input = 0, output = 0, cacheRead = 0, cacheWrite = 0, cost = 0;
+		let context: number | undefined;
+		for (const message of conversation?.messages ?? []) {
+			if (message.role !== "assistant") continue;
+			input += message.usage.input;
+			output += message.usage.output;
+			cacheRead += message.usage.cacheRead;
+			cacheWrite += message.usage.cacheWrite;
+			cost += message.usage.cost.total;
+			if (message.stopReason !== "aborted" && message.stopReason !== "error") {
+				context = message.usage.totalTokens || message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite;
+			}
+		}
+		const stats: string[] = [];
+		if (input) stats.push(`↑${formatTokens(input)}`);
+		if (output) stats.push(`↓${formatTokens(output)}`);
+		if (cacheRead) stats.push(`R${formatTokens(cacheRead)}`);
+		if (cacheWrite) stats.push(`W${formatTokens(cacheWrite)}`);
+		stats.push(`$${cost.toFixed(3)}`);
+		const ref = conversation?.model;
+		const window = ref ? this.ctx.modelRegistry.find(ref.provider, ref.modelId)?.contextWindow ?? 0 : 0;
+		if (window > 0) {
+			const percent = context === undefined ? undefined : (context / window) * 100;
+			const text = `${percent === undefined ? "?" : percent.toFixed(1)}%/${formatTokens(window)}`;
+			stats.push(percent !== undefined && percent > 90 ? this.theme.fg("error", text) : text);
+		}
+		const model = ref ? `${ref.provider}/${ref.modelId}` : "no model";
+		const hints = [
+			model,
+			`thinking:${conversation?.thinkingLevel ?? "off"}`,
+			`${keyText("app.message.followUp")} follow-up`,
+			`${keyText("app.interrupt")} stop`,
+			`${keyText("app.clear")} close`,
+		].join(" · ");
+		return [
+			truncateToWidth(` ${this.theme.fg("dim", `${stats.join(" ")} ${conversation?.cwd ?? ""}`)}`, width),
+			truncateToWidth(` ${this.theme.fg("accent", this.entry.name ?? this.entry.id)}${this.theme.fg("dim", ` · ${hints}`)}`, width),
+		];
+	}
+
+	private rebuild(conversation: ReturnType<AgentNode["agents"]["conversation"]>): void {
+		this.dirty = false;
+		this.transcript.clear();
+		if (!conversation) return;
+		const messages = [...conversation.messages];
+		// An input leaves the outbox once it is in the conversation, or when the Agent ends its work without it.
+		const counts = this.owner.agents.counts(this.entry.id);
+		const working = counts !== undefined && (counts.busy || counts.queued > 0);
+		this.outbox = this.outbox.filter(({ text, after }) => working && !messages.slice(after).some((message) =>
+			message.role === "custom" && message.content === text && (message.details as { user?: boolean } | undefined)?.user));
+		if (this.streaming && !messages.includes(this.streaming)) messages.push(this.streaming);
+		const markdown = getMarkdownTheme();
+		const pending = new Map<string, ToolExecutionComponent>();
+		for (const message of messages) {
+			if (message.role === "assistant") {
+				this.transcript.addChild(new AssistantMessageComponent(message, false, markdown));
+				for (const part of message.content) {
+					if (part.type !== "toolCall") continue;
+					const tool = new ToolExecutionComponent(part.name, part.id, part.arguments, { showImages: false },
+						conversation.session?.getToolDefinition(part.name), this.tui, conversation.cwd);
+					tool.setExpanded(this.expanded);
+					this.transcript.addChild(tool);
+					if (message.stopReason === "aborted" || message.stopReason === "error") {
+						tool.updateResult({ content: [{ type: "text", text: message.errorMessage || "Operation aborted" }], isError: true });
+					} else {
+						pending.set(part.id, tool);
+					}
+				}
+			} else if (message.role === "toolResult") {
+				pending.get(message.toolCallId)?.updateResult(message);
+				pending.delete(message.toolCallId);
+			} else if (message.role === "user") {
+				const text = typeof message.content === "string"
+					? message.content
+					: message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
+				if (!text) continue;
+				this.transcript.addChild(new Spacer(1));
+				this.transcript.addChild(new UserMessageComponent(text, markdown));
+			} else if (message.role === "custom" && message.display) {
+				const user = message.customType === MESSAGE_TYPE && (message.details as { user?: boolean } | undefined)?.user;
+				this.transcript.addChild(new Spacer(1));
+				if (user && typeof message.content === "string") {
+					this.transcript.addChild(new UserMessageComponent(message.content, markdown));
+				} else {
+					const component = new CustomMessageComponent(message, undefined, markdown);
+					component.setExpanded(this.expanded);
+					this.transcript.addChild(component);
+				}
+			} else if (message.role === "compactionSummary") {
+				this.transcript.addChild(new Spacer(1));
+				this.transcript.addChild(new CompactionSummaryMessageComponent(message, markdown));
+			}
+		}
+		for (const [id, tool] of pending) {
+			const running = this.running.get(id);
+			if (!running) continue;
+			tool.markExecutionStarted();
+			if (running.partial) tool.updateResult(running.partial, true);
+		}
+	}
+}
+
+/** A filterable list in place of the editor, like Pi Durable's conversation switcher. */
+class ListSelector extends Container implements Focusable {
+	private readonly input = new Input();
+	private readonly listContainer = new Container();
+	private list: SelectList;
+	private _focused = false;
+
+	constructor(
+		title: string,
+		private items: SelectItem[],
+		private theme: Theme,
+		private keys: KeybindingsManager,
+		private onSelect: (value: string) => void,
+		private onCancel: () => void,
+	) {
+		super();
+		this.list = this.build(items);
+		this.addChild(new DynamicBorder());
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+		this.addChild(this.input);
+		this.addChild(new Spacer(1));
+		this.addChild(this.listContainer);
+		this.addChild(new DynamicBorder());
+	}
+
+	get focused(): boolean {
+		return this._focused;
+	}
+
+	set focused(value: boolean) {
+		this._focused = value;
+		this.input.focused = value;
+	}
+
+	handleInput(data: string): void {
+		const forwarded = ["tui.select.up", "tui.select.down", "tui.select.confirm", "tui.select.cancel"] as const;
+		if (forwarded.some((action) => this.keys.matches(data, action))) {
+			this.list.handleInput(data);
+			return;
+		}
+		this.input.handleInput(data);
+		const query = this.input.getValue();
+		this.list = this.build(query.length === 0 ? this.items : fuzzyFilter(this.items, query, (item) => `${item.label} ${item.value}`));
+	}
+
+	private build(items: SelectItem[]): SelectList {
+		const list = new SelectList(items, 10, {
+			...getSelectListTheme(),
+			selectedPrefix: (text) => this.theme.fg("accent", text),
+			selectedText: (text) => this.theme.fg("accent", text),
+			description: (text) => this.theme.fg("muted", text),
+		});
+		list.onSelect = (item) => this.onSelect(item.value);
+		list.onCancel = this.onCancel;
+		this.listContainer.clear();
+		this.listContainer.addChild(list);
+		return list;
+	}
+}
+
+/** The current Agent's owned Agents, depth-first, each under its owner. */
+export function ownedEntries(self: AgentNode): Entry[] {
+	const owned = new Set([self.id]);
+	return treeEntries(self.scopeId).filter((entry) => {
+		if (entry.ownerId === undefined || !owned.has(entry.ownerId)) return false;
+		owned.add(entry.id);
+		return true;
+	});
+}
+
+/** `/agents`: picks an owned Agent and opens it in the viewer. */
+export async function openAgentViewer(ctx: ExtensionContext, self: AgentNode): Promise<void> {
+	const entries = ownedEntries(self);
+	if (entries.length === 0) {
+		ctx.ui.notify("No owned Agents.", "info");
+		return;
+	}
+	const items: SelectItem[] = entries.map((entry) => ({
+		value: entry.id,
+		label: entry.name ?? entry.id,
+		description: [entry.state, firstInput(entry.sessionFile) ?? ""].filter(Boolean).join("  "),
+	}));
+	const id = await ctx.ui.custom<string | undefined>((_tui, theme, keys, done) =>
+		new ListSelector("Open Agent:", items, theme, keys, (value) => done(value), () => done(undefined)));
+	const entry = entries.find((candidate) => candidate.id === id);
+	const owner = entry?.ownerId === undefined ? undefined : nodes.get(entry.ownerId);
+	if (!entry || !owner) return;
+	await ctx.ui.custom<void>(
+		(tui, theme, keys, done) => new AgentViewer(tui, theme, keys, ctx, owner, entry, () => done()),
+		{ overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "bottom-center" } },
+	);
+}

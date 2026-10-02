@@ -286,13 +286,34 @@ Message from <name> (<id>). Reply with send:
 
 ## 7. Human interface
 
-`/tasks` shows a read-only summary of the current Agent's owned Agents:
+### Task panel
 
-    Agents: <busy> busy · <queued> queued inputs · <unread> unread results
-    Usage: <descendant Agent usage>
+A panel above the editor lists the current Agent's owned Agents that are
+busy or have queued inputs or unread results, as a tree in the order they
+were spawned, each under its owner:
 
-Only nonzero counts are shown; an empty summary shows `0`. Usage includes
-all descendant Agents and excludes the root Agent's own usage.
+    Agents: <busy> busy · <queued> queued inputs · <unread> unread results · <usage> · /tasks to hide
+      <name> (<id>)  <state>  <N> queued  <N> unread
+        <name> (<id>)  <state>
+
+Only nonzero counts are shown. Usage includes all descendant Agents and
+excludes the root Agent's own usage.
+
+The panel updates as states change and is shown while there is something to
+list. `/tasks` hides or shows it.
+
+### Agent viewer
+
+`/agents` lists the current Agent's owned Agents with their state and first
+input, and opens the selected one in a viewer. The viewer shows the Agent's
+conversation and updates while it works; the current Session keeps running
+behind it.
+
+Text entered in the viewer is the user's input to that Agent and is sent as
+in Pi's editor.
+
+`app.interrupt` stops the Agent's current turn, as `abort` does.
+`app.clear` clears the input, and closes the viewer when the input is empty.
 
 ## 8. Configuration
 

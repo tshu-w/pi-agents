@@ -100,6 +100,7 @@ interface Shared {
 	scheduler: TreeScheduler;
 	nodes: Map<string, AgentNode>;
 	usage: Map<string, Usage>;
+	listeners?: Set<() => void>;
 }
 
 const shared = ((globalThis as Record<symbol, unknown>)[Symbol.for("pi-agents:runtime")] ??= {
@@ -109,8 +110,19 @@ const shared = ((globalThis as Record<symbol, unknown>)[Symbol.for("pi-agents:ru
 }) as Shared;
 // Child Sessions load their own copy of this module; keep shared state but adopt current methods.
 Object.setPrototypeOf(shared.scheduler, TreeScheduler.prototype);
+const listeners = shared.listeners ??= new Set();
 
 export const nodes = shared.nodes;
+
+/** Calls `listener` when an Agent's state, inputs, or usage change in any tree of this process. */
+export function onTreeChange(listener: () => void): () => void {
+	listeners.add(listener);
+	return () => listeners.delete(listener);
+}
+
+function treeChanged(): void {
+	for (const listener of listeners) listener();
+}
 
 export function label(agent: { id: string; name?: string }): string {
 	return agent.name ? `${agent.name} (${agent.id})` : agent.id;
@@ -145,6 +157,7 @@ function addUsage(rootId: string, delta: Usage): void {
 	};
 	shared.usage.set(rootId, next);
 	shared.nodes.get(rootId)?.persistUsage(next);
+	treeChanged();
 }
 
 export function restoredUsage(ctx: ExtensionContext): Usage {
@@ -237,9 +250,12 @@ export function messageText(from: { id: string; name?: string }, fromOwner: bool
 	return `Message from ${label(from)}${!fromOwner && delivery !== "write" ? ". Reply with send" : ""}:\n${body}`;
 }
 
-/** `messageId` marks a message from a root Agent in another process, so it is added once. */
-export function customMessage(text: string, delivery: Delivery, messageId?: string) {
-	return { customType: MESSAGE_TYPE, content: text, display: true, details: { delivery, ...(messageId ? { messageId } : {}) } };
+/**
+ * `messageId` marks a message from a root Agent in another process, so it is added once; `user`
+ * marks the user's input from the Agent viewer.
+ */
+export function customMessage(text: string, delivery: Delivery, messageId?: string, user?: boolean) {
+	return { customType: MESSAGE_TYPE, content: text, display: true, details: { delivery, ...(messageId ? { messageId } : {}), ...(user ? { user } : {}) } };
 }
 
 export function receivedMessageIds(ctx: ExtensionContext): string[] {
@@ -333,6 +349,8 @@ function ended(input: InputRecord): boolean {
 
 interface Input {
 	text: string;
+	/** The user's input from the Agent viewer. */
+	user?: boolean;
 	record?: InputRecord;
 	permit?: symbol;
 	schema?: unknown;
@@ -340,10 +358,12 @@ interface Input {
 	done?: Deferred;
 }
 
+type Message = Pick<Input, "text" | "user">;
+
 interface Turn {
 	inputs: Input[];
 	/** Messages that joined after the turn started and still need delivery. */
-	pending: string[];
+	pending: Message[];
 	abort: AbortController;
 	started: boolean;
 	done: Deferred;
@@ -418,12 +438,63 @@ export class Agents {
 
 	summary(): { busy: number; queued: number; unread: number } {
 		let busy = 0, queued = 0, unread = 0;
-		for (const agent of this.agents.values()) {
-			if (agent.turn?.started) busy += 1;
-			queued += agent.queue.length + (agent.turn && !agent.turn.started ? agent.turn.inputs.length : 0);
-			unread += agent.record.inputs.filter((input) => ended(input) && !input.read).length;
+		for (const id of this.agents.keys()) {
+			const counts = this.counts(id)!;
+			if (counts.busy) busy += 1;
+			queued += counts.queued;
+			unread += counts.unread;
 		}
 		return { busy, queued, unread };
+	}
+
+	/** Queued inputs and unread results of an owned Agent. */
+	counts(id: string): { busy: boolean; queued: number; unread: number } | undefined {
+		const agent = this.agents.get(id);
+		if (!agent) return undefined;
+		return {
+			busy: agent.turn?.started === true,
+			queued: agent.queue.length + (agent.turn && !agent.turn.started ? agent.turn.inputs.length : 0),
+			unread: agent.record.inputs.filter((input) => ended(input) && !input.read).length,
+		};
+	}
+
+	/** An owned Agent's loaded Session, or its saved messages while it is not loaded. */
+	conversation(id: string): {
+		session?: AgentSession;
+		messages: AgentSession["messages"];
+		cwd: string;
+		model?: { provider: string; modelId: string };
+		thinkingLevel?: string;
+	} | undefined {
+		const agent = this.agents.get(id);
+		if (!agent) return undefined;
+		const { session, record } = agent;
+		if (session) {
+			const model = session.model && { provider: session.model.provider, modelId: session.model.id };
+			return { session, messages: session.messages, cwd: record.cwd, model, thinkingLevel: session.thinkingLevel };
+		}
+		const manager = agent.prepared?.sessionManager ??
+			(existsSync(record.sessionFile) ? SessionManager.open(record.sessionFile, path.dirname(record.sessionFile), record.cwd) : undefined);
+		const context = manager?.buildSessionContext();
+		return { messages: context?.messages ?? [], cwd: record.cwd, model: context?.model ?? undefined, thinkingLevel: context?.thinkingLevel };
+	}
+
+	/**
+	 * Sends the user's input to an owned Agent, as from Pi's editor: it has no sender header and no
+	 * result. `steer` joins the current turn, or starts one when the Agent is idle.
+	 */
+	prompt(id: string, text: string, delivery: "followUp" | "steer"): void {
+		const agent = this.agents.get(id);
+		if (!agent) throw new Error(`Agent ${id} is not owned by ${this.self.id}.`);
+		const input: Input = { text, user: true, permit: this.reserve() };
+		if (delivery === "steer" && agent.turn) this.join(agent, agent.turn, input);
+		else this.enqueue(agent, input);
+	}
+
+	/** Stops an owned Agent's current turn and withdraws its queued inputs. */
+	async abortAgent(id: string): Promise<boolean> {
+		const agent = this.agents.get(id);
+		return agent ? this.abort(agent) : false;
 	}
 
 	/** Resolves a visible target that this Agent owns. */
@@ -582,6 +653,7 @@ export class Agents {
 			changed.add(agent.id);
 		}
 		for (const id of changed) this.persist(this.agents.get(id)!);
+		if (changed.size > 0) treeChanged();
 	}
 
 	/** Stops the current turn and withdraws queued inputs; returns whether there was anything to stop. */
@@ -678,9 +750,9 @@ export class Agents {
 		this.changed();
 		if (!turn.started) return;
 		if (agent.session?.isStreaming) {
-			agent.session.agent.steer({ role: "custom", ...customMessage(input.text, "steer"), timestamp: Date.now() });
+			agent.session.agent.steer({ role: "custom", ...customMessage(input.text, "steer", undefined, input.user), timestamp: Date.now() });
 		} else {
-			turn.pending.push(input.text);
+			turn.pending.push({ text: input.text, user: input.user });
 		}
 	}
 
@@ -709,10 +781,11 @@ export class Agents {
 			for (const input of turn.inputs) if (input.record) input.record.state = "running";
 			this.persist(agent);
 			this.changed();
-			let batch = turn.inputs.map((input) => input.text);
+			let batch: Message[] = turn.inputs.map(({ text, user }) => ({ text, user }));
 			while (batch.length > 0 && !turn.abort.signal.aborted) {
-				for (const text of batch.slice(0, -1)) await session.sendCustomMessage(customMessage(text, "steer"), { triggerTurn: false });
-				await session.sendCustomMessage(customMessage(batch.at(-1)!, "steer"), { triggerTurn: true });
+				for (const { text, user } of batch.slice(0, -1)) await session.sendCustomMessage(customMessage(text, "steer", undefined, user), { triggerTurn: false });
+				const last = batch.at(-1)!;
+				await session.sendCustomMessage(customMessage(last.text, "steer", undefined, last.user), { triggerTurn: true });
 				await session.waitForIdle();
 				const leftover = takeQueued(session.agent);
 				for (const message of leftover) {
@@ -721,9 +794,10 @@ export class Agents {
 				}
 				batch = [
 					...turn.pending.splice(0),
-					...leftover.flatMap((message) => (message as { details?: { delivery?: Delivery } }).details?.delivery === "write"
-						? []
-						: [String((message as { content: unknown }).content)]),
+					...leftover.flatMap((message) => {
+						const details = (message as { details?: { delivery?: Delivery; user?: boolean } }).details;
+						return details?.delivery === "write" ? [] : [{ text: String((message as { content: unknown }).content), user: details?.user }];
+					}),
 				];
 			}
 			answer = turn.abort.signal.aborted ? { outcome: "aborted", result: "" } : lastAnswer(session, before.assistantMessages);
@@ -830,6 +904,7 @@ export class Agents {
 		const previous = this.change;
 		this.change = deferred();
 		previous.resolve();
+		treeChanged();
 	}
 
 	private requireContext(): ExtensionContext {
@@ -1021,4 +1096,11 @@ export function searchEntries(entries: Entry[], query: string | undefined): List
 export function listLine(item: ListItem): string {
 	const line = entryLine(item.entry);
 	return item.match ? `${line}\n  ${formatTime(item.match.time)}  ${item.match.excerpt}` : line;
+}
+
+/** The first input of an Agent's Session, without its sender header. */
+export function firstInput(sessionFile: string | undefined): string | undefined {
+	const text = sessionTexts(sessionFile)[0]?.text;
+	if (text === undefined) return undefined;
+	return (text.startsWith("Message from ") ? text.slice(text.indexOf("\n") + 1) : text).replace(/\s+/g, " ").trim();
 }

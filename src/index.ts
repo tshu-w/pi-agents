@@ -21,11 +21,9 @@ import {
 	setTreeUsage,
 	treeIdle,
 	treeMetadata,
-	treeUsage,
 	usageEntry,
 	type AgentNode,
 	type Limits,
-	type Usage,
 } from "./agents/agents.ts";
 import { registerAgentTool } from "./agents/tool.ts";
 import { loadPiCodemode } from "./programs/codemode.ts";
@@ -39,6 +37,8 @@ import ownershipExtension from "./roots/ownership-extension.mjs";
 import { rootPaths } from "./roots/paths.mjs";
 import { createRootRuntime } from "./roots/runtime.ts";
 import { waitForBackground } from "./roots/wait-ui.ts";
+import { createPanel } from "./ui/panel.ts";
+import { openAgentViewer } from "./ui/viewer.ts";
 
 const DEFAULT_LIMITS: Limits = { maxConcurrent: 3, maxOutstanding: 8 };
 
@@ -71,17 +71,6 @@ export function readSettings(agentDir: string): Settings {
 	return settings;
 }
 
-function formatTokens(value: number): string {
-	if (value < 1000) return String(value);
-	if (value < 10000) return `${(value / 1000).toFixed(1)}k`;
-	if (value < 1000000) return `${Math.round(value / 1000)}k`;
-	return `${(value / 1000000).toFixed(1)}M`;
-}
-
-function formatUsage(usage: Usage): string {
-	return `${usage.turns} turns ↑${formatTokens(usage.input)} ↓${formatTokens(usage.output)} R${formatTokens(usage.cacheRead)} W${formatTokens(usage.cacheWrite)} $${usage.cost.toFixed(4)}`;
-}
-
 const MIN_PI_VERSION = "1.0.0";
 
 function olderThan(version: string, minimum: string): boolean {
@@ -99,6 +88,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	let node: AgentNode | undefined;
 	let programs: Programs | undefined;
 	let ctx: ExtensionContext | undefined;
+	const panel = createPanel(() => node, () => programs);
 
 	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: rootPaths().ownership });
 	installHostPatches(AgentSession, ExtensionRunner, PROGRAM_TOOL_NAME, piCodemode.codemodeSchema);
@@ -153,8 +143,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		programs = new Programs({
 			appendEntry: (customType, data) => pi.appendEntry(customType, data),
 			notify: (text) => agents.notify(text),
+			changed: () => panel.update(),
 		});
 		programs.restore(current);
+		panel.start(current);
 	});
 
 	pi.on("before_agent_start", (_event, current) => {
@@ -171,6 +163,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	pi.on("session_shutdown", async () => {
 		const closing = node;
 		if (!closing) return;
+		panel.stop();
 		node = undefined;
 		const stopping = programs;
 		programs = undefined;
@@ -187,21 +180,14 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	registerProgramTools(pi, { agentDir, settings, piCodemode, requireNode, programs: () => programs });
 
 	pi.registerCommand("tasks", {
-		description: "Show a summary of this Agent's owned Agents",
+		description: "Hide or show the task panel",
+		handler: async () => panel.toggle(),
+	});
+
+	pi.registerCommand("agents", {
+		description: "Open an owned Agent to watch and talk to it",
 		handler: async (_args, current) => {
-			const self = node;
-			const { busy, queued, unread } = self?.agents.summary() ?? { busy: 0, queued: 0, unread: 0 };
-			const counts = ([[busy, "busy"], [queued, "queued inputs"], [unread, "unread results"]] as const)
-				.filter(([count]) => count > 0)
-				.map(([count, text]) => `${count} ${text}`)
-				.join(" · ") || "0";
-			const { running, unreturned } = programs?.summary() ?? { running: 0, unreturned: 0 };
-			const programCounts = ([[running, "running"], [unreturned, "unreturned results"]] as const)
-				.filter(([count]) => count > 0)
-				.map(([count, text]) => `${count} ${text}`)
-				.join(" · ");
-			const lines = [`Agents: ${counts}`, ...(programCounts ? [`Programs: ${programCounts}`] : []), `Usage: ${formatUsage(treeUsage(self?.rootId ?? ""))}`];
-			current.ui.notify(lines.join("\n"), "info");
+			if (node) await openAgentViewer(current, requireNode(current));
 		},
 	});
 }
