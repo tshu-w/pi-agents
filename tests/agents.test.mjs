@@ -13,6 +13,7 @@ const ai = await import(join(PI_PACKAGE, "node_modules/@earendil-works/pi-ai/dis
 const textOf = (content) => typeof content === "string"
 	? content
 	: content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+const bodyOf = (text) => text.startsWith("<agent-message ") ? text.split("\n").slice(1, -1).join("\n") : text;
 
 /** A gate that holds owned Agents' answers until opened, or until their turn is aborted. */
 function gate() {
@@ -34,7 +35,7 @@ async function startRoot(limits = {}) {
 		const messages = context.messages;
 		const first = textOf(messages.find((message) => message.role === "user")?.content ?? "");
 		const last = textOf(messages.at(-1)?.content ?? "");
-		if (!first.startsWith("Message from")) {
+		if (!first.startsWith("<agent-message ")) {
 			state.rootMessages.push(last);
 			return ai.fauxAssistantMessage("noted");
 		}
@@ -46,7 +47,7 @@ async function startRoot(limits = {}) {
 			]);
 			if (signal?.aborted) return ai.fauxAssistantMessage("", { stopReason: "aborted" });
 		}
-		const inputs = messages.filter((message) => message.role === "user").map((message) => textOf(message.content).split("\n").slice(1).join("\n"));
+		const inputs = messages.filter((message) => message.role === "user").map((message) => bodyOf(textOf(message.content)));
 		return ai.fauxAssistantMessage(`answer:${inputs.slice(-1)[0]}|seen:${inputs.join(",")}`);
 	};
 	faux.setResponses(Array.from({ length: 200 }, () => route));

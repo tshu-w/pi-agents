@@ -15,7 +15,7 @@ const textOf = (content) => typeof content === "string"
 	: content.filter((block) => block.type === "text").map((block) => block.text).join("");
 
 /** The text an Agent received from its owner, without the header and the schema instruction. */
-const bodyOf = (text) => text.split("\n").slice(1).join("\n").split("\n\nWhen done, call")[0];
+const bodyOf = (text) => text.split("\n").slice(1, -1).join("\n").split("\n\nWhen done, call")[0];
 
 /**
  * A root Session whose model calls a tool with the arguments of each `call`, and otherwise
@@ -38,7 +38,7 @@ async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), se
 	faux.setResponses(Array.from({ length: 200 }, () => async (context, options) => {
 		const last = context.messages.at(-1);
 		const first = textOf(context.messages.find((message) => message.role === "user")?.content ?? "");
-		if (first.startsWith("Message from")) {
+		if (first.startsWith("<agent-message ")) {
 			const body = bodyOf(textOf(context.messages.findLast((message) => message.role === "user").content));
 			if (body.startsWith("submit:")) {
 				const [value, retry] = body.slice("submit:".length).split("|").map((json) => JSON.parse(json));

@@ -277,17 +277,20 @@ A notification to the owner:
 Agent <name> (<id>) <outcome>.
 ```
 
-A recipient sees each message under a header naming the sender. An input
-from a sender other than the owner also asks for a reply:
+A recipient sees each message in an `agent-message` element naming the
+sender. An input from a sender other than the owner also carries a note
+asking for a reply:
 
 ```text
-Message from <name> (<id>):
+<agent-message from="<name>" id="<id>">
 <body>
+</agent-message>
 ```
 
 ```text
-Message from <name> (<id>). Reply with send:
+<agent-message from="<name>" id="<id>" note="Reply with send">
 <body>
+</agent-message>
 ```
 
 ## 7. Human interface

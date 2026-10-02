@@ -281,9 +281,12 @@ export function deliver(
 	return owner.agents.accept(target.id, text, delivery, { fromOwner, notification: from === undefined });
 }
 
-/** A message under a header naming its sender; an input from a sender other than the owner asks for a reply. */
+const MESSAGE_TAG = "agent-message";
+
+/** A message in an element naming its sender; an input from a sender other than the owner asks for a reply. */
 export function messageText(from: { id: string; name?: string }, fromOwner: boolean, delivery: Delivery, body: string, ids: Iterable<string>): string {
-	return `Message from ${label(from, ids)}${!fromOwner && delivery !== "write" ? ". Reply with send" : ""}:\n${body}`;
+	const note = !fromOwner && delivery !== "write" ? ' note="Reply with send"' : "";
+	return `<${MESSAGE_TAG} from="${from.name ?? shortId(from.id, ids)}" id="${shortId(from.id, ids)}"${note}>\n${body}\n</${MESSAGE_TAG}>`;
 }
 
 /**
@@ -552,7 +555,7 @@ export class Agents {
 			shared.scheduler.releaseOutstanding(this.self.rootId, permit);
 			throw error;
 		}
-		const text = `Message from ${label({ id: this.self.id, name: this.self.name() }, this.ids())}:\n${request.message}`;
+		const text = messageText({ id: this.self.id, name: this.self.name() }, true, "followUp", request.message, this.ids());
 		const queued = this.enqueue(agent, { text, permit, record: this.newRecord(agent) });
 		return { record: agent.record, queued };
 	}
@@ -582,16 +585,13 @@ export class Agents {
 
 	/**
 	 * Sends an input from the owner and resolves when it ends. With a schema, the Agent must call
-	 * `submit_result` with a matching value, which becomes the input's `value`.
+	 * `submit_result` with a matching value, which becomes the input's `value`; `text` tells it so.
 	 */
 	async request(id: string, text: string, delivery: "followUp" | "steer", schema?: unknown): Promise<InputRecord> {
 		const agent = this.agents.get(id);
 		if (!agent) throw new Error(`Agent ${id} is not owned by ${this.self.id}.`);
 		const input: Input = { text, permit: this.reserve(), record: this.newRecord(agent), done: deferred() };
-		if (schema !== undefined) {
-			input.schema = schema;
-			input.text += `\n\nWhen done, call \`${SUBMIT_RESULT_TOOL_NAME}\` with a \`value\` that matches this JSON Schema:\n${JSON.stringify(schema)}`;
-		}
+		if (schema !== undefined) input.schema = schema;
 		if (delivery === "steer" && agent.turn) this.join(agent, agent.turn, input);
 		else this.enqueue(agent, input);
 		await input.done!.promise;
@@ -1149,5 +1149,6 @@ export function firstInput(sessionFile: string | undefined): string | undefined 
 		}
 	}
 	if (text === undefined) return undefined;
-	return (text.startsWith("Message from ") ? text.slice(text.indexOf("\n") + 1) : text).replace(/\s+/g, " ").trim();
+	const body = text.startsWith(`<${MESSAGE_TAG} `) ? text.slice(text.indexOf("\n") + 1, text.lastIndexOf("\n")) : text;
+	return body.replace(/\s+/g, " ").trim();
 }

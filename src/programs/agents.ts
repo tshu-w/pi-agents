@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Agents, label, messageText, nodes, visibleIds, THINKING_LEVELS, type AgentNode, type Limits } from "../agents/agents.ts";
+import { Agents, label, messageText, nodes, SUBMIT_RESULT_TOOL_NAME, visibleIds, THINKING_LEVELS, type AgentNode, type Limits } from "../agents/agents.ts";
 import type { AgentOptions, ProgramAgentHost, SendOptions } from "./sandbox.ts";
 
 const CLEANUP_TIMEOUT_MS = 10_000;
@@ -61,7 +61,8 @@ export function programScope(
 				}
 			}
 			const agent = agents.ownedTarget(agentId).record;
-			const text = messageText(from, true, delivery, message, visibleIds(agentId, false));
+			const body = schema === undefined ? message : `${message}\n\nWhen done, call \`${SUBMIT_RESULT_TOOL_NAME}\` with a \`value\` that matches this JSON Schema:\n${JSON.stringify(schema)}`;
+			const text = messageText(from, true, delivery, body, visibleIds(agentId, false));
 			if (delivery === "write") {
 				agents.accept(agentId, text, "write", { fromOwner: true, notification: false });
 				return undefined;
