@@ -15,6 +15,8 @@ import {
 	Agents,
 	customMessage,
 	messageText,
+	rememberRoots,
+	visibleIds,
 	nodes,
 	receivedMessageIds,
 	restoredUsage,
@@ -93,9 +95,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: rootPaths().ownership });
 	installHostPatches(AgentSession, ExtensionRunner, PROGRAM_TOOL_NAME, piCodemode.codemodeSchema);
 	const roots = createRootRuntime(pi, {
-		receive: (message) => {
+		receive: async (message) => {
 			const delivery = message.deliverAs ?? "followUp";
-			node?.receive(messageText(message.sender, false, delivery, message.body), delivery, message.id);
+			// The header names the sender by a short ID unique among the roots this root sees.
+			rememberRoots((await roots.roots()).map((root) => root.id));
+			if (node) node.receive(messageText(message.sender, false, delivery, message.body, visibleIds(node.scopeId, true)), delivery, message.id);
 		},
 		treeIdle: () => node === undefined || treeIdle(node.rootId),
 		receivedIds: receivedMessageIds,

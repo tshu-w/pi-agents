@@ -1,6 +1,6 @@
-import { randomBytes } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { deferred, type Deferred } from "../agents/agents.ts";
+import { deferred, shortId, type Deferred } from "../agents/agents.ts";
 import { boundBlocks, boundText } from "../output.ts";
 import type { ProgramFiles, ProgramOutcome, ProgramRunResult } from "./execute.ts";
 
@@ -34,17 +34,6 @@ interface Running {
 export interface ProgramWaitOutcome {
 	results: ProgramRecord[];
 	running: ProgramRecord[];
-}
-
-/** UUIDv7, like Pi's Session IDs. */
-export function uuidv7(): string {
-	const bytes = randomBytes(16);
-	const time = BigInt(Date.now());
-	for (let i = 0; i < 6; i++) bytes[i] = Number((time >> BigInt(8 * (5 - i))) & 0xffn);
-	bytes[6] = 0x70 | (bytes[6]! & 0x0f);
-	bytes[8] = 0x80 | (bytes[8]! & 0x3f);
-	const hex = bytes.toString("hex");
-	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function ended(record: ProgramRecord): boolean {
@@ -91,7 +80,7 @@ export class Programs {
 
 	/** Starts a background Program, which `run` executes with its ID, and returns its record. */
 	start(run: (id: string, signal: AbortSignal, abort: () => void) => Promise<ProgramRunResult>): ProgramRecord {
-		const record: ProgramRecord = { id: uuidv7(), state: "running", startedAt: Date.now(), returned: false, notified: false };
+		const record: ProgramRecord = { id: randomUUID(), state: "running", startedAt: Date.now(), returned: false, notified: false };
 		const controller = new AbortController();
 		const program: Running = { record, controller, waiters: 0 };
 		this.programs.set(record.id, program);
@@ -104,10 +93,20 @@ export class Programs {
 		return record;
 	}
 
+	/** Resolves an ID or a unique ID prefix. */
 	target(id: string): Running {
-		const program = this.programs.get(id);
-		if (!program) throw new Error(`No Program matches "${id}". Use list to find Programs.`);
-		return program;
+		const exact = this.programs.get(id);
+		if (exact) return exact;
+		const matches = [...this.programs.values()].filter(({ record }) => record.id.startsWith(id));
+		if (matches.length === 0) throw new Error(`No Program matches "${id}". Use list to find Programs.`);
+		if (matches.length > 1) {
+			throw new Error(`"${id}" matches several Programs: ${matches.map(({ record }) => shortId(record.id, this.ids())).join(", ")}. Retry with a longer ID prefix.`);
+		}
+		return matches[0]!;
+	}
+
+	ids(): string[] {
+		return [...this.programs.keys()];
 	}
 
 	list(): ProgramRecord[] {
@@ -228,7 +227,7 @@ export class Programs {
 		if (this.closing || record.notified) return;
 		record.notified = true;
 		this.persist(record);
-		this.hooks.notify(`Program ${record.id} ${record.state}.`);
+		this.hooks.notify(`Program ${shortId(record.id, this.ids())} ${record.state}.`);
 	}
 
 	private persist(record: ProgramRecord): void {
@@ -258,13 +257,13 @@ export function addProgramFiles(
 	}
 }
 
-function resultBlock(record: ProgramRecord): string {
-	return `<program-result id="${record.id}" status="${record.state}">\n${textOf(record.content)}\n</program-result>`;
+function resultBlock(record: ProgramRecord, ids: string[]): string {
+	return `<program-result id="${shortId(record.id, ids)}" status="${record.state}">\n${textOf(record.content)}\n</program-result>`;
 }
 
 /** Renders wait results; returns the content and the results the caller has now received. */
-export function renderProgramWait({ results, running }: ProgramWaitOutcome): { content: Item[]; returned: ProgramRecord[]; isError?: boolean } {
-	const runningLine = running.length > 0 ? `Still running: ${running.map((record) => record.id).join(", ")}` : "";
+export function renderProgramWait({ results, running }: ProgramWaitOutcome, ids: string[]): { content: Item[]; returned: ProgramRecord[]; isError?: boolean } {
+	const runningLine = running.length > 0 ? `Still running: ${running.map((record) => shortId(record.id, ids)).join(", ")}` : "";
 	if (results.length === 0) return { content: [{ type: "text", text: runningLine || "No results." }], returned: [] };
 	const images = (shown: ProgramRecord[]) => shown.flatMap((record) => (record.content ?? []).filter((item) => item.type === "image"));
 	const only = results[0]!;
@@ -272,11 +271,11 @@ export function renderProgramWait({ results, running }: ProgramWaitOutcome): { c
 		const bounded = boundText(textOf(only.content), "pi-agents-program-wait");
 		return { content: [{ type: "text", text: bounded.text }, ...images(results)], returned: results };
 	}
-	const bounded = boundBlocks(results.map(resultBlock), "program-result", "pi-agents-program-wait");
+	const bounded = boundBlocks(results.map((record) => resultBlock(record, ids)), "program-result", "pi-agents-program-wait");
 	let text = bounded.text;
 	const returned = results.slice(0, bounded.shown);
 	const omitted = results.slice(bounded.shown);
-	if (omitted.length > 0) text += `\n\n[Results omitted: ${omitted.map((record) => record.id).join(", ")}. Use wait with fewer targets.]`;
+	if (omitted.length > 0) text += `\n\n[Results omitted: ${omitted.map((record) => shortId(record.id, ids)).join(", ")}. Use wait with fewer targets.]`;
 	if (runningLine) text += `\n\n${runningLine}`;
 	return { content: [{ type: "text", text }, ...images(returned)], returned };
 }
@@ -287,6 +286,6 @@ function formatTime(time: number): string {
 	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-export function programListLine(record: ProgramRecord): string {
-	return `${record.id}  ${record.state}  ${formatTime(record.startedAt)}`;
+export function programListLine(record: ProgramRecord, ids: string[]): string {
+	return `${shortId(record.id, ids)}  ${record.state}  ${formatTime(record.startedAt)}`;
 }

@@ -22,20 +22,21 @@ export interface ProgramAgentHost {
 }
 
 // One line, so line numbers in errors match the script as written. The ID is
-// a UUIDv7 made in the script because `agent()` returns its handle before the
+// a UUIDv4 made in the script because `agent()` returns its handle before the
 // host has created the Agent. QuickJS seeds Math.random from the clock, so
-// the random bits come from the host, and a counter keeps them apart within
-// the Program.
+// the random bits come from the host; a counter, spread by an odd multiplier,
+// gives each Agent of the Program a distinct first group.
 function agentPrefix(): string {
-	const bytes = randomBytes(10);
-	const randA = (bytes.readUInt16BE(0) & 0x0fff).toString(16).padStart(3, "0");
-	const randB = (0x8000 | (bytes.readUInt16BE(2) & 0x3fff)).toString(16);
-	const tail = bytes.readUIntBE(4, 6);
+	const bytes = randomBytes(16);
+	bytes[6] = 0x40 | (bytes[6]! & 0x0f);
+	bytes[8] = 0x80 | (bytes[8]! & 0x3f);
+	const hex = bytes.toString("hex");
+	const head = bytes.readUInt32BE(0);
+	const rest = `${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 	return [
 		"const agent = ((create, send, abort) => {",
 		"const names = new Set(); let count = 0; let serial = 0;",
-		"const hex = (value, length) => Math.floor(value).toString(16).padStart(length, '0');",
-		`const newId = () => { const time = Date.now(); const tail = (${tail} + ++serial) % 2 ** 48; return \`\${hex(time / 2 ** 16, 8)}-\${hex(time % 2 ** 16, 4)}-7${randA}-${randB}-\${hex(tail, 12)}\`; };`,
+		`const newId = () => \`\${((${head} + ++serial * 2654435761) % 2 ** 32).toString(16).padStart(8, '0')}-${rest}\`;`,
 		"return (options = {}) => {",
 		"let name = options.name;",
 		"if (name === undefined) { do name = `agent-${++count}`; while (names.has(name)); }",

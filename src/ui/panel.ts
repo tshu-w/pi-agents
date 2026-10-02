@@ -26,6 +26,7 @@ export function panelLines(self: AgentNode, programs: Programs | undefined): str
 	const parent = new Map<string, string>();
 	const rows = new Map<string, string>();
 	const shown = new Set<string>();
+	const ids = self.agents.ids();
 	for (const entry of treeEntries(self.scopeId)) {
 		const level = entry.ownerId === undefined ? undefined : depth.get(entry.ownerId);
 		if (level === undefined) continue;
@@ -33,7 +34,7 @@ export function panelLines(self: AgentNode, programs: Programs | undefined): str
 		parent.set(entry.id, entry.ownerId!);
 		const own = nodes.get(entry.ownerId!)?.agents.counts(entry.id);
 		const extra = counts([[own?.queued ?? 0, "queued"], [own?.unread ?? 0, "unread"]]);
-		rows.set(entry.id, `${"  ".repeat(level + 1)}${[label(entry), entry.state, ...extra].join("  ")}`);
+		rows.set(entry.id, `${"  ".repeat(level + 1)}${[label(entry, ids), entry.state, ...extra].join("  ")}`);
 		// An Agent with work or results is listed with its owners, so the tree stays readable.
 		if (own?.busy || extra.length > 0) {
 			for (let id: string | undefined = entry.id; id !== undefined && id !== self.id && !shown.has(id); id = parent.get(id)) shown.add(id);
@@ -47,7 +48,7 @@ export function panelLines(self: AgentNode, programs: Programs | undefined): str
 	const { running, unreturned } = programs?.summary() ?? { running: 0, unreturned: 0 };
 	if (running > 0 || unreturned > 0) {
 		const shown = programs!.list().filter((record) => record.state === "running" || !record.returned);
-		lines.push(`Programs: ${counts([[running, "running"], [unreturned, "unreturned results"]]).join(" · ")}`, ...shown.map((record) => `  ${programListLine(record)}`));
+		lines.push(`Programs: ${counts([[running, "running"], [unreturned, "unreturned results"]]).join(" · ")}`, ...shown.map((record) => `  ${programListLine(record, programs!.ids())}`));
 	}
 	if (lines.length > 0) lines[0] += " · /tasks to hide";
 	return lines;

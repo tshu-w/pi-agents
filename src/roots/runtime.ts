@@ -31,7 +31,7 @@ export interface RootEntry {
 
 export interface RootHooks {
 	/** Adds a message from another root to this Session. */
-	receive(message: RootMessage): void;
+	receive(message: RootMessage): void | Promise<void>;
 	/** Whether this root's tree has no inputs that have not ended. */
 	treeIdle(): boolean;
 	/** IDs of messages from other roots already in this Session. */
@@ -120,7 +120,7 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 		signal.throwIfAborted();
 		if (!seen.has(message.id)) {
 			seen.add(message.id);
-			hooks.receive(message);
+			await hooks.receive(message);
 		}
 		if (isBackgroundWorker(active)) {
 			// The transport aborts this signal when the acknowledgement connection closes.

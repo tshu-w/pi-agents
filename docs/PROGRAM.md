@@ -18,6 +18,10 @@ foreground, the tool call returns the Program's result. In the background,
 the tool call returns the Program's ID, and the caller gets the result with
 `wait`.
 
+A Program is shown by its short ID: the shortest prefix of its ID, at least
+8 characters, that none of the caller's other Programs' IDs starts with. A
+target is an ID or a unique ID prefix.
+
 Agents created with `agent()` belong to the Program: it gets their results
 from `send()`, without `wait` or notifications, and only it can abort
 them. Each of these Agents and the Agents under it see only one another,
@@ -184,11 +188,13 @@ parameters:
 - `code`: JavaScript async-function body for `run`.
 - `background`: Whether `run` returns the Program ID at once (default: false).
 - `timeout`: Maximum seconds. For `run` (default: none), expiry stops the Program. For `wait` (default: 30, min: 10, max: 3600), expiry does not stop Programs.
-- `target`: Program ID for `wait` or `stop`. `wait` also accepts an array. When omitted for `wait`, selects running Programs and ended Programs whose result has not been returned.
+- `target`: Program ID or unique ID prefix for `wait` or `stop`. `wait` also accepts an array. When omitted for `wait`, selects running Programs and ended Programs whose result has not been returned.
 - `limit`: Maximum Programs returned by `list` (default: 20, max: 200).
 - `offset`: Number of Programs to skip for `list` (default: 0).
 
 results:
+
+In these formats, `<id>` is the Program's short ID.
 
 `run` in the foreground returns the Program result, as an error if the
 Program failed or was stopped.
@@ -249,6 +255,10 @@ do:
 
 ```text
 No Program matches "<target>". Use list to find Programs.
+```
+
+```text
+"<target>" matches several Programs: <id>, ... Retry with a longer ID prefix.
 ```
 
 truncation:

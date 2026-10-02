@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Agents, label, messageText, nodes, THINKING_LEVELS, type AgentNode, type Limits } from "../agents/agents.ts";
+import { Agents, label, messageText, nodes, visibleIds, THINKING_LEVELS, type AgentNode, type Limits } from "../agents/agents.ts";
 import type { AgentOptions, ProgramAgentHost, SendOptions } from "./sandbox.ts";
 
 const CLEANUP_TIMEOUT_MS = 10_000;
@@ -61,14 +61,14 @@ export function programScope(
 				}
 			}
 			const agent = agents.ownedTarget(agentId).record;
-			const text = messageText(from, true, delivery, message);
+			const text = messageText(from, true, delivery, message, visibleIds(agentId, false));
 			if (delivery === "write") {
 				agents.accept(agentId, text, "write", { fromOwner: true, notification: false });
 				return undefined;
 			}
 			const record = await agents.request(agentId, text, delivery, schema);
 			if (record.state === "completed") return schema === undefined ? record.result : record.value;
-			throw new Error(record.state === "failed" ? `Agent ${label(agent)} failed: ${record.result}` : `Agent ${label(agent)} was aborted.`);
+			throw new Error(record.state === "failed" ? `Agent ${label(agent, agents.ids())} failed: ${record.result}` : `Agent ${label(agent, agents.ids())} was aborted.`);
 		},
 		abort: async (agentId) => {
 			await agents.abort(agents.ownedTarget(agentId));

@@ -12,6 +12,10 @@ An **Agent** is an addressable conversation with a stable identity. The Agent
 that spawns another Agent is its **owner**. A root Agent has no owner and is
 usually opened by a user. Ownership forms trees.
 
+An Agent is shown by its name and **short ID**: the shortest prefix of its
+ID, at least 8 characters, that no other Agent visible to the reader has.
+An address is an ID, a name, or a unique ID prefix, tried in that order.
+
 A **message** carries text from one Agent to another. An **input** asks the
 recipient to act. A **write** only adds to the recipient's conversation.
 
@@ -32,7 +36,7 @@ context, and returns the Agent's ID. Names are unique among siblings.
 
 ### 2.2 send
 
-`send` sends a message to a visible Agent by ID or name. An ambiguous or
+`send` sends a message to a visible Agent by address. An ambiguous or
 unknown address is rejected.
 
 An input to a busy Agent is either answered by the current turn
@@ -148,7 +152,7 @@ parameters:
 - `context`: Context for `spawn` (default: fresh). fresh starts without the caller's conversation; fork snapshots it.
 - `model`: Model for `spawn` as provider/modelId (default: the caller's model).
 - `thinkingLevel`: Thinking level for `spawn`: off, minimal, low, medium, high, or xhigh (default: the caller's level).
-- `target`: Agent ID or name for `send`, `wait`, or `abort`. `wait` and `send` with `deliverAs='write'` also accept an array. When omitted for `wait`, selects all owned Agents with pending or unread results.
+- `target`: Agent ID, name, or unique ID prefix for `send`, `wait`, or `abort`. `wait` and `send` with `deliverAs='write'` also accept an array. When omitted for `wait`, selects all owned Agents with pending or unread results.
 - `deliverAs`: Delivery for `send` (default: followUp). followUp waits until the recipient's current turn ends; steer delivers after its current tool calls, before the next model call; write delivers like steer but never starts a turn and has no result.
 - `history`: Number of most recent read results to return again per selected Agent for `wait` (default: 0).
 - `timeout`: Maximum seconds for `wait` (default: 30, min: 10, max: 3600). Timeout does not abort Agents.
@@ -158,6 +162,8 @@ parameters:
 - `offset`: Number of Agents to skip for `list` (default: 0).
 
 results:
+
+In these formats, `<id>` is the Agent's short ID.
 
 `spawn`:
 
@@ -236,7 +242,7 @@ No visible Agent matches "<target>". Use list to find Agents.
 <name> (<id>)  <state>  <cwd>
 ...
 
-Retry with an ID.
+Retry with a longer ID prefix.
 ```
 
 ```text

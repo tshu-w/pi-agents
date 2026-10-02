@@ -11,6 +11,7 @@ import {
 	type ExtensionError,
 } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -101,6 +102,8 @@ interface Shared {
 	nodes: Map<string, AgentNode>;
 	usage: Map<string, Usage>;
 	listeners?: Set<() => void>;
+	/** The other root Agents last listed, for short IDs shown to a root Agent. */
+	rootIds?: string[];
 }
 
 const shared = ((globalThis as Record<symbol, unknown>)[Symbol.for("pi-agents:runtime")] ??= {
@@ -124,12 +127,40 @@ function treeChanged(): void {
 	for (const listener of listeners) listener();
 }
 
-export function label(agent: { id: string; name?: string }): string {
-	return agent.name ? `${agent.name} (${agent.id})` : agent.id;
+/** The shortest prefix of `id`, at least 8 characters, that none of the other `ids` starts with. */
+export function shortId(id: string, ids: Iterable<string>): string {
+	let length = Math.min(8, id.length);
+	for (const other of ids) {
+		while (other !== id && length < id.length && other.startsWith(id.slice(0, length))) length++;
+	}
+	return id.slice(0, length);
 }
 
-export function entryLine(entry: Entry): string {
-	return `${label(entry)}  ${entry.state}  ${entry.cwd}`;
+/** An Agent's name and short ID among `ids`, the IDs of the Agents visible to the reader. */
+export function label(agent: { id: string; name?: string }, ids: Iterable<string>): string {
+	const id = shortId(agent.id, ids);
+	return agent.name ? `${agent.name} (${id})` : id;
+}
+
+export function entryLine(entry: Entry, ids: Iterable<string>): string {
+	return `${label(entry, ids)}  ${entry.state}  ${entry.cwd}`;
+}
+
+export function rememberRoots(ids: string[]): void {
+	shared.rootIds = ids;
+}
+
+/** IDs of the Agents visible to an Agent with the given scope; a root Agent also sees the other roots. */
+export function visibleIds(scopeId: string, root: boolean): string[] {
+	const ids = treeEntries(scopeId).map((entry) => entry.id);
+	return root ? [...ids, ...(shared.rootIds ?? [])] : ids;
+}
+
+/** IDs of the Agents visible to `target`. */
+function recipientIds(target: Entry): string[] {
+	if (target.ownerId === undefined) return visibleIds(target.id, true);
+	const owner = shared.nodes.get(target.ownerId);
+	return visibleIds(owner?.program ? target.id : owner?.scopeId ?? target.id, false);
 }
 
 export function emptyUsage(): Usage {
@@ -213,14 +244,16 @@ export function resolveTarget(scopeId: string, target: string): Entry {
 	return resolveIn(treeEntries(scopeId), target);
 }
 
-/** Resolves an ID or a unique name among the given visible Agents. */
+/** Resolves an ID, a name, or a unique ID prefix among the given visible Agents. */
 export function resolveIn(entries: Entry[], target: string): Entry {
 	const byId = entries.find((entry) => entry.id === target);
 	if (byId) return byId;
-	const matches = entries.filter((entry) => entry.name === target);
+	let matches = entries.filter((entry) => entry.name === target);
+	if (matches.length === 0) matches = entries.filter((entry) => entry.id.startsWith(target));
 	if (matches.length === 0) throw new Error(`No visible Agent matches "${target}". Use list to find Agents.`);
 	if (matches.length > 1) {
-		throw new Error(`"${target}" matches several Agents:\n${matches.map(entryLine).join("\n")}\n\nRetry with an ID.`);
+		const ids = entries.map((entry) => entry.id);
+		throw new Error(`"${target}" matches several Agents:\n${matches.map((entry) => entryLine(entry, ids)).join("\n")}\n\nRetry with a longer ID prefix.`);
 	}
 	return matches[0]!;
 }
@@ -233,21 +266,22 @@ export function deliver(
 	body: string,
 ): { queued: boolean } {
 	const fromOwner = from !== undefined && target.ownerId === from.id;
-	const text = from === undefined ? body : messageText(from, fromOwner, delivery, body);
+	const ids = recipientIds(target);
+	const text = from === undefined ? body : messageText(from, fromOwner, delivery, body, ids);
 	if (target.ownerId === undefined) {
 		const node = shared.nodes.get(target.id);
-		if (!node) throw new Error(`${label(target)} is offline.`);
+		if (!node) throw new Error(`${label(target, ids)} is offline.`);
 		node.receive(text, delivery);
 		return { queued: false };
 	}
 	const owner = shared.nodes.get(target.ownerId);
-	if (!owner) throw new Error(`${label(target)} is offline.`);
+	if (!owner) throw new Error(`${label(target, ids)} is offline.`);
 	return owner.agents.accept(target.id, text, delivery, { fromOwner, notification: from === undefined });
 }
 
 /** A message under a header naming its sender; an input from a sender other than the owner asks for a reply. */
-export function messageText(from: { id: string; name?: string }, fromOwner: boolean, delivery: Delivery, body: string): string {
-	return `Message from ${label(from)}${!fromOwner && delivery !== "write" ? ". Reply with send" : ""}:\n${body}`;
+export function messageText(from: { id: string; name?: string }, fromOwner: boolean, delivery: Delivery, body: string, ids: Iterable<string>): string {
+	return `Message from ${label(from, ids)}${!fromOwner && delivery !== "write" ? ". Reply with send" : ""}:\n${body}`;
 }
 
 /**
@@ -501,8 +535,13 @@ export class Agents {
 	ownedTarget(target: string): Owned {
 		const entry = resolveTarget(this.self.scopeId, target);
 		const agent = this.agents.get(entry.id);
-		if (!agent) throw new Error(`${label(entry)} is not owned by the caller.`);
+		if (!agent) throw new Error(`${label(entry, this.ids())} is not owned by the caller.`);
 		return agent;
+	}
+
+	/** IDs of the Agents visible to this Agent. */
+	ids(): string[] {
+		return visibleIds(this.self.scopeId, this.self.ownerId === undefined);
 	}
 
 	spawn(request: SpawnRequest): { record: AgentRecord; queued: boolean } {
@@ -514,7 +553,7 @@ export class Agents {
 			shared.scheduler.releaseOutstanding(this.self.rootId, permit);
 			throw error;
 		}
-		const text = `Message from ${label({ id: this.self.id, name: this.self.name() })}:\n${request.message}`;
+		const text = `Message from ${label({ id: this.self.id, name: this.self.name() }, this.ids())}:\n${request.message}`;
 		const queued = this.enqueue(agent, { text, permit, record: this.newRecord(agent) });
 		return { record: agent.record, queued };
 	}
@@ -523,7 +562,7 @@ export class Agents {
 	create(request: Omit<SpawnRequest, "message">, id?: string): Owned {
 		const name = request.name.trim();
 		const existing = [...this.agents.values()].find((agent) => agent.record.name === name);
-		if (existing) throw new Error(`Name "${name}" is already used by ${existing.record.id}.`);
+		if (existing) throw new Error(`Name "${name}" is already used by ${shortId(existing.record.id, this.ids())}.`);
 		const prepared = this.prepare(request, name, id);
 		const agent: Owned = {
 			record: {
@@ -855,7 +894,7 @@ export class Agents {
 			if (this.closing || record.notified || agent.waiters > 0) return;
 			record.notified = true;
 			this.persist(agent);
-			this.notify(`Agent ${label(agent.record)} ${record.state}.`);
+			this.notify(`Agent ${label(agent.record, this.ids())} ${record.state}.`);
 		});
 	}
 
@@ -926,7 +965,7 @@ export class Agents {
 		const thinkingLevel = request.thinkingLevel ?? this.pi.getThinkingLevel();
 		const cwd = path.resolve(ctx.cwd, request.cwd ?? ".");
 		const sessionManager = SessionManager.create(cwd, childSessionDirectory(cwd, ctx.cwd, ctx.sessionManager.getSessionDir(), this.agentDir), {
-			id,
+			id: id ?? randomUUID(),
 			parentSession: ctx.sessionManager.getSessionFile(),
 		});
 		// Each of a Program's Agents heads its own scope, so it sees only itself and the Agents under it.
@@ -1093,8 +1132,8 @@ export function searchEntries(entries: Entry[], query: string | undefined): List
 	return items.sort((left, right) => right.time - left.time).map(({ time: _time, ...item }) => item);
 }
 
-export function listLine(item: ListItem): string {
-	const line = entryLine(item.entry);
+export function listLine(item: ListItem, ids: Iterable<string>): string {
+	const line = entryLine(item.entry, ids);
 	return item.match ? `${line}\n  ${formatTime(item.match.time)}  ${item.match.excerpt}` : line;
 }
 

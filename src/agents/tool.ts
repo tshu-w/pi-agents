@@ -10,6 +10,8 @@ import {
 	label,
 	listLine,
 	nodes,
+	rememberRoots,
+	shortId,
 	resolveIn,
 	searchEntries,
 	THINKING_LEVELS,
@@ -21,25 +23,25 @@ import {
 	type WaitResult,
 } from "./agents.ts";
 
-function resultBlock({ agent, input, history }: WaitResult): string {
-	return `<agent-result name="${agent.name}" id="${agent.id}" status="${input.state}"${history ? ' history="true"' : ""}>\n${input.result ?? ""}\n</agent-result>`;
+function resultBlock({ agent, input, history }: WaitResult, ids: string[]): string {
+	return `<agent-result name="${agent.name}" id="${shortId(agent.id, ids)}" status="${input.state}"${history ? ' history="true"' : ""}>\n${input.result ?? ""}\n</agent-result>`;
 }
 
 /** Renders wait results; returns the text and the results the caller has now read. */
-export function renderWait(outcome: WaitOutcome): { text: string; read: WaitResult[]; details: Record<string, unknown> } {
+export function renderWait(outcome: WaitOutcome, ids: string[]): { text: string; read: WaitResult[]; details: Record<string, unknown> } {
 	const { results, pending } = outcome;
-	const pendingLine = pending.length > 0 ? `Still pending: ${pending.map(label).join(", ")}` : "";
+	const pendingLine = pending.length > 0 ? `Still pending: ${pending.map((agent) => label(agent, ids)).join(", ")}` : "";
 	if (results.length === 0) return { text: pendingLine || "No results.", read: [], details: { pending: pending.map((agent) => agent.id) } };
 	const only = results[0]!;
 	if (results.length === 1 && pending.length === 0 && !only.history && only.input.state === "completed") {
 		const bounded = boundText(only.input.result ?? "", "pi-agents-wait");
 		return { text: bounded.text, read: results, details: { ...bounded.details } };
 	}
-	const bounded = boundBlocks(results.map(resultBlock), "agent-result", "pi-agents-wait");
+	const bounded = boundBlocks(results.map((result) => resultBlock(result, ids)), "agent-result", "pi-agents-wait");
 	let text = bounded.text;
 	const read = results.slice(0, bounded.shown);
 	const omitted = results.slice(bounded.shown);
-	if (omitted.length > 0) text += `\n\n[Results omitted: ${omitted.map((result) => label(result.agent)).join(", ")}. Use wait with fewer targets.]`;
+	if (omitted.length > 0) text += `\n\n[Results omitted: ${omitted.map((result) => label(result.agent, ids)).join(", ")}. Use wait with fewer targets.]`;
 	if (pendingLine) text += `\n\n${pendingLine}`;
 	return { text, read, details: { pending: pending.map((agent) => agent.id), ...bounded.details } };
 }
@@ -56,6 +58,7 @@ export function registerAgentTool(
 		const others = (await roots.roots(signal))
 			.filter((root) => !tree.some((entry) => entry.id === root.id))
 			.map((root) => ({ ...root, remote: !nodes.has(root.id) }));
+		rememberRoots(others.map((root) => root.id));
 		return [...tree, ...others];
 	};
 
@@ -86,7 +89,7 @@ export function registerAgentTool(
 			context: Type.Optional(StringEnum(["fresh", "fork"] as const, { description: "Context for `spawn` (default: fresh). fresh starts without the caller's conversation; fork snapshots it." })),
 			model: Type.Optional(Type.String({ description: "Model for `spawn` as provider/modelId (default: the caller's model)." })),
 			thinkingLevel: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level for `spawn`: off, minimal, low, medium, high, or xhigh (default: the caller's level)." })),
-			target: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "Agent ID or name for `send`, `wait`, or `abort`. `wait` and `send` with `deliverAs='write'` also accept an array. When omitted for `wait`, selects all owned Agents with pending or unread results." })),
+			target: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "Agent ID, name, or unique ID prefix for `send`, `wait`, or `abort`. `wait` and `send` with `deliverAs='write'` also accept an array. When omitted for `wait`, selects all owned Agents with pending or unread results." })),
 			deliverAs: Type.Optional(StringEnum(["followUp", "steer", "write"] as const, { description: "Delivery for `send` (default: followUp). followUp waits until the recipient's current turn ends; steer delivers after its current tool calls, before the next model call; write delivers like steer but never starts a turn and has no result." })),
 			history: Type.Optional(Type.Integer({ minimum: 0, description: "Number of most recent read results to return again per selected Agent for `wait` (default: 0)." })),
 			timeout: Type.Optional(Type.Number({ minimum: 10, maximum: 3600, description: "Maximum seconds for `wait` (default: 30, min: 10, max: 3600). Timeout does not abort Agents." })),
@@ -99,6 +102,7 @@ export function registerAgentTool(
 			const self = requireNode(current);
 			const agents = self.agents;
 			const caller = { id: self.id, name: self.name() };
+			const ids = () => agents.ids();
 			const targets = params.target === undefined ? undefined : Array.isArray(params.target) ? params.target : [params.target];
 			switch (params.action) {
 				case "spawn": {
@@ -113,7 +117,7 @@ export function registerAgentTool(
 						thinkingLevel: params.thinkingLevel,
 					});
 					return {
-						content: [{ type: "text", text: `Agent ${label(record)} ${queued ? `queued: ${slotsBusy}` : "started"}.` }],
+						content: [{ type: "text", text: `Agent ${label(record, ids())} ${queued ? `queued: ${slotsBusy}` : "started"}.` }],
 						details: { id: record.id, name: record.name, queued },
 					};
 				}
@@ -129,20 +133,20 @@ export function registerAgentTool(
 					const body = params.message;
 					const send = async (entry: Entry) => {
 						if (!entry.remote) return deliver(caller, entry, delivery, body);
-						await roots.send({ id: entry.id, label: label(entry) }, delivery, body, signal);
+						await roots.send({ id: entry.id, label: label(entry, ids()) }, delivery, body, signal);
 						return { queued: false };
 					};
 					if (delivery === "write") {
 						for (const entry of entries) await send(entry);
 						return {
-							content: [{ type: "text", text: `Write accepted by ${entries.map(label).join(", ")}.` }],
+							content: [{ type: "text", text: `Write accepted by ${entries.map((entry) => label(entry, ids())).join(", ")}.` }],
 							details: { ids: entries.map((entry) => entry.id) },
 						};
 					}
 					const entry = entries[0]!;
 					const { queued } = await send(entry);
 					return {
-						content: [{ type: "text", text: `Input accepted by ${label(entry)}${queued ? `, queued: ${slotsBusy}` : ""}.` }],
+						content: [{ type: "text", text: `Input accepted by ${label(entry, ids())}${queued ? `, queued: ${slotsBusy}` : ""}.` }],
 						details: { id: entry.id, queued },
 					};
 				}
@@ -152,7 +156,7 @@ export function registerAgentTool(
 					// An empty partial result lets the row show the elapsed time.
 					onUpdate?.({ content: [], details: undefined });
 					const outcome = await agents.wait(selected, params.history ?? 0, params.timeout ?? 30, signal);
-					const rendered = renderWait(outcome);
+					const rendered = renderWait(outcome, ids());
 					agents.markRead(rendered.read);
 					return { content: [{ type: "text", text: rendered.text }], details: rendered.details };
 				}
@@ -160,11 +164,12 @@ export function registerAgentTool(
 					rejectFields(params, "list", ["name", "message", "cwd", "context", "model", "thinkingLevel", "target", "deliverAs", "history", "timeout"]);
 					const offset = params.offset ?? 0;
 					const limit = params.limit ?? 20;
-					const entries = (await visible(self, signal)).filter((entry) => entry.id !== self.id && (!params.state || entry.state === params.state));
+					const all = await visible(self, signal);
+					const entries = all.filter((entry) => entry.id !== self.id && (!params.state || entry.state === params.state));
 					const items = searchEntries(entries, params.query);
 					const page = items.slice(offset, offset + limit);
 					if (page.length === 0) return { content: [{ type: "text", text: "No matching Agents." }], details: { total: items.length } };
-					const lines = page.map(listLine);
+					const lines = page.map((item) => listLine(item, all.map((entry) => entry.id)));
 					const remaining = items.length - offset - page.length;
 					if (remaining > 0) lines.push(`[${remaining} more results. Use offset=${offset + page.length} to continue.]`);
 					const text = boundText(lines.join("\n"), "pi-agents-list");
@@ -176,7 +181,7 @@ export function registerAgentTool(
 					const agent = agents.ownedTarget(targets[0]!);
 					const aborted = await agents.abort(agent);
 					return {
-						content: [{ type: "text", text: `Agent ${label(agent.record)} ${aborted ? "aborted" : "has no turn or queued inputs"}.` }],
+						content: [{ type: "text", text: `Agent ${label(agent.record, ids())} ${aborted ? "aborted" : "has no turn or queued inputs"}.` }],
 						details: { id: agent.record.id, aborted },
 					};
 				}

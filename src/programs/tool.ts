@@ -7,7 +7,9 @@ import { programScope } from "./agents.ts";
 import type { PiCodemode } from "./codemode.ts";
 import { executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./execute.ts";
 import { programDescription, programLoadout, programRenderers } from "./loadout.ts";
-import { programListLine, Programs, renderProgramWait, uuidv7 } from "./programs.ts";
+import { randomUUID } from "node:crypto";
+import { shortId } from "../agents/agents.ts";
+import { programListLine, Programs, renderProgramWait } from "./programs.ts";
 import { agentGlobals, withAgentPrefix } from "./sandbox.ts";
 
 const PROGRAM_DESCRIPTION = `Run JavaScript that composes tool calls and Agents; only its output and return value reach the caller. \`run\` runs a Program in the foreground, or in the background with \`background\`; \`wait\` waits for background Programs and returns their results; \`list\` lists background Programs; \`stop\` stops a running Program. When a background Program ends while its caller is not waiting for it, the caller receives a notification; \`wait\` returns the result.
@@ -124,7 +126,7 @@ export function registerProgramTools(
 			code: Type.Optional(Type.String({ description: "JavaScript async-function body for `run`." })),
 			background: Type.Optional(Type.Boolean({ description: "Whether `run` returns the Program ID at once (default: false)." })),
 			timeout: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Maximum seconds. For `run` (default: none), expiry stops the Program. For `wait` (default: 30, min: 10, max: 3600), expiry does not stop Programs." })),
-			target: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "Program ID for `wait` or `stop`. `wait` also accepts an array. When omitted for `wait`, selects running Programs and ended Programs whose result has not been returned." })),
+			target: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "Program ID or unique ID prefix for `wait` or `stop`. `wait` also accepts an array. When omitted for `wait`, selects running Programs and ended Programs whose result has not been returned." })),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, description: "Maximum Programs returned by `list` (default: 20, max: 200)." })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, description: "Number of Programs to skip for `list` (default: 0)." })),
 		}),
@@ -140,9 +142,9 @@ export function registerProgramTools(
 					const code = params.code;
 					if (params.background) {
 						const record = programs.start((id, programSignal, abort) => runProgram(id, self, toolCallId, code, programSignal, current, { timeout: params.timeout, background: true, abort }));
-						return { content: [{ type: "text", text: `Program ${record.id} started.` }], details: { id: record.id } };
+						return { content: [{ type: "text", text: `Program ${shortId(record.id, programs.ids())} started.` }], details: { id: record.id } };
 					}
-					const { result } = await self.agents.whileSuspended(() => runProgram(uuidv7(), self, toolCallId, code, signal ?? new AbortController().signal, current, {
+					const { result } = await self.agents.whileSuspended(() => runProgram(randomUUID(), self, toolCallId, code, signal ?? new AbortController().signal, current, {
 						timeout: params.timeout,
 						onUpdate,
 					}), signal);
@@ -156,7 +158,7 @@ export function registerProgramTools(
 					onUpdate?.({ content: [], details: undefined });
 					const waitFor = () => programs!.wait(selected, timeout, signal);
 					const outcome = programs.running(selected) ? await self.agents.whileSuspended(waitFor, signal) : await waitFor();
-					const rendered = renderProgramWait(outcome);
+					const rendered = renderProgramWait(outcome, programs.ids());
 					programs.markReturned(rendered.returned);
 					return { content: rendered.content, details: { running: outcome.running.map((record) => record.id) } };
 				}
@@ -167,7 +169,7 @@ export function registerProgramTools(
 					const records = programs.list();
 					if (records.length === 0) return { content: [{ type: "text", text: "No Programs." }], details: { total: 0 } };
 					const page = records.slice(offset, offset + limit);
-					const lines = page.map(programListLine);
+					const lines = page.map((record) => programListLine(record, programs!.ids()));
 					const remaining = records.length - offset - page.length;
 					if (remaining > 0) lines.push(`[${remaining} more results. Use offset=${offset + page.length} to continue.]`);
 					return { content: [{ type: "text", text: lines.join("\n") }], details: { total: records.length } };
@@ -178,7 +180,7 @@ export function registerProgramTools(
 					const program = programs.target(targets[0]!);
 					const stopped = await programs.stop(program);
 					return {
-						content: [{ type: "text", text: `Program ${program.record.id} ${stopped ? "stopped" : "has already ended"}.` }],
+						content: [{ type: "text", text: `Program ${shortId(program.record.id, programs.ids())} ${stopped ? "stopped" : "has already ended"}.` }],
 						details: { id: program.record.id, stopped },
 					};
 				}

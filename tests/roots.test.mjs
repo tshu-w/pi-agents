@@ -104,8 +104,8 @@ after(async () => {
 
 test("an input to an offline root loads it in the background, which answers and exits", async () => {
 	const target = offlineRoot("offline-a", "reviewer");
-	assert.match(await sender.call({ action: "list", query: "reviewer" }), /reviewer \(offline-a\)\s+offline/);
-	assert.equal(await sender.call({ action: "send", target: "reviewer", message: "hello" }), "Input accepted by reviewer (offline-a).");
+	assert.match(await sender.call({ action: "list", query: "reviewer" }), /reviewer \(offline-\)\s+offline/);
+	assert.equal(await sender.call({ action: "send", target: "reviewer", message: "hello" }), "Input accepted by reviewer (offline-).");
 	const answered = await until(() => entriesOf(target.file).find((entry) => entry.type === "message" && entry.message.role === "assistant"), "answer");
 	assert.match(textOf(answered.message.content), /^answer:Message from sender \(.+\)\. Reply with send:\nhello$/);
 	// The Worker gives up the Session once it exits.
@@ -135,5 +135,5 @@ test("a root in another process is listed with its state and cannot be opened tw
 	assert.equal(first.child.exitCode, null);
 
 	await sender.call({ action: "send", target: "live-c", message: "note", deliverAs: "write" });
-	await until(() => entriesOf(target.file).some((entry) => entry.type === "custom_message" && entry.content === `Message from sender (${sender.sessionManager.getSessionId()}):\nnote`), "write");
+	await until(() => entriesOf(target.file).some((entry) => entry.type === "custom_message" && sender.sessionManager.getSessionId().startsWith(/^Message from sender \((\S{8,})\):\nnote$/.exec(entry.content)?.[1] ?? "-")), "write");
 });

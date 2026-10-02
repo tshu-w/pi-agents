@@ -86,7 +86,7 @@ const idOf = (text) => /\((\S+)\)/.exec(text)[1];
 test("an owned Agent answers its first input, and wait returns the answer once", async () => {
 	const root = await startRoot();
 	const spawned = await root.call({ action: "spawn", name: "worker", message: "hello" });
-	assert.match(spawned, /^Agent worker \(\S+\) started\.$/);
+	assert.match(spawned, /^Agent worker \([0-9a-f]{8}\) started\.$/);
 	assert.equal(await root.call({ action: "wait", target: "worker", timeout: 10 }), "answer:hello|seen:hello");
 	assert.match(await root.call({ action: "wait", target: "worker", history: 1, timeout: 10 }), /status="completed" history="true">\nanswer:hello/);
 	assert.match(await root.call({ action: "list" }), new RegExp(`^worker \\(${idOf(spawned)}\\)  idle  `));
@@ -108,11 +108,12 @@ test("the user's input from the viewer reaches the Agent without a sender header
 	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "one" }));
 	assert.equal(await root.call({ action: "wait", target: id, timeout: 10 }), "answer:one|seen:one");
 	const owner = globalThis[Symbol.for("pi-agents:runtime")].nodes.get(root.session.sessionManager.getSessionId());
-	owner.agents.prompt(id, "two", "steer");
+	const fullId = owner.agents.ownedTarget(id).record.id;
+	owner.agents.prompt(fullId, "two", "steer");
 	const deadline = Date.now() + 10000;
-	const answered = () => owner.agents.conversation(id).messages.filter((message) => message.role === "assistant").length === 2;
+	const answered = () => owner.agents.conversation(fullId).messages.filter((message) => message.role === "assistant").length === 2;
 	while (!answered() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
-	const messages = owner.agents.conversation(id).messages;
+	const messages = owner.agents.conversation(fullId).messages;
 	assert.ok(messages.some((message) => message.role === "custom" && message.content === "two" && message.details.user), JSON.stringify(messages));
 	assert.equal(messages.at(-1).role, "assistant");
 	await root.session.waitForIdle();
