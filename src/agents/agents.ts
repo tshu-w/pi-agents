@@ -93,6 +93,8 @@ export interface Entry {
 	cwd: string;
 	state: AgentState;
 	sessionFile?: string;
+	/** When an owned Agent was spawned. */
+	createdAt?: string;
 	/** A root Agent loaded in another process. */
 	remote?: boolean;
 }
@@ -467,18 +469,8 @@ export class Agents {
 			cwd: agent.record.cwd,
 			state: agent.turn?.started ? "busy" : "idle",
 			sessionFile: agent.record.sessionFile,
+			createdAt: agent.record.createdAt,
 		}));
-	}
-
-	summary(): { busy: number; queued: number; unread: number } {
-		let busy = 0, queued = 0, unread = 0;
-		for (const id of this.agents.keys()) {
-			const counts = this.counts(id)!;
-			if (counts.busy) busy += 1;
-			queued += counts.queued;
-			unread += counts.unread;
-		}
-		return { busy, queued, unread };
 	}
 
 	/** Queued inputs and unread results of an owned Agent. */
@@ -523,6 +515,13 @@ export class Agents {
 		const input: Input = { text, user: true, permit: this.reserve() };
 		if (delivery === "steer" && agent.turn) this.join(agent, agent.turn, input);
 		else this.enqueue(agent, input);
+	}
+
+	/** Loads an owned Agent's Session without starting a turn. */
+	open(id: string): Promise<AgentSession> {
+		const agent = this.agents.get(id);
+		if (!agent) throw new Error(`Agent ${id} is not owned by ${this.self.id}.`);
+		return this.load(agent);
 	}
 
 	/** Stops an owned Agent's current turn and withdraws its queued inputs. */
@@ -1137,9 +1136,18 @@ export function listLine(item: ListItem, ids: Iterable<string>): string {
 	return item.match ? `${line}\n  ${formatTime(item.match.time)}  ${item.match.excerpt}` : line;
 }
 
-/** The first input of an Agent's Session, without its sender header. */
+/** The first input an Agent received, without its sender header; a forked conversation is not its input. */
 export function firstInput(sessionFile: string | undefined): string | undefined {
-	const text = sessionTexts(sessionFile)[0]?.text;
+	if (!sessionFile || !existsSync(sessionFile)) return undefined;
+	let text: string | undefined;
+	for (const line of readFileSync(sessionFile, "utf8").split("\n")) {
+		let entry: Record<string, any>;
+		try { entry = JSON.parse(line); } catch { continue; }
+		if (entry.type === "custom_message" && entry.customType === MESSAGE_TYPE && typeof entry.content === "string") {
+			text = entry.content;
+			break;
+		}
+	}
 	if (text === undefined) return undefined;
 	return (text.startsWith("Message from ") ? text.slice(text.indexOf("\n") + 1) : text).replace(/\s+/g, " ").trim();
 }

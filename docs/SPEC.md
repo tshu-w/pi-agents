@@ -294,26 +294,31 @@ Message from <name> (<id>). Reply with send:
 
 ### Task panel
 
-A panel above the editor lists the current Agent's owned Agents that are
-busy or have queued inputs or unread results, as a tree in the order they
-were spawned, each under its owner:
+A panel above the editor shows the current Agent's live work:
 
-    Agents: <busy> busy · <queued> queued inputs · <unread> unread results · <usage> · /tasks to hide
-      <name> (<id>)  <state>  <N> queued  <N> unread
-        <name> (<id>)  <state>
+    Tasks (<N> live, /tasks to hide)
+      Agent <name> (<id>)  <state>  <N> queued
+        Agent <name> (<id>)  <state>
+      Program <id>  running
+      +<N> more
 
-Only nonzero counts are shown. Usage includes all descendant Agents and
-excludes the root Agent's own usage.
+The live work is the owned Agents that are busy or have queued inputs and
+the running background Programs. The rows list those Agents as a tree in
+the order they were spawned, each under its owner, with the owners needed to
+keep the tree; then running background Programs, newest first. Rows that do
+not fit are counted in the last row.
 
-The panel updates as states change and is shown while there is something to
-list. `/tasks` hides or shows it.
+The panel updates as states change and is shown while it has a row.
+`/tasks` hides or shows it.
 
 ### Agent viewer
 
-`/agents` lists the current Agent's owned Agents with their state and first
-input, and opens the selected one in a viewer. The viewer shows the Agent's
-conversation and updates while it works; the current Session keeps running
-behind it.
+`/agents` lists the current Agent's owned Agents, busy ones first and newest
+first within each group, with their state and first input, and opens the
+selected one in a viewer. An Agent not owned by the current Agent is named
+with its owners up to it, as `<name> ‹ <owner> ‹ …`. The viewer shows the
+Agent's conversation and updates while it works; the current Session keeps
+running behind it.
 
 Text entered in the viewer is the user's input to that Agent and is sent as
 in Pi's editor.

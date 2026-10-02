@@ -4,6 +4,7 @@ import {
 	CustomEditor,
 	CustomMessageComponent,
 	DynamicBorder,
+	FooterComponent,
 	getMarkdownTheme,
 	getSelectListTheme,
 	keyText,
@@ -11,6 +12,7 @@ import {
 	UserMessageComponent,
 	type AgentSession,
 	type ExtensionContext,
+	type ReadonlyFooterDataProvider,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -30,7 +32,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { firstInput, MESSAGE_TYPE, nodes, onTreeChange, treeEntries, type AgentNode, type Entry } from "../agents/agents.ts";
-import { formatTokens } from "./panel.ts";
+import { execFileSync } from "node:child_process";
 
 type Message = AgentSession["messages"][number];
 type ToolResult = Parameters<ToolExecutionComponent["updateResult"]>[0];
@@ -52,10 +54,28 @@ class WorkingStatus extends Loader {
 	}
 }
 
+/** What Pi's footer needs beyond the Session: the Agent's git branch, and no extension statuses. */
+function footerData(cwd: string, ctx: ExtensionContext): ReadonlyFooterDataProvider {
+	let branch: string | null;
+	try {
+		branch = execFileSync("git", ["-C", cwd, "branch", "--show-current"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
+	} catch {
+		branch = null;
+	}
+	const providers = new Set(ctx.modelRegistry.getAvailable().map((model) => model.provider)).size;
+	return {
+		getGitBranch: () => branch,
+		getExtensionStatuses: () => new Map(),
+		getAvailableProviderCount: () => providers,
+		onBranchChange: () => () => {},
+	};
+}
+
 /** The user's view of one owned Agent: its conversation, and an editor whose text goes to it. */
 class AgentViewer implements Component, Focusable {
 	private readonly editor: CustomEditor;
 	private readonly transcript = new Container();
+	private readonly footer: FooterComponent;
 	private session?: AgentSession;
 	private streaming?: Message;
 	private running = new Map<string, { name: string; partial?: ToolResult }>();
@@ -77,10 +97,13 @@ class AgentViewer implements Component, Focusable {
 		private ctx: ExtensionContext,
 		private owner: AgentNode,
 		private entry: Entry,
+		session: AgentSession,
+		paddingX: number,
 		private done: () => void,
 	) {
+		this.footer = new FooterComponent(session, footerData(entry.cwd, ctx));
 		this.editor = new CustomEditor(tui, { borderColor: (text) => theme.fg("border", text), selectList: getSelectListTheme() }, keys as never, {
-			paddingX: 1,
+			paddingX,
 			embedWorkingStatus: true,
 		});
 		this.editor.onSubmit = (text) => this.send(text, "steer");
@@ -122,9 +145,10 @@ class AgentViewer implements Component, Focusable {
 		this.syncStatus(conversation);
 		const queue = this.outbox.map(({ text, delivery }) =>
 			truncateToWidth(this.theme.fg("dim", ` ${delivery === "steer" ? "Steering" : "Follow-up"}: ${text.replace(/\s+/g, " ")}`), width));
+		const title = truncateToWidth(this.theme.fg("dim", `Agent ${this.entry.name ?? this.entry.id} · ${keyText("app.clear")} to go back`), width);
 		const editor = this.editor.render(width);
-		const footer = this.footer(conversation, width);
-		const budget = Math.max(1, this.tui.terminal.rows - queue.length - editor.length - footer.length - 1);
+		const footer = this.footer.render(width);
+		const budget = Math.max(1, this.tui.terminal.rows - queue.length - editor.length - footer.length - 2);
 		const lines = this.transcript.render(width);
 		this.scroll = Math.min(this.scroll, Math.max(0, lines.length - budget));
 		const end = lines.length - this.scroll;
@@ -132,7 +156,7 @@ class AgentViewer implements Component, Focusable {
 		// Fill the screen so the Session behind the viewer does not show through.
 		const blank = " ".repeat(width);
 		const padding = Array.from({ length: budget - shown.length }, () => blank);
-		return [...padding, ...shown, blank, ...queue, ...editor, ...footer];
+		return [...padding, ...shown, blank, ...queue, title, ...editor, ...footer];
 	}
 
 	invalidate(): void {
@@ -142,6 +166,7 @@ class AgentViewer implements Component, Focusable {
 
 	dispose(): void {
 		this.indicator?.dispose();
+		this.footer.dispose();
 		for (const dispose of this.disposers.splice(0)) dispose();
 	}
 
@@ -199,48 +224,6 @@ class AgentViewer implements Component, Focusable {
 			? new WorkingStatus(this.tui, (part) => this.editor.borderColor(part), (part) => this.theme.fg("muted", part), text)
 			: undefined;
 		this.editor.setWorkingStatusIndicator(this.indicator as unknown as StatusIndicator);
-	}
-
-	/** Usage and context, then the Agent's name, model, and keys, like Pi's footer. */
-	private footer(conversation: ReturnType<AgentNode["agents"]["conversation"]>, width: number): string[] {
-		let input = 0, output = 0, cacheRead = 0, cacheWrite = 0, cost = 0;
-		let context: number | undefined;
-		for (const message of conversation?.messages ?? []) {
-			if (message.role !== "assistant") continue;
-			input += message.usage.input;
-			output += message.usage.output;
-			cacheRead += message.usage.cacheRead;
-			cacheWrite += message.usage.cacheWrite;
-			cost += message.usage.cost.total;
-			if (message.stopReason !== "aborted" && message.stopReason !== "error") {
-				context = message.usage.totalTokens || message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite;
-			}
-		}
-		const stats: string[] = [];
-		if (input) stats.push(`↑${formatTokens(input)}`);
-		if (output) stats.push(`↓${formatTokens(output)}`);
-		if (cacheRead) stats.push(`R${formatTokens(cacheRead)}`);
-		if (cacheWrite) stats.push(`W${formatTokens(cacheWrite)}`);
-		stats.push(`$${cost.toFixed(3)}`);
-		const ref = conversation?.model;
-		const window = ref ? this.ctx.modelRegistry.find(ref.provider, ref.modelId)?.contextWindow ?? 0 : 0;
-		if (window > 0) {
-			const percent = context === undefined ? undefined : (context / window) * 100;
-			const text = `${percent === undefined ? "?" : percent.toFixed(1)}%/${formatTokens(window)}`;
-			stats.push(percent !== undefined && percent > 90 ? this.theme.fg("error", text) : text);
-		}
-		const model = ref ? `${ref.provider}/${ref.modelId}` : "no model";
-		const hints = [
-			model,
-			`thinking:${conversation?.thinkingLevel ?? "off"}`,
-			`${keyText("app.message.followUp")} follow-up`,
-			`${keyText("app.interrupt")} stop`,
-			`${keyText("app.clear")} close`,
-		].join(" · ");
-		return [
-			truncateToWidth(` ${this.theme.fg("dim", `${stats.join(" ")} ${conversation?.cwd ?? ""}`)}`, width),
-			truncateToWidth(` ${this.theme.fg("accent", this.entry.name ?? this.entry.id)}${this.theme.fg("dim", ` · ${hints}`)}`, width),
-		];
 	}
 
 	private rebuild(conversation: ReturnType<AgentNode["agents"]["conversation"]>): void {
@@ -366,35 +349,50 @@ class ListSelector extends Container implements Focusable {
 	}
 }
 
-/** The current Agent's owned Agents, depth-first, each under its owner. */
+/** The current Agent's owned Agents, busy ones first and newest first within each group. */
 export function ownedEntries(self: AgentNode): Entry[] {
 	const owned = new Set([self.id]);
 	return treeEntries(self.scopeId).filter((entry) => {
 		if (entry.ownerId === undefined || !owned.has(entry.ownerId)) return false;
 		owned.add(entry.id);
 		return true;
-	});
+	}).sort((a, b) => Number(b.state === "busy") - Number(a.state === "busy") || (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
 }
 
 /** `/agents`: picks an owned Agent and opens it in the viewer. */
-export async function openAgentViewer(ctx: ExtensionContext, self: AgentNode): Promise<void> {
+/** `paddingX` is Pi's editor padding, so the viewer's editor lines up as Pi's does. */
+export async function openAgentViewer(ctx: ExtensionContext, self: AgentNode, paddingX: number): Promise<void> {
 	const entries = ownedEntries(self);
 	if (entries.length === 0) {
 		ctx.ui.notify("No owned Agents.", "info");
 		return;
 	}
+	const byId = new Map(entries.map((entry) => [entry.id, entry]));
+	// An Agent under another owned Agent is named with its owners up to the current Agent.
+	const path = (entry: Entry): string => {
+		const owner = entry.ownerId === undefined ? undefined : byId.get(entry.ownerId);
+		const name = entry.name ?? entry.id;
+		return owner ? `${name} ‹ ${path(owner)}` : name;
+	};
 	const items: SelectItem[] = entries.map((entry) => ({
 		value: entry.id,
-		label: entry.name ?? entry.id,
+		label: path(entry),
 		description: [entry.state, firstInput(entry.sessionFile) ?? ""].filter(Boolean).join("  "),
 	}));
 	const id = await ctx.ui.custom<string | undefined>((_tui, theme, keys, done) =>
 		new ListSelector("Open Agent:", items, theme, keys, (value) => done(value), () => done(undefined)));
-	const entry = entries.find((candidate) => candidate.id === id);
+	const entry = id === undefined ? undefined : byId.get(id);
 	const owner = entry?.ownerId === undefined ? undefined : nodes.get(entry.ownerId);
 	if (!entry || !owner) return;
+	let session: AgentSession;
+	try {
+		session = await owner.agents.open(entry.id);
+	} catch (error) {
+		ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+		return;
+	}
 	await ctx.ui.custom<void>(
-		(tui, theme, keys, done) => new AgentViewer(tui, theme, keys, ctx, owner, entry, () => done()),
+		(tui, theme, keys, done) => new AgentViewer(tui, theme, keys, ctx, owner, entry, session, paddingX, () => done()),
 		{ overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "bottom-center" } },
 	);
 }

@@ -191,7 +191,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	pi.registerCommand("agents", {
 		description: "Open an owned Agent to watch and talk to it",
 		handler: async (_args, current) => {
-			if (node) await openAgentViewer(current, requireNode(current));
+			if (node) await openAgentViewer(current, requireNode(current), pi.getSettings().editorPaddingX ?? 0);
 		},
 	});
 }

@@ -113,15 +113,6 @@ export class Programs {
 		return [...this.programs.values()].map((program) => program.record).sort((a, b) => b.startedAt - a.startedAt);
 	}
 
-	summary(): { running: number; unreturned: number } {
-		let running = 0, unreturned = 0;
-		for (const { record } of this.programs.values()) {
-			if (!ended(record)) running += 1;
-			else if (!record.returned) unreturned += 1;
-		}
-		return { running, unreturned };
-	}
-
 	/** Returns whether the Program was running; it has ended when this resolves. */
 	async stop(program: Running, reason = "Program stopped"): Promise<boolean> {
 		if (ended(program.record)) return false;
@@ -280,12 +271,6 @@ export function renderProgramWait({ results, running }: ProgramWaitOutcome, ids:
 	return { content: [{ type: "text", text }, ...images(returned)], returned };
 }
 
-function formatTime(time: number): string {
-	const date = new Date(time);
-	const pad = (value: number) => String(value).padStart(2, "0");
-	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
 export function programListLine(record: ProgramRecord, ids: string[]): string {
-	return `${shortId(record.id, ids)}  ${record.state}  ${formatTime(record.startedAt)}`;
+	return `${shortId(record.id, ids)}  ${record.state}`;
 }

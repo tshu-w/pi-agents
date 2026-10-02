@@ -1,57 +1,42 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { label, nodes, onTreeChange, treeEntries, treeUsage, type AgentNode, type Usage } from "../agents/agents.ts";
-import { programListLine, type Programs } from "../programs/programs.ts";
+import { Container, TruncatedText } from "@earendil-works/pi-tui";
+import { label, nodes, onTreeChange, shortId, treeEntries, type AgentNode } from "../agents/agents.ts";
+import type { Programs } from "../programs/programs.ts";
 
 const WIDGET_KEY = "pi-agents";
 
-export function formatTokens(value: number): string {
-	if (value < 1000) return String(value);
-	if (value < 10000) return `${(value / 1000).toFixed(1)}k`;
-	if (value < 1000000) return `${Math.round(value / 1000)}k`;
-	return `${(value / 1000000).toFixed(1)}M`;
-}
+const MAX_LINES = 10;
 
-function formatUsage(usage: Usage): string {
-	return `${usage.turns} turns ↑${formatTokens(usage.input)} ↓${formatTokens(usage.output)} R${formatTokens(usage.cacheRead)} W${formatTokens(usage.cacheWrite)} $${usage.cost.toFixed(4)}`;
-}
-
-function counts(pairs: ReadonlyArray<readonly [number, string]>): string[] {
-	return pairs.filter(([count]) => count > 0).map(([count, text]) => `${count} ${text}`);
-}
-
-/** The task panel: the Agent's owned Agents as a tree, then its background Programs. Empty when there is nothing to list. */
+/** The task panel: the Agent's live owned Agents as a tree, then its running background Programs. Empty when none. */
 export function panelLines(self: AgentNode, programs: Programs | undefined): string[] {
-	const lines: string[] = [];
 	const depth = new Map<string, number>([[self.id, 0]]);
 	const parent = new Map<string, string>();
 	const rows = new Map<string, string>();
 	const shown = new Set<string>();
 	const ids = self.agents.ids();
+	let live = 0;
 	for (const entry of treeEntries(self.scopeId)) {
 		const level = entry.ownerId === undefined ? undefined : depth.get(entry.ownerId);
 		if (level === undefined) continue;
 		depth.set(entry.id, level + 1);
 		parent.set(entry.id, entry.ownerId!);
 		const own = nodes.get(entry.ownerId!)?.agents.counts(entry.id);
-		const extra = counts([[own?.queued ?? 0, "queued"], [own?.unread ?? 0, "unread"]]);
-		rows.set(entry.id, `${"  ".repeat(level + 1)}${[label(entry, ids), entry.state, ...extra].join("  ")}`);
-		// An Agent with work or results is listed with its owners, so the tree stays readable.
-		if (own?.busy || extra.length > 0) {
+		const queued = own?.queued ? [`${own.queued} queued`] : [];
+		rows.set(entry.id, `${"  ".repeat(level)}Agent ${[label(entry, ids), entry.state, ...queued].join("  ")}`);
+		// A live Agent is listed with its owners, so the tree stays readable.
+		if (own?.busy || queued.length > 0) {
+			live += 1;
 			for (let id: string | undefined = entry.id; id !== undefined && id !== self.id && !shown.has(id); id = parent.get(id)) shown.add(id);
 		}
 	}
-	if (shown.size > 0) {
-		const { busy, queued, unread } = self.agents.summary();
-		const summary = counts([[busy, "busy"], [queued, "queued inputs"], [unread, "unread results"]]);
-		lines.push(`Agents: ${[...summary, formatUsage(treeUsage(self.rootId))].join(" · ")}`, ...[...rows].filter(([id]) => shown.has(id)).map(([, row]) => row));
-	}
-	const { running, unreturned } = programs?.summary() ?? { running: 0, unreturned: 0 };
-	if (running > 0 || unreturned > 0) {
-		const shown = programs!.list().filter((record) => record.state === "running" || !record.returned);
-		lines.push(`Programs: ${counts([[running, "running"], [unreturned, "unreturned results"]]).join(" · ")}`, ...shown.map((record) => `  ${programListLine(record, programs!.ids())}`));
-	}
-	if (lines.length > 0) lines[0] += " · /tasks to hide";
-	return lines;
+	const running = programs?.list().filter((record) => record.state === "running") ?? [];
+	const lines = [
+		...[...rows].filter(([id]) => shown.has(id)).map(([, row]) => row),
+		...running.map((record) => `Program ${shortId(record.id, programs!.ids())}  running`),
+	];
+	if (lines.length === 0) return [];
+	if (lines.length > MAX_LINES - 1) lines.splice(MAX_LINES - 2, Infinity, `+${lines.length - (MAX_LINES - 2)} more`);
+	return [`Tasks (${live + running.length} live, /tasks to hide)`, ...lines.map((line) => `  ${line}`)];
 }
 
 /** Keeps the task panel above the editor current while the Session is loaded; `toggle` hides or shows it. */
@@ -66,10 +51,11 @@ export function createPanel(getNode: () => AgentNode | undefined, getPrograms: (
 		const node = getNode();
 		if (!ctx?.hasUI || !node) return;
 		const lines = hidden ? [] : panelLines(node, getPrograms());
-		const theme = ctx.ui.theme;
-		ctx.ui.setWidget(WIDGET_KEY, lines.length === 0
-			? undefined
-			: lines.map((line, index) => index === 0 || !line.startsWith(" ") ? theme.fg("accent", line) : theme.fg("muted", line)));
+		ctx.ui.setWidget(WIDGET_KEY, lines.length === 0 ? undefined : (_tui, theme) => {
+			const panel = new Container();
+			lines.forEach((line, index) => panel.addChild(new TruncatedText(theme.fg(index === 0 ? "accent" : "muted", line), 0, 0)));
+			return panel;
+		});
 	};
 	const update = () => {
 		if (scheduled) return;

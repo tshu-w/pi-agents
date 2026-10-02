@@ -119,7 +119,7 @@ test("a background Program runs on after run returns, notifies its caller, and w
 	assert.ok(root.messages.includes(`Program ${id} completed.`), root.messages.join("\n"));
 	assert.match(await root.text({ action: "wait", timeout: 10 }), /done$/);
 	assert.equal(await root.text({ action: "wait", timeout: 10 }), "No results.");
-	assert.match(await root.text({ action: "list" }), new RegExp(`^${id}  completed  \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d$`));
+	assert.match(await root.text({ action: "list" }), new RegExp(`^${id}  completed$`));
 	await root.close();
 });
 

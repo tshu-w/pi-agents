@@ -99,8 +99,8 @@ remain available when the caller is loaded again.
 ## 5. Limits
 
 A Program's Agents and the Agents under them count toward the caller's
-tree: they share its slots and `maxOutstanding` limit, as in SPEC §4, and
-the task panel's usage includes them. At `maxOutstanding`, `send()` throws.
+tree: they share its slots and `maxOutstanding` limit, as in SPEC §4. At
+`maxOutstanding`, `send()` throws.
 
 An owned caller gives up its slot while a foreground Program runs or while
 it waits for background Programs, and takes one again before continuing.
@@ -226,7 +226,7 @@ No results.
 `list` returns one entry per background Program, newest first:
 
 ```text
-<id>  <state>  YYYY-MM-DD HH:MM
+<id>  <state>
 ```
 
 When more entries remain:
@@ -282,13 +282,7 @@ Program <id> <outcome>.
 
 ## 7. Human interface
 
-The task panel lists the current Agent's background Programs after its
-Agents, newest first, while they run or have unreturned results:
-
-    Programs: <running> running · <unreturned> unreturned results
-      <id>  <state>  YYYY-MM-DD HH:MM
-
-Only nonzero counts are shown; the section is omitted when both are zero.
+The task panel (SPEC §7) lists running background Programs.
 
 ## 8. Configuration
 
