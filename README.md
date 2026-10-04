@@ -21,10 +21,19 @@ pi install git:github.com/tshu-w/pi-agents
 
 Requires Pi 1.0.0 or later. Enable `program` with `{ "defaultTools": ["+program"] }` in `settings.json`.
 
+## Limitations
+
+- Each Agent is one Pi Session; branches are not separate Agents. Use fork/clone to create independent Agents.
+- A Session can be open in only one Pi runtime at a time, even on different branches. Exit the other Pi instance first, or use `/resume` to wait for a background Worker to exit.
+
 ## Configuration
 
 ```json
-{ "pi-agents": { "maxConcurrent": 3, "maxOutstanding": 8, "extensions": [] } }
+"pi-agents": {
+  "maxConcurrent": 3,
+  "maxOutstanding": 8,
+  "extensions": []
+}
 ```
 
 Concurrency limits per root, and extensions loaded by owned Agents. See [SPEC.md](docs/SPEC.md) and [PROGRAM.md](docs/PROGRAM.md) for details.

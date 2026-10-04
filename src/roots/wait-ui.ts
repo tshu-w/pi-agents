@@ -6,7 +6,7 @@ export async function waitForBackground<Lease extends { release(): void }>(
   wait: (signal: AbortSignal) => Promise<Lease>,
 ) {
   const result = await ctx.ui.custom<{ lease?: Lease; error?: unknown }>((tui, theme, _keys, done) => {
-    const loader = new BorderedLoader(tui, theme, 'Waiting for the background Agent to finish');
+    const loader = new BorderedLoader(tui, theme, '[pi-agents] Waiting for the background Worker to exit');
     let settled = false;
     const dispose = loader.dispose.bind(loader);
     loader.dispose = () => {

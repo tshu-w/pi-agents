@@ -134,7 +134,9 @@ export default function ownershipExtension(pi, runtime = {}) {
       blocked = undefined;
     } catch (error) {
       blocked = error.message;
-      notify(ctx, blocked);
+      if (ctx.mode === 'tui' && error.code === 'SESSION_OCCUPIED') {
+        await ctx.ui.select(blocked, ['Exit Pi']);
+      } else notify(ctx, blocked);
       // A thrown session_start error is swallowed by Pi. Explicitly quarantine
       // normal input/tool execution while the host performs graceful shutdown.
       ctx.shutdown();

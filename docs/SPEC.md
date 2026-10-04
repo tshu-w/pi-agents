@@ -400,4 +400,5 @@ in its owner's process.
 A delivered message enters the recipient's current branch. An offline root
 Agent is loaded in the background with its saved working directory and
 model and the current configuration, and exits after handling its inputs.
-One runtime uses a Session at a time.
+One runtime uses a Session at a time. If a Session is occupied at interactive
+startup, its ownership error stays visible until the user dismisses it, then Pi exits.

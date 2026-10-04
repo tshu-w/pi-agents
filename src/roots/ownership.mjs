@@ -17,8 +17,8 @@ export class SessionOccupiedError extends Error {
   constructor(sessionId, owner) {
     const label = sessionLabel(sessionId);
     super(owner?.background
-      ? `Session ${label} is being handled by a background Worker (PID ${owner.pid}), which exits once its inputs end. To open it now, start \`pi\` and use /resume, which waits for the Worker.`
-      : `Session ${label} is open in another Pi process${owner ? ` (PID ${owner.pid})` : ''}. Close it there before reopening it.`);
+      ? `[pi-agents] Session ${label} is in use by a background Worker (PID ${owner.pid}). Use /resume to wait.`
+      : `[pi-agents] Session ${label} is in use${owner ? ` (PID ${owner.pid})` : ''}. Exit the other Pi instance.`);
     this.name = 'SessionOccupiedError';
     this.code = 'SESSION_OCCUPIED';
     this.sessionId = sessionId;

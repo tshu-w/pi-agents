@@ -24,6 +24,7 @@ const { pi, PI_PACKAGE } = await import("./pi.mjs");
 const { rootPaths } = await import("../src/roots/paths.mjs");
 const { request } = await import("../src/roots/transport.mjs");
 const { reserve } = await import("../src/roots/ownership.mjs");
+const { default: ownershipExtension } = await import("../src/roots/ownership-extension.mjs");
 const paths = rootPaths();
 const extension = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 const cli = join(PI_PACKAGE, "dist/bundle/cli.js");
@@ -131,8 +132,31 @@ test("a root in another process is listed with its state and cannot be opened tw
 
 	const second = runPi(["--session", target.file], target.cwd);
 	await second.exited;
-	assert.match(second.output(), /Session live-c is open in another Pi process \(PID \d+\)\. Close it there before reopening it\./);
+	assert.match(second.output(), /\[pi-agents\] Session live-c is in use \(PID \d+\)\. Exit the other Pi instance\./);
 	assert.equal(first.child.exitCode, null);
+
+	const handlers = new Map();
+	ownershipExtension({ on: (event, handler) => handlers.set(event, handler) });
+	let dialog, dismiss;
+	let shutdown = false;
+	const opening = handlers.get("session_start")({ reason: "startup" }, {
+		mode: "tui", hasUI: true,
+		sessionManager: { getSessionFile: () => target.file, getSessionId: () => target.id },
+		ui: {
+			notify() {},
+			select(title, options) {
+				dialog = { title, options };
+				return new Promise((resolve) => { dismiss = resolve; });
+			},
+		},
+		shutdown() { shutdown = true; },
+	});
+	assert.match(dialog?.title ?? "", /\[pi-agents\] Session live-c is in use/);
+	assert.deepEqual(dialog.options, ["Exit Pi"]);
+	assert.equal(shutdown, false);
+	dismiss("Exit Pi");
+	await opening;
+	assert.equal(shutdown, true);
 
 	await sender.call({ action: "send", target: "live-c", message: "note", deliverAs: "write" });
 	await until(() => entriesOf(target.file).some((entry) => entry.type === "custom_message" && sender.sessionManager.getSessionId().startsWith(/^<agent-message from="sender" id="(\S{8,})">\nnote\n<\/agent-message>$/.exec(entry.content)?.[1] ?? "-")), "write");
