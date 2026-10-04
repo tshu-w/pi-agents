@@ -69,17 +69,18 @@ async function startRoot(limits = {}) {
 	await session.bindExtensions({ mode: "print" });
 	const tool = session.getToolDefinition("agent");
 	let calls = 0;
-	const call = async (args) => {
+	const callResult = async (args) => {
 		const id = `test-${++calls}`;
 		const signal = new AbortController().signal;
 		const result = await tool.execute(id, args, signal, undefined, session.extensionRunner.createToolContext(id, signal));
-		return textOf(result.content);
+		return result;
 	};
+	const call = async (args) => textOf((await callResult(args)).content);
 	const close = async () => {
 		await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		session.dispose();
 	};
-	return { session, call, state, close };
+	return { session, call, callResult, state, close };
 }
 
 const idOf = (text) => /\((\S+)\)/.exec(text)[1];
@@ -88,10 +89,41 @@ test("an owned Agent answers its first input, and wait returns the answer once",
 	const root = await startRoot();
 	const spawned = await root.call({ action: "spawn", name: "worker", message: "hello" });
 	assert.match(spawned, /^Agent worker \([0-9a-f]{8}\) started\.$/);
-	assert.equal(await root.call({ action: "wait", target: "worker", timeout: 10 }), "answer:hello|seen:hello");
-	assert.match(await root.call({ action: "wait", target: "worker", history: 1, timeout: 10 }), /status="completed" history="true">\nanswer:hello/);
+	const waited = await root.callResult({ action: "wait", target: "worker", timeout: 10 });
+	assert.equal(textOf(waited.content), "answer:hello|seen:hello");
+	const id = waited.details.results[0].id;
+	assert.ok(id.startsWith(idOf(spawned)));
+	assert.deepEqual(waited.details, { results: [{ id, name: "worker", state: "completed", history: false, result: "answer:hello|seen:hello" }], pending: [] });
+	const history = await root.callResult({ action: "wait", target: "worker", history: 1, timeout: 10 });
+	assert.match(textOf(history.content), /status="completed" history="true">\nanswer:hello/);
+	assert.deepEqual(history.details.results, [{ ...waited.details.results[0], history: true }]);
+	assert.deepEqual((await root.callResult({ action: "wait", target: "worker", timeout: 10 })).details, { results: [], pending: [] });
+	const listed = await root.callResult({ action: "list", limit: 1 });
+	assert.deepEqual(listed.details, { total: 1, agents: [{ id, name: "worker", ownerId: root.session.sessionManager.getSessionId(), state: "idle" }] });
+	assert.deepEqual((await root.callResult({ action: "list", offset: 1 })).details, { total: 1, agents: [] });
 	assert.match(await root.call({ action: "list" }), new RegExp(`^worker \\(${idOf(spawned)}\\)  idle  `));
 	await root.close();
+});
+
+test("wait details bound result text and leave omitted results unread", async () => {
+	const root = await startRoot();
+	try {
+		root.state.hold = gate();
+		await root.call({ action: "spawn", name: "long", message: "line\n".repeat(2500) });
+		await root.call({ action: "spawn", name: "short", message: "hello" });
+		root.state.hold.open();
+		const result = await root.callResult({ action: "wait", target: ["long", "short"], timeout: 10 });
+		assert.equal(result.details.truncation.truncated, true);
+		assert.ok(textOf(result.content).includes(result.details.fullOutputPath));
+		assert.equal(result.details.results.length, 2);
+		assert.equal(result.details.results[0].name, "long");
+		assert.ok(textOf(result.content).includes(result.details.results[0].result));
+		assert.equal(result.details.results[1].name, "short");
+		assert.equal(Object.hasOwn(result.details.results[1], "result"), false);
+		assert.equal(await root.call({ action: "wait", target: "short", timeout: 10 }), "answer:hello|seen:hello");
+	} finally {
+		await root.close();
+	}
 });
 
 test("the owner is notified when an input ends while it is not waiting", async () => {

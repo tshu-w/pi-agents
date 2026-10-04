@@ -27,23 +27,35 @@ function resultBlock({ agent, input, history }: WaitResult, ids: string[]): stri
 	return `<agent-result name="${agent.name}" id="${shortId(agent.id, ids)}" status="${input.state}"${history ? ' history="true"' : ""}>\n${input.result ?? ""}\n</agent-result>`;
 }
 
+function resultDetails({ agent, input, history }: WaitResult, result?: string) {
+	return { id: agent.id, name: agent.name, state: input.state, history, ...(result === undefined ? {} : { result }) };
+}
+
 /** Renders wait results; returns the text and the results the caller has now read. */
 export function renderWait(outcome: WaitOutcome, ids: string[]): { text: string; read: WaitResult[]; details: Record<string, unknown> } {
 	const { results, pending } = outcome;
 	const pendingLine = pending.length > 0 ? `Still pending: ${pending.map((agent) => label(agent, ids)).join(", ")}` : "";
-	if (results.length === 0) return { text: pendingLine || "No results.", read: [], details: { pending: pending.map((agent) => agent.id) } };
+	if (results.length === 0) return { text: pendingLine || "No results.", read: [], details: { results: [], pending: pending.map((agent) => agent.id) } };
 	const only = results[0]!;
 	if (results.length === 1 && pending.length === 0 && !only.history && only.input.state === "completed") {
 		const bounded = boundText(only.input.result ?? "", "pi-agents-wait");
-		return { text: bounded.text, read: results, details: { ...bounded.details } };
+		return { text: bounded.text, read: results, details: { results: [resultDetails(only, bounded.kept)], pending: [], ...bounded.details } };
 	}
-	const bounded = boundBlocks(results.map((result) => resultBlock(result, ids)), "agent-result", "pi-agents-wait");
+	const blocks = results.map((result) => resultBlock(result, ids));
+	const bounded = boundBlocks(blocks, "agent-result", "pi-agents-wait");
+	let offset = 0;
+	const details = results.map((result, index) => {
+		const block = blocks[index]!;
+		const available = Math.max(0, bounded.kept.length - offset - block.indexOf("\n") - 1);
+		offset += block.length + 2;
+		return resultDetails(result, index < bounded.shown ? (result.input.result ?? "").slice(0, available) : undefined);
+	});
 	let text = bounded.text;
 	const read = results.slice(0, bounded.shown);
 	const omitted = results.slice(bounded.shown);
 	if (omitted.length > 0) text += `\n\n[Results omitted: ${omitted.map((result) => label(result.agent, ids)).join(", ")}. Use wait with fewer targets.]`;
 	if (pendingLine) text += `\n\n${pendingLine}`;
-	return { text, read, details: { pending: pending.map((agent) => agent.id), ...bounded.details } };
+	return { text, read, details: { results: details, pending: pending.map((agent) => agent.id), ...bounded.details } };
 }
 
 /** Registers the `agent` tool. */
@@ -168,12 +180,13 @@ export function registerAgentTool(
 					const entries = all.filter((entry) => entry.id !== self.id && (!params.state || entry.state === params.state));
 					const items = searchEntries(entries, params.query);
 					const page = items.slice(offset, offset + limit);
-					if (page.length === 0) return { content: [{ type: "text", text: "No matching Agents." }], details: { total: items.length } };
+					const agents = page.map(({ entry: { id, name, ownerId, state } }) => ({ id, name, ownerId, state }));
+					if (page.length === 0) return { content: [{ type: "text", text: "No matching Agents." }], details: { total: items.length, agents } };
 					const lines = page.map((item) => listLine(item, all.map((entry) => entry.id)));
 					const remaining = items.length - offset - page.length;
 					if (remaining > 0) lines.push(`[${remaining} more results. Use offset=${offset + page.length} to continue.]`);
 					const text = boundText(lines.join("\n"), "pi-agents-list");
-					return { content: [{ type: "text", text: text.text }], details: { total: items.length, ...text.details } };
+					return { content: [{ type: "text", text: text.text }], details: { total: items.length, agents, ...text.details } };
 				}
 				case "abort": {
 					rejectFields(params, "abort", ["name", "message", "cwd", "context", "model", "thinkingLevel", "deliverAs", "history", "timeout", "query", "state", "limit", "offset"]);

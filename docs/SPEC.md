@@ -163,7 +163,8 @@ parameters:
 
 results:
 
-In these formats, `<id>` is the Agent's short ID.
+In these formats, `<id>` is the Agent's short ID. Details use full IDs;
+arrays remain present when empty.
 
 `spawn`:
 
@@ -172,12 +173,25 @@ Agent <name> (<id>) started.
 Agent <name> (<id>) queued: all <N> slots are busy.
 ```
 
+Details:
+
+```text
+{ id, name, queued }
+```
+
 `send` returns acceptance, not completion:
 
 ```text
 Input accepted by <name> (<id>).
 Input accepted by <name> (<id>), queued: all <N> slots are busy.
 Write accepted by <name> (<id>), ...
+```
+
+Details:
+
+```text
+followUp / steer: { id, queued }
+write:           { ids }
 ```
 
 `wait` returns one block per result, followed by pending Agents on timeout:
@@ -197,6 +211,14 @@ alone. When there are no results or pending inputs:
 ```text
 No results.
 ```
+
+Details:
+
+```text
+{ results: [{ id, name, state, history, result? }], pending: [id] }
+```
+
+`state` is the input outcome (§5); `history` marks a previously read result.
 
 `list` returns one entry per Agent. With a query, entries are ordered by
 their most recent match. When a summary or user message matches, the entry
@@ -219,11 +241,26 @@ When no Agents match:
 No matching Agents.
 ```
 
+Details:
+
+```text
+{ total, agents: [{ id, name?, ownerId?, state }] }
+```
+
+`agents` is the current page; `total` counts all matches. `state` is the
+Agent's current state (§3).
+
 `abort`:
 
 ```text
 Agent <name> (<id>) aborted.
 Agent <name> (<id>) has no turn or queued inputs.
+```
+
+Details:
+
+```text
+{ id, aborted }
 ```
 
 For unnamed root Agents, show the ID without a name or parentheses.
@@ -268,6 +305,10 @@ counts as read. Omitted results stay unread, and the text ends with:
 ```text
 [Results omitted: <name> (<id>), ... Use wait with fewer targets.]
 ```
+
+Details retain metadata, `truncation`, and `fullOutputPath`.
+`wait.results[].result` contains only retained text and is absent for
+omitted results.
 
 messages:
 
