@@ -19,26 +19,31 @@ let lease;
 try { lease = acquireOwnership({ stateDir: paths.ownership, sessionId: 'supervisor', sessionFile: paths.supervisor }); }
 catch (error) { if (error.code === 'SESSION_OCCUPIED') process.exit(0); throw error; }
 const children = new Set();
+const IDLE_MS = 30000;
+let waking = 0, lastWorkerActivity = Date.now();
 const stop = new AbortController();
 const { parseSessionEntries, buildSessionContext } = await import(pathToFileURL(piIndex).href);
 const router = createSupervisor({
   deliverToWorker: (message, options) => request(paths.worker(message.recipient), { action: 'deliver', message }, options),
   async wake(id, { signal }) {
-    const combined = AbortSignal.any([signal, stop.signal]);
-    const roots = await discoverRoots(sessionRoot, { extraFiles: await rememberedFiles(paths), signal: combined });
-    const root = roots.find(entry => entry.id === id);
-    if (!root) throw Object.assign(new Error(`No root Agent ${id}`), { code: 'UNKNOWN_AGENT' });
-    const entries = parseSessionEntries(await readFile(root.sessionFile, { encoding: 'utf8', signal: combined }));
-    const model = buildSessionContext(entries).model;
-    reserve(paths.ownership, root.sessionFile, id).release();
-    await launchWorker(root, {
-      cli, extension, model, paths, signal: combined,
-      onSpawn(child) {
-        children.add(child);
-        child.once('exit', () => children.delete(child));
-        child.once('error', () => { if (!child.pid) children.delete(child); });
-      },
-    });
+    waking++;
+    try {
+      const combined = AbortSignal.any([signal, stop.signal]);
+      const roots = await discoverRoots(sessionRoot, { extraFiles: await rememberedFiles(paths), signal: combined });
+      const root = roots.find(entry => entry.id === id);
+      if (!root) throw Object.assign(new Error(`No root Agent ${id}`), { code: 'UNKNOWN_AGENT' });
+      const entries = parseSessionEntries(await readFile(root.sessionFile, { encoding: 'utf8', signal: combined }));
+      const model = buildSessionContext(entries).model;
+      reserve(paths.ownership, root.sessionFile, id).release();
+      await launchWorker(root, {
+        cli, extension, model, paths, signal: combined,
+        onSpawn(child) {
+          children.add(child);
+          child.once('exit', () => { children.delete(child); lastWorkerActivity = Date.now(); });
+          child.once('error', () => { if (!child.pid) { children.delete(child); lastWorkerActivity = Date.now(); } });
+        },
+      });
+    } finally { waking--; lastWorkerActivity = Date.now(); }
   },
 });
 await recoverSocket(paths.supervisor);
@@ -48,15 +53,20 @@ const server = await listenWorker(paths.supervisor, {
   accept: (message, options) => router.accept(message, options),
 });
 let closing;
-function shutdown() {
+const idleTimer = setInterval(() => shutdown(true), 1000);
+function shutdown(idle = false) {
   if (closing) return;
+  if (idle && (waking || children.size || Date.now() - lastWorkerActivity < IDLE_MS)) return;
+  const closed = idle ? server.closeIfIdle(IDLE_MS) : server.close();
+  if (!closed) return;
   closing = true;
+  clearInterval(idleTimer);
   stop.abort();
-  void server.close().finally(async () => {
+  void closed.finally(async () => {
     await Promise.all([...children].map(child => stopWorker(child)));
     lease.release();
     process.exit(0);
   });
 }
-process.once('SIGTERM', shutdown);
-process.once('SIGINT', shutdown);
+process.once('SIGTERM', () => shutdown());
+process.once('SIGINT', () => shutdown());

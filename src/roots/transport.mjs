@@ -117,11 +117,12 @@ export async function listenWorker(socketPath, { status, accept, serialize = tru
   const clients = new Map();
   const queued = new Map();
   const closedError = Object.assign(fault('WORKER_CLOSED', 'Worker is closing; request was not invoked'), { uncertainDelivery: false });
-  let queue = Promise.resolve(), pending = 0, closing;
+  let queue = Promise.resolve(), pending = 0, closing, lastActivity = Date.now();
   const server = net.createServer({ allowHalfOpen: true }, socket => {
     const controller = new AbortController();
     const { signal } = controller;
     clients.set(socket, controller);
+    lastActivity = Date.now();
     function disconnect() {
       controller.abort();
       queued.get(socket)?.(signal.reason);
@@ -129,7 +130,7 @@ export async function listenWorker(socketPath, { status, accept, serialize = tru
     }
     socket.on('error', () => { disconnect(); socket.destroy(); });
     const timer = setTimeout(() => { disconnect(); socket.destroy(); }, TIMEOUT_MS);
-    socket.on('close', () => { disconnect(); clearTimeout(timer); clients.delete(socket); });
+    socket.on('close', () => { disconnect(); clearTimeout(timer); clients.delete(socket); lastActivity = Date.now(); });
     function respond(error, result) {
       if (socket.destroyed || socket.writableEnded) return;
       let bytes;
@@ -156,7 +157,7 @@ export async function listenWorker(socketPath, { status, accept, serialize = tru
         });
         // Cancelling a queued response must not let later requests bypass its predecessor.
         if (serialized) queue = invocation.catch(() => {});
-        invocation.then(resolve, reject).finally(() => { pending--; });
+        invocation.then(resolve, reject).finally(() => { pending--; lastActivity = Date.now(); });
       });
       work.then(result => respond(null, result), respond);
     });
@@ -183,6 +184,10 @@ export async function listenWorker(socketPath, { status, accept, serialize = tru
   }
   const owned = lstatSync(bindingPath);
   return {
+    closeIfIdle(idleMs) {
+      if (clients.size || pending || Date.now() - lastActivity < idleMs) return;
+      return this.close();
+    },
     close() {
       if (closing) return closing;
       closing = Promise.resolve().then(() => new Promise((resolve, reject) => {
