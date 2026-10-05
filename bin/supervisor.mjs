@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { acquireOwnership, reserve } from '../src/roots/ownership.mjs';
 import { rootPaths } from '../src/roots/paths.mjs';
 import { prepareDirectory, rememberedFiles } from '../src/roots/registry.mjs';
-import { discoverRoots } from '../src/roots/discovery.mjs';
+import { findRoot } from '../src/roots/discovery.mjs';
 import { listenWorker, request } from '../src/roots/transport.mjs';
 import { recoverSocket } from '../src/roots/socket-recovery.mjs';
 import { createSupervisor } from '../src/roots/supervisor.mjs';
@@ -29,8 +29,7 @@ const router = createSupervisor({
     waking++;
     try {
       const combined = AbortSignal.any([signal, stop.signal]);
-      const roots = await discoverRoots(sessionRoot, { extraFiles: await rememberedFiles(paths), signal: combined });
-      const root = roots.find(entry => entry.id === id);
+      const root = await findRoot(sessionRoot, id, { extraFiles: await rememberedFiles(paths), signal: combined });
       if (!root) throw Object.assign(new Error(`No root Agent ${id}`), { code: 'UNKNOWN_AGENT' });
       const entries = parseSessionEntries(await readFile(root.sessionFile, { encoding: 'utf8', signal: combined }));
       const model = buildSessionContext(entries).model;

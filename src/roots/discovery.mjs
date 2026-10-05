@@ -52,7 +52,7 @@ export async function readRootFile(sessionFile, { signal } = {}) {
   return remember({ id: header.id, name, cwd: header.cwd, summary, sessionFile, updatedAt: metadata.mtime.toISOString(), state: 'unknown' });
 }
 
-export async function discoverRoots(sessionRoot, { extraFiles = [], signal } = {}) {
+async function sessionFiles(sessionRoot, extraFiles, signal) {
   signal?.throwIfAborted();
   let directories;
   try { directories = await readdir(sessionRoot, { withFileTypes: true }); }
@@ -71,10 +71,25 @@ export async function discoverRoots(sessionRoot, { extraFiles = [], signal } = {
       if ((entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith('.jsonl')) files.add(join(path, entry.name));
     }
   }
+  return files;
+}
+
+export async function discoverRoots(sessionRoot, { extraFiles = [], signal } = {}) {
   const peers = [];
-  for (const file of files) {
+  for (const file of await sessionFiles(sessionRoot, extraFiles, signal)) {
     const peer = await readRootFile(file, { signal });
     if (peer) peers.push(peer);
   }
   return peers;
+}
+
+// Pi names Session files `<timestamp>_<id>.jsonl`; read those first and scan every
+// Session only when no such file is the root.
+export async function findRoot(sessionRoot, id, { extraFiles = [], signal } = {}) {
+  for (const file of await sessionFiles(sessionRoot, extraFiles, signal)) {
+    if (!file.endsWith(`_${id}.jsonl`)) continue;
+    const peer = await readRootFile(file, { signal });
+    if (peer?.id === id) return peer;
+  }
+  return (await discoverRoots(sessionRoot, { extraFiles, signal })).find(entry => entry.id === id);
 }
