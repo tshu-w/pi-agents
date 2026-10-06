@@ -1,7 +1,7 @@
 import { readdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { discoverRoots } from './discovery.mjs';
-import { reserve } from './ownership.mjs';
+import { isOccupied } from './ownership.mjs';
 import { rememberedFiles } from './registry.mjs';
 import { request } from './transport.mjs';
 
@@ -10,9 +10,6 @@ import { request } from './transport.mjs';
  * `busy` when another runtime holds the Session without answering, `offline` otherwise.
  */
 export async function rootSnapshot(paths, sessionRoot, { signal, current } = {}) {
-  const extraFiles = await rememberedFiles(paths);
-  if (current?.sessionFile) extraFiles.push(current.sessionFile);
-  const records = await discoverRoots(sessionRoot, { extraFiles, signal });
   let sockets;
   try { sockets = (await readdir(paths.directory)).filter(name => /^w-[a-f0-9]{24}\.sock$/.test(name)); }
   catch (error) { if (error.code === 'ENOENT') sockets = []; else throw error; }
@@ -29,23 +26,21 @@ export async function rootSnapshot(paths, sessionRoot, { signal, current } = {})
     }
   }
   if (current) online.set(current.id, current);
+  // Online roots report their own metadata; skip reparsing their growing Session files.
+  const skip = new Set([...online.values()].map(root => root.sessionFile));
+  const records = await discoverRoots(sessionRoot, { extraFiles: await rememberedFiles(paths), skip, signal });
   const roots = [];
   for (const record of records) {
     signal?.throwIfAborted();
     if (online.has(record.id)) continue;
     try {
-      reserve(paths.ownership, await realpath(record.sessionFile), record.id).release();
-      record.state = 'offline';
+      record.state = isOccupied(paths.ownership, await realpath(record.sessionFile), record.id) ? 'busy' : 'offline';
     } catch (error) {
       if (error.code === 'ENOENT') continue;
-      if (error.code !== 'SESSION_OCCUPIED') throw error;
-      record.state = 'busy';
+      throw error;
     }
     roots.push(record);
   }
-  for (const root of online.values()) {
-    const record = records.find(entry => entry.id === root.id);
-    roots.push({ ...record, ...root });
-  }
+  roots.push(...online.values());
   return roots;
 }

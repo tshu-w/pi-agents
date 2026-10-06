@@ -1,14 +1,38 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquireOwnership, canonicalPath, SessionOccupiedError } from './ownership.mjs';
 
 // Pi does not export its resolvePath; session paths only need ~ and file:// handling.
-function resolvePath(input) {
+export function resolvePath(input) {
   const path = input.startsWith('file://') ? fileURLToPath(input) : input;
   return resolve(path === '~' ? homedir() : path.startsWith('~/') ? join(homedir(), path.slice(2)) : path);
+}
+
+/** The ID in a Session file's header, its first parseable entry. Reads only up to that entry. */
+export function readSessionId(path) {
+  let fd;
+  try { fd = openSync(path, 'r'); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  try {
+    let rest = Buffer.alloc(0);
+    for (;;) {
+      // Grow reads with an unfinished line so long lines stay linear.
+      const chunk = Buffer.alloc(Math.max(65536, rest.length));
+      const bytes = readSync(fd, chunk);
+      const data = Buffer.concat([rest, chunk.subarray(0, bytes)]);
+      const end = bytes ? data.lastIndexOf(10) + 1 : data.length;
+      for (const line of data.subarray(0, end).toString('utf8').split('\n')) {
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; }
+        if (entry) return entry.type === 'session' && typeof entry.id === 'string' ? entry.id : undefined;
+      }
+      if (!bytes) return;
+      rest = data.subarray(end);
+    }
+  } finally { closeSync(fd); }
 }
 
 const installed = Symbol.for('pi-agents.guard');
@@ -44,10 +68,8 @@ export function installGuard({ SessionManager, AgentSession, AgentSessionRuntime
   }
   function reserveFile(held, file) {
     reserve(held, `path:${canonicalPath(file)}`, file);
-    if (!existsSync(file)) return;
-    const entries = parseSessionEntries(readFileSync(file, 'utf8')).filter(Boolean);
-    const header = entries[0];
-    if (header?.type === 'session' && typeof header.id === 'string') reserve(held, `id:${header.id}`, file);
+    const id = readSessionId(file);
+    if (id !== undefined) reserve(held, `id:${id}`, file);
   }
   function keys(sm) {
     return [`path:${canonicalPath(sm.getSessionFile())}`, `id:${sm.getSessionId()}`];

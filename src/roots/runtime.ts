@@ -2,9 +2,9 @@ import { buildSessionContext, getAgentDir, getPackageDir, hasTrustRequiringProje
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { treeMetadata } from "../agents/agents.ts";
 import { isBackgroundWorker } from "./background.mjs";
 import { sendViaSupervisor } from "./client.mjs";
-import { isOwnedSession } from "./discovery.mjs";
 import { rootPaths } from "./paths.mjs";
 import { rememberRoot } from "./registry.mjs";
 import { rootSnapshot } from "./snapshot.mjs";
@@ -49,10 +49,6 @@ function piEntries(): { cli: string; index: string } {
 		cli: existsSync(bundled) ? bundled : join(dir, "dist/cli.js"),
 		index: existsSync(bundledIndex) ? bundledIndex : join(dir, "dist/index.js"),
 	};
-}
-
-function offlineError(label: string): Error {
-	return new Error(`${label} is offline.`);
 }
 
 /**
@@ -166,7 +162,7 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 					receipt = await request(paths.worker(target.id), { action: "deliver", message }, { signal });
 				} catch (error) {
 					const code = (error as NodeJS.ErrnoException).code;
-					if (code === "ENOENT" || code === "ECONNREFUSED") throw offlineError(target.label);
+					if (code === "ENOENT" || code === "ECONNREFUSED") throw new Error(`${target.label} is offline.`);
 					throw error;
 				}
 			} else {
@@ -184,7 +180,7 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 				active = ctx;
 				return;
 			}
-			if (!ctx.sessionManager.getSessionFile() || isOwnedSession(ctx.sessionManager.getEntries())) return;
+			if (!ctx.sessionManager.getSessionFile() || treeMetadata(ctx)) return;
 			active = ctx;
 			if (isBackgroundWorker(ctx) && process.env.PI_AGENTS_EXPECTED_MODEL) {
 				const expected = JSON.parse(process.env.PI_AGENTS_EXPECTED_MODEL) as { provider: string; modelId: string };

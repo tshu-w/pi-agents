@@ -74,9 +74,10 @@ async function sessionFiles(sessionRoot, extraFiles, signal) {
   return files;
 }
 
-export async function discoverRoots(sessionRoot, { extraFiles = [], signal } = {}) {
+export async function discoverRoots(sessionRoot, { extraFiles = [], skip, signal } = {}) {
   const peers = [];
   for (const file of await sessionFiles(sessionRoot, extraFiles, signal)) {
+    if (skip?.has(file)) continue;
     const peer = await readRootFile(file, { signal });
     if (peer) peers.push(peer);
   }

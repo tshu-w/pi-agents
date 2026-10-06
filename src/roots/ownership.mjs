@@ -41,6 +41,10 @@ function readOwner(fd, sessionId) {
   if (owner?.sessionId === sessionId && Number.isSafeInteger(owner.pid) && typeof owner.sessionFile === 'string') return owner;
 }
 
+function lockFile(stateDir, sessionId) {
+  return join(stateDir, `${createHash('sha256').update(sessionId).digest('hex')}.lock`);
+}
+
 function acquireLock({ stateDir, sessionId, sessionFile, background = false }) {
   if (typeof sessionId !== 'string' || sessionId.length === 0) throw new Error('Session ID is required');
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
@@ -48,8 +52,7 @@ function acquireLock({ stateDir, sessionId, sessionFile, background = false }) {
   if (!directory.isDirectory() || directory.uid !== process.getuid() || (directory.mode & 0o077) !== 0) {
     throw new Error(`Ownership directory must be a private directory owned by the current user: ${stateDir}`);
   }
-  const key = createHash('sha256').update(sessionId).digest('hex');
-  const fd = openSync(join(stateDir, `${key}.lock`), constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600);
+  const fd = openSync(lockFile(stateDir, sessionId), constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600);
   try {
     const file = fstatSync(fd);
     if (!file.isFile() || file.uid !== process.getuid() || (file.mode & 0o077) !== 0) {
@@ -77,8 +80,10 @@ function acquireLock({ stateDir, sessionId, sessionFile, background = false }) {
 // guard and a /resume wait share each lock through one reference-counted table.
 const locks = globalThis[Symbol.for('pi-agents.ownership-locks')] ??= new Map();
 
+const tableKey = (stateDir, sessionId) => `${resolve(stateDir)}\n${sessionId}`;
+
 export function acquireOwnership(options) {
-  const key = `${resolve(options.stateDir)}\n${options.sessionId}`;
+  const key = tableKey(options.stateDir, options.sessionId);
   let lock = locks.get(key);
   if (!lock) {
     lock = { lease: acquireLock(options), refs: 0 };
@@ -119,6 +124,27 @@ export function reserveKeys(stateDir, sessionFile, keys, background = false) {
     throw error;
   }
   return { release() { for (const lease of held) lease.release(); } };
+}
+
+// This process may acquire its own locks again, so only another process can hold them.
+function heldElsewhere(stateDir, sessionId) {
+  if (locks.has(tableKey(stateDir, sessionId))) return false;
+  let fd;
+  try { fd = openSync(lockFile(stateDir, sessionId), constants.O_RDONLY | constants.O_NOFOLLOW); }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  try {
+    flockSync(fd, 'shnb');
+    return false;
+  } catch (error) {
+    if (error.code !== 'EAGAIN' && error.code !== 'EWOULDBLOCK') throw error;
+    return true;
+  } finally { closeSync(fd); }
+}
+
+/** Whether `reserve` would find the Session occupied, without creating or acquiring its locks. */
+export function isOccupied(stateDir, sessionFile, id) {
+  const keys = lockKeys(sessionFile, id);
+  return [...keys.map(key => `admission:${key}`), ...keys].some(key => heldElsewhere(stateDir, key));
 }
 
 // Admission locks fence new owners while a /resume waits for a background Worker.

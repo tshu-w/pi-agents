@@ -1,10 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { canonicalPath, lockKeys, reserve, reserveKeys } from './ownership.mjs';
 import { rootPaths } from './paths.mjs';
 import { getBackgroundWorkerStatus, isBackgroundWorker, waitForWorkerExit } from './background.mjs';
+import { readSessionId, resolvePath } from './guard.mjs';
 
 // Pi reloads extension modules but keeps the SessionManager. Retain its lease
 // across reload without allowing a different manager to borrow ownership.
@@ -28,18 +25,6 @@ async function waitAndReserve(paths, file, id, error, signal) {
     signal.throwIfAborted();
     return reserveKeys(paths.ownership, file, keys);
   } finally { admission.release(); }
-}
-
-function readId(path) {
-  let text;
-  try { text = readFileSync(path, 'utf8'); }
-  catch (error) { if (error.code === 'ENOENT') return; throw error; }
-  for (const line of text.split('\n')) {
-    let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
-    if (!entry) continue;
-    return entry.type === 'session' && typeof entry.id === 'string' ? entry.id : undefined;
-  }
 }
 
 const switchers = globalThis[Symbol.for('pi-agents.switch-session')] ??= { byManager: new WeakMap(), patched: false };
@@ -147,13 +132,12 @@ export default function ownershipExtension(pi, runtime = {}) {
     if (blocked && !replacing) return { cancel: true };
     if (event.reason !== 'resume' || !event.targetSessionFile) return;
     try {
-      const raw = event.targetSessionFile;
-      const file = resolve(raw.startsWith('file://') ? fileURLToPath(raw) : raw.startsWith('~/') ? join(homedir(), raw.slice(2)) : raw);
+      const file = resolvePath(event.targetSessionFile);
       const current = ctx.sessionManager.getSessionFile();
       if (current && canonicalPath(file) === canonicalPath(current)) return;
       const transfer = pending.get(pendingKey(file));
       if (transfer) return;
-      const id = readId(file);
+      const id = readSessionId(file);
       const acquired = lease => {
         if (!alive || !lease) {
           lease?.release();

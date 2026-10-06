@@ -126,6 +126,20 @@ test("an input restores the offline root's active branch, which answers and exit
 	assert.equal(existsSync(paths.worker(target.id)), false);
 });
 
+test("a root whose Session another process holds without answering is busy", async () => {
+	const target = offlineRoot("held-d", "held");
+	const ownership = new URL("../src/roots/ownership.mjs", import.meta.url).href;
+	const holder = spawn(process.execPath, ["--input-type=module", "-e",
+		`const { reserve } = await import(${JSON.stringify(ownership)}); reserve(${JSON.stringify(paths.ownership)}, ${JSON.stringify(target.file)}, "held-d"); console.log("held"); setInterval(() => {}, 1000);`,
+	], { stdio: ["ignore", "pipe", "inherit"] });
+	children.push(holder);
+	await new Promise((resolve) => holder.stdout.once("data", resolve));
+	assert.match(await sender.call({ action: "list", query: "held" }), /held \(held-d\)\s+busy/);
+	holder.kill("SIGKILL");
+	await new Promise((resolve) => holder.once("exit", resolve));
+	assert.match(await sender.call({ action: "list", query: "held" }), /held \(held-d\)\s+offline/);
+});
+
 test("a root in another process is listed with its state and cannot be opened twice", async () => {
 	const target = offlineRoot("live-c", "live");
 	const first = runPi(["--session", target.file], target.cwd);

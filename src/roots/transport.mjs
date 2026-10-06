@@ -222,9 +222,6 @@ export async function listenWorker(socketPath, { status, accept, serialize = tru
  * @returns {Promise<any>}
  */
 export async function request(socketPath, input, { signal, timeoutMs = TIMEOUT_MS } = {}) {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2147483647) {
-    throw fault('INVALID_TIMEOUT', 'timeoutMs must be positive and at most 2147483647');
-  }
   const value = validate(input);
   const bytes = encode(value);
   const interrupted = (code, message) => Object.assign(fault(code, message

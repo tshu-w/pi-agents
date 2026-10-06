@@ -82,9 +82,6 @@ export function createSupervisor({ deliverToWorker, wake }) {
   }
   return {
     async accept(message, { signal, timeoutMs = 10000 } = {}) {
-      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2147483647) {
-        throw fault('INVALID_TIMEOUT', 'timeoutMs must be positive and at most 2147483647');
-      }
       let delivering = false;
       return bounded(async options => {
         delivering = true;
