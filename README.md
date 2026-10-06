@@ -24,7 +24,7 @@ Requires Pi 1.0.0 or later. Enable `program` with `{ "defaultTools": ["+program"
 ## Limitations
 
 - Each Agent is one Pi Session; branches are not separate Agents. Use fork/clone to create independent Agents.
-- A Session can be open in only one Pi runtime at a time, even on different branches. Exit the other Pi instance first, or use `/resume` to wait for a background Worker to exit.
+- A Session can be open in only one Pi runtime at a time, even on different branches. Quit the other Pi instance first, or use `/resume` to wait for a background Worker to exit.
 
 ## Configuration
 

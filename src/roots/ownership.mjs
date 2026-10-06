@@ -18,7 +18,7 @@ export class SessionOccupiedError extends Error {
     const label = sessionLabel(sessionId);
     super(owner?.background
       ? `[pi-agents] Session ${label} is in use by a background Worker (PID ${owner.pid}). Use /resume to wait.`
-      : `[pi-agents] Session ${label} is in use${owner ? ` (PID ${owner.pid})` : ''}. Exit the other Pi instance.`);
+      : `[pi-agents] Session ${label} is in use${owner ? ` (PID ${owner.pid})` : ''}. Quit the other Pi instance.`);
     this.name = 'SessionOccupiedError';
     this.code = 'SESSION_OCCUPIED';
     this.sessionId = sessionId;

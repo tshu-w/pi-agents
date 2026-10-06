@@ -146,7 +146,7 @@ test("a root in another process is listed with its state and cannot be opened tw
 
 	const second = runPi(["--session", target.file], target.cwd);
 	await second.exited;
-	assert.match(second.output(), /\[pi-agents\] Session live-c is in use \(PID \d+\)\. Exit the other Pi instance\./);
+	assert.match(second.output(), /\[pi-agents\] Session live-c is in use \(PID \d+\)\. Quit the other Pi instance\./);
 	assert.equal(first.child.exitCode, null);
 
 	const handlers = new Map();
@@ -166,9 +166,9 @@ test("a root in another process is listed with its state and cannot be opened tw
 		shutdown() { shutdown = true; },
 	});
 	assert.match(dialog?.title ?? "", /\[pi-agents\] Session live-c is in use/);
-	assert.deepEqual(dialog.options, ["Exit Pi"]);
+	assert.deepEqual(dialog.options, ["Quit"]);
 	assert.equal(shutdown, false);
-	dismiss("Exit Pi");
+	dismiss("Quit");
 	await opening;
 	assert.equal(shutdown, true);
 
