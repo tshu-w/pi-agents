@@ -8,8 +8,37 @@ import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { listenWorker, request } from '../src/roots/transport.mjs';
 import { sendViaSupervisor } from '../src/roots/client.mjs';
+import { createSupervisor } from '../src/roots/supervisor.mjs';
 
 const message = { id: 'idle-message', sender: { id: 'sender' }, recipient: 'recipient', body: 'hello' };
+
+test('a caller that stops waiting does not cancel a wake shared with a longer caller', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let wakes = 0, wakeSignal, ready = false;
+  const router = createSupervisor({
+    deliverToWorker: async input => {
+      if (!ready) throw Object.assign(new Error('Offline'), { code: 'ENOENT' });
+      return { accepted: true, messageId: input.id };
+    },
+    wake: async (_id, { signal }) => {
+      wakes++;
+      wakeSignal = signal;
+      await new Promise(resolve => setTimeout(resolve, 50));
+      signal.throwIfAborted();
+      ready = true;
+    },
+  });
+  const short = assert.rejects(router.accept(message, { timeoutMs: 20 }), { code: 'ETIMEDOUT', uncertainDelivery: false });
+  const long = router.accept(message, { timeoutMs: 100 });
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  assert.equal(wakes, 1);
+  t.mock.timers.tick(20);
+  await short;
+  assert.equal(wakeSignal.aborted, false);
+  t.mock.timers.tick(30);
+  assert.deepEqual(await long, { accepted: true, messageId: message.id });
+  assert.equal(wakes, 1);
+});
 
 test('idle close waits for connections, handlers and acknowledgements', async t => {
   const directory = await mkdtemp('/tmp/pa-idle-');

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
@@ -103,8 +103,13 @@ after(async () => {
 	rmSync(home, { recursive: true, force: true });
 });
 
-test("an input to an offline root loads it in the background, which answers and exits", async () => {
+test("an input restores the offline root's active branch, which answers and exits", async () => {
 	const target = offlineRoot("offline-a", "reviewer");
+	const timestamp = new Date().toISOString();
+	appendFileSync(target.file, [
+		{ type: "model_change", id: "abandoned", parentId: "n", provider: "unavailable", modelId: "missing", timestamp },
+		{ type: "session_info", id: "active", parentId: "n", name: "reviewer", timestamp },
+	].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
 	assert.match(await sender.call({ action: "list", query: "reviewer" }), /reviewer \(offline-\)\s+offline/);
 	assert.equal(await sender.call({ action: "send", target: "reviewer", message: "hello" }), "Input accepted by reviewer (offline-).");
 	const answered = await until(() => entriesOf(target.file).find((entry) => entry.type === "message" && entry.message.role === "assistant"), "answer");

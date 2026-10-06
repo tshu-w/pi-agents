@@ -44,7 +44,11 @@ const STARTUP_GRACE_MS = 10_000;
 function piEntries(): { cli: string; index: string } {
 	const dir = getPackageDir();
 	const bundled = join(dir, "dist/bundle/cli.js");
-	return { cli: existsSync(bundled) ? bundled : join(dir, "dist/cli.js"), index: join(dir, "dist/index.js") };
+	const bundledIndex = join(dir, "dist/bundle/index.js");
+	return {
+		cli: existsSync(bundled) ? bundled : join(dir, "dist/cli.js"),
+		index: existsSync(bundledIndex) ? bundledIndex : join(dir, "dist/index.js"),
+	};
 }
 
 function offlineError(label: string): Error {

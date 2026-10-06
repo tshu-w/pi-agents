@@ -39,19 +39,21 @@ function validateAck(value, message) {
   return value;
 }
 
+const WAKE_TIMEOUT_MS = 10000;
+
 export function createSupervisor({ deliverToWorker, wake }) {
   const waking = new Map();
-  function wakeOnce(recipient, { signal, timeoutMs }) {
+  function wakeOnce(recipient, { signal }) {
     signal.throwIfAborted();
     let shared = waking.get(recipient);
     if (!shared) {
       shared = { controller: new AbortController(), waiters: 0, settled: false };
       // Register waiters before invoking wake, which may itself cancel a caller.
-      // The first caller supplies the deadline; all waiters own the lifetime.
+      // Each caller bounds its own wait; all waiters own the launch lifetime.
       shared.pending = bounded(options => Promise.resolve().then(() => {
         options.signal.throwIfAborted();
         return wake(recipient, options);
-      }), { signal: shared.controller.signal, timeoutMs },
+      }), { signal: shared.controller.signal, timeoutMs: WAKE_TIMEOUT_MS },
       code => fault(code, `Wake ${code === 'ABORT_ERR' ? 'cancelled' : 'timed out'} for Agent ${recipient}`))
         .finally(() => {
           shared.settled = true;
