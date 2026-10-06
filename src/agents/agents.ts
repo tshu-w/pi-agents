@@ -25,6 +25,7 @@ import {
 	scheduler,
 	shortId,
 	TREE_ENTRY,
+	trackTreeWork,
 	treeChanged,
 	visibleIds,
 	type Delivery,
@@ -254,6 +255,11 @@ export class Agents {
 			sessionFile: agent.record.sessionFile,
 			createdAt: agent.record.createdAt,
 		}));
+	}
+
+	/** Whether an owned Agent has a turn or queued inputs. */
+	live(): boolean {
+		return [...this.agents.values()].some((agent) => agent.turn !== undefined || agent.queue.length > 0);
 	}
 
 	/** Whether an owned Agent is busy, and its queued inputs. */
@@ -629,11 +635,17 @@ export class Agents {
 
 	private notifyLater(agent: Owned, record: InputRecord): void {
 		if (this.program) return;
+		// The tree stays busy until the notification is delivered.
+		const release = trackTreeWork(this.self.rootId);
 		queueMicrotask(() => {
-			if (this.closing || record.notified || agent.waiters > 0) return;
-			record.notified = true;
-			this.persist(agent);
-			this.notify(`Agent ${label(agent.record, this.ids())} ${record.state}.`);
+			try {
+				if (this.closing || record.notified || agent.waiters > 0) return;
+				record.notified = true;
+				this.persist(agent);
+				this.notify(`Agent ${label(agent.record, this.ids())} ${record.state}.`);
+			} finally {
+				release();
+			}
 		});
 	}
 
@@ -659,6 +671,8 @@ export class Agents {
 	private agent(id: string): Owned {
 		const agent = this.agents.get(id);
 		if (!agent) throw new Error(`Agent ${id} is not owned by ${this.self.id}.`);
+		// Inputs after shutdown would never run.
+		if (this.closing) throw new Error(`Agent ${label(agent.record, this.ids())} is offline.`);
 		return agent;
 	}
 

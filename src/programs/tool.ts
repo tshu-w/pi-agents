@@ -73,7 +73,7 @@ export function registerProgramTools(
 		current: Parameters<typeof executeProgram>[3],
 		options: Pick<ProgramRunOptions, "timeout" | "onUpdate" | "background" | "abort">,
 	) => {
-		const scope = programScope(id, caller, pi, current, { agentDir, limits: settings, extensions: settings.extensions });
+		const scope = programScope(id, caller, pi, current, { agentDir, limits: settings, extensions: settings.extensions, background: options.background === true });
 		try {
 			return await executeProgram(toolCallId, code, signal, current, {
 				...options,

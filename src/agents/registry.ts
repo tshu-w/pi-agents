@@ -16,8 +16,12 @@ export interface AgentNode {
 	/** The node whose tree this node sees: its root, or the Program its Agents belong to. */
 	scopeId: string;
 	ownerId?: string;
-	/** A Program that owns Agents; it is not an Agent and no Agent sees it. */
+	/** A Program that owns Agents; no Agent sees it, but the user sees it in the task panel and the Agent viewer. */
 	program?: boolean;
+	/** Whether a Program runs in the background. */
+	background?: boolean;
+	/** When a Program started. */
+	createdAt?: string;
 	name(): string | undefined;
 	cwd(): string;
 	busy(): boolean;
@@ -44,6 +48,8 @@ interface Shared {
 	scheduler: TreeScheduler;
 	nodes: Map<string, AgentNode>;
 	listeners?: Set<() => void>;
+	/** Work that keeps a tree busy, by the ID of its root. */
+	work?: Map<symbol, string>;
 	/** The other root Agents last listed, for short IDs shown to a root Agent. */
 	rootIds?: string[];
 }
@@ -55,6 +61,7 @@ const shared = ((globalThis as Record<symbol, unknown>)[Symbol.for("pi-agents:ru
 // Child Sessions load their own copy of this module; keep shared state but adopt current methods.
 Object.setPrototypeOf(shared.scheduler, TreeScheduler.prototype);
 const listeners = shared.listeners ??= new Set();
+const work = shared.work ??= new Map();
 
 export const nodes = shared.nodes;
 export const scheduler = shared.scheduler;
@@ -67,6 +74,29 @@ export function onTreeChange(listener: () => void): () => void {
 
 export function treeChanged(): void {
 	for (const listener of listeners) listener();
+}
+
+/** Keeps a tree busy until the returned function is called. */
+export function trackTreeWork(rootId: string): () => void {
+	const token = Symbol(rootId);
+	work.set(token, rootId);
+	treeChanged();
+	return () => {
+		if (work.delete(token)) treeChanged();
+	};
+}
+
+/** The Programs a node runs, oldest first. */
+export function programsOf(node: AgentNode): AgentNode[] {
+	return [...shared.nodes.values()]
+		.filter((program) => program.program && program.ownerId === node.id)
+		.sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
+}
+
+/** `Program <short ID>`, unique among its caller's running Programs. */
+export function programLabel(program: AgentNode): string {
+	const owner = program.ownerId === undefined ? undefined : shared.nodes.get(program.ownerId);
+	return `Program ${shortId(program.id, owner ? programsOf(owner).map((other) => other.id) : [])}`;
 }
 
 /** The shortest prefix of `id`, at least 8 characters, that none of the other `ids` starts with. */
@@ -204,7 +234,9 @@ export function receivedMessageIds(ctx: ExtensionContext): string[] {
 			: []);
 }
 
-/** Whether a tree has no inputs that have not ended. */
+/** Whether a tree has no live work: unended inputs, busy or queued owned Agents, background Programs, or undelivered notifications. */
 export function treeIdle(rootId: string): boolean {
-	return shared.scheduler.outstanding(rootId) === 0;
+	return shared.scheduler.outstanding(rootId) === 0 &&
+		![...work.values()].includes(rootId) &&
+		![...shared.nodes.values()].some((node) => node.rootId === rootId && node.agents.live());
 }

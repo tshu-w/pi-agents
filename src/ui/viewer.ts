@@ -32,7 +32,7 @@ import {
 	type SelectItem,
 	type TUI,
 } from "@earendil-works/pi-tui";
-import { MESSAGE_TYPE, nodes, onTreeChange, treeEntries, type AgentNode, type Entry } from "../agents/registry.ts";
+import { MESSAGE_TYPE, nodes, onTreeChange, programLabel, programsOf, type AgentNode, type Entry } from "../agents/registry.ts";
 import { firstInput } from "../agents/search.ts";
 import { execFileSync } from "node:child_process";
 
@@ -382,14 +382,19 @@ class ListSelector extends Container implements Focusable {
 	}
 }
 
-/** The current Agent's owned Agents, busy ones first and newest first within each group. */
+/** The Agents in the current Agent's tree, including Programs' Agents, busy ones first and newest first within each group. */
 export function ownedEntries(self: AgentNode): Entry[] {
-	const owned = new Set([self.id]);
-	return treeEntries(self.scopeId).filter((entry) => {
-		if (entry.ownerId === undefined || !owned.has(entry.ownerId)) return false;
-		owned.add(entry.id);
-		return true;
-	}).sort((a, b) => Number(b.state === "busy") - Number(a.state === "busy") || (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+	const entries: Entry[] = [];
+	const visit = (node: AgentNode) => {
+		for (const agent of node.agents.owned()) {
+			entries.push({ ...agent, ownerId: node.id });
+			const loaded = nodes.get(agent.id);
+			if (loaded) visit(loaded);
+		}
+		for (const program of programsOf(node)) visit(program);
+	};
+	visit(self);
+	return entries.sort((a, b) => Number(b.state === "busy") - Number(a.state === "busy") || (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
 }
 
 /** `/agents`: picks an owned Agent and opens it in the viewer. */
@@ -401,12 +406,14 @@ export async function openAgentViewer(ctx: ExtensionContext, self: AgentNode, pa
 		return;
 	}
 	const byId = new Map(entries.map((entry) => [entry.id, entry]));
-	// An Agent under another owned Agent is named with its owners up to the current Agent.
-	const path = (entry: Entry): string => {
-		const owner = entry.ownerId === undefined ? undefined : byId.get(entry.ownerId);
-		const name = entry.name ?? entry.id;
-		return owner ? `${name} ‹ ${path(owner)}` : name;
+	// An Agent under another owned Agent or a Program is named with its owners up to the current Agent.
+	const owners = (ownerId: string | undefined): string => {
+		const owner = ownerId === undefined ? undefined : byId.get(ownerId);
+		if (owner) return ` ‹ ${path(owner)}`;
+		const program = ownerId === undefined ? undefined : nodes.get(ownerId);
+		return program?.program ? ` ‹ ${programLabel(program)}${owners(program.ownerId)}` : "";
 	};
+	const path = (entry: Entry): string => `${entry.name ?? entry.id}${owners(entry.ownerId)}`;
 	const items: SelectItem[] = entries.map((entry) => ({
 		value: entry.id,
 		label: path(entry),

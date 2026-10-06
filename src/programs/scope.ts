@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Agents, SUBMIT_RESULT_TOOL_NAME, THINKING_LEVELS, type Limits } from "../agents/agents.ts";
-import { label, messageText, nodes, visibleIds, type AgentNode } from "../agents/registry.ts";
+import { label, messageText, nodes, treeChanged, visibleIds, type AgentNode } from "../agents/registry.ts";
 import type { AgentOptions, ProgramAgentHost, SendOptions } from "./sandbox.ts";
 
 const CLEANUP_TIMEOUT_MS = 10_000;
@@ -22,7 +22,7 @@ export function programScope(
 	caller: AgentNode,
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	options: { agentDir: string; limits: Limits; extensions: string[] },
+	options: { agentDir: string; limits: Limits; extensions: string[]; background: boolean },
 ): ProgramScope {
 	const self = { id, rootId: caller.rootId, scopeId: id, ownerId: caller.id, name: () => "program" };
 	const agents = new Agents(pi, self, options.agentDir, options.limits, options.extensions, true);
@@ -30,12 +30,15 @@ export function programScope(
 	nodes.set(id, {
 		...self,
 		program: true,
+		background: options.background,
+		createdAt: new Date().toISOString(),
 		agents,
 		cwd: () => ctx.cwd,
 		busy: () => true,
 		sessionFile: () => undefined,
 		receive: () => { throw new Error("A Program does not receive messages."); },
 	});
+	treeChanged();
 	const from = { id, name: self.name() };
 	const host: ProgramAgentHost = {
 		create: async (agentId, name, agentOptions: AgentOptions) => {
@@ -87,6 +90,7 @@ export function programScope(
 			} finally {
 				clearTimeout(timer);
 				nodes.delete(id);
+				treeChanged();
 			}
 		},
 	};

@@ -25,8 +25,10 @@ target is an ID or a unique ID prefix.
 Agents created with `agent()` belong to the Program: it gets their results
 from `send()`, without `wait` or notifications, and only it can abort
 them. Each of these Agents and the Agents under it see only one another,
-and no other Agent sees them. When the Program ends, their unfinished
-inputs end as `aborted`, and the Agents go offline for good.
+and no other Agent sees them. The user sees them in `/tasks` and `/agents`,
+and can talk to them or interrupt them in the viewer; an interrupted input
+makes its `send()` throw. When the Program ends, their unfinished inputs end
+as `aborted`, and the Agents go offline for good, from the bottom up.
 
 A Program is `running` until it ends in one of three ways:
 
@@ -89,7 +91,8 @@ input fails. `send()` throws if `schema` is used without `followUp`.
 ## 4. Lifecycle
 
 When a Program ends, it cancels its unfinished tool calls and aborts its
-Agents' unfinished inputs. It returns its result after cleanup, or after a
+Agents' unfinished inputs, and waits for its Agents to go offline. It
+returns its result after cleanup, or after a
 cleanup timeout if some work does not stop. Stopping a Program does not
 undo completed tool calls.
 

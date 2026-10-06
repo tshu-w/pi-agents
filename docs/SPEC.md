@@ -72,8 +72,12 @@ not yet handled is lost if the recipient exits.
 An input to an offline Agent wakes it. A write never wakes an Agent.
 
 Owned Agents run independently of their owner's turns. When their owner
-goes offline, they go offline too and their unfinished inputs end as
-`aborted`. They return as `idle` when their owner is loaded again.
+goes offline, they go offline too, from the bottom of the tree up, and their
+unfinished inputs end as `aborted`. They return as `idle` when their owner
+is loaded again.
+
+A root Agent is `busy` while it has a turn in progress or pending messages,
+or while its tree has live work (§7 Task panel); otherwise it is `idle`.
 
 ## 4. Visibility and limits
 
@@ -344,23 +348,25 @@ A panel above the editor shows the current Agent's live work:
       Agent <name> (<id>)  <state>  <N> queued
         Agent <name> (<id>)  <state>
       Program <id>  running
+        Agent <name> (<id>)  <state>
       +<N> more
 
-The live work is the owned Agents that are busy or have queued inputs and
-the running background Programs. The rows list those Agents as a tree in
-the order they were spawned, each under its owner, with the owners needed to
-keep the tree; then running background Programs, newest first. Rows that do
-not fit are counted in the last row.
+The live work is the owned Agents that are busy or have queued inputs, and
+the running background Programs with their Agents that are busy or have
+queued inputs. The rows list them as a tree in the order they started, each
+under its owner and each Program under its caller, with the owners needed to
+keep the tree. Rows that do not fit are counted in the last row.
 
 The panel updates as states change and is shown while it has a row.
 `/tasks` hides or shows it.
 
 ### Agent viewer
 
-`/agents` lists the current Agent's owned Agents, busy ones first and newest
-first within each group, with their state and first input, and opens the
-selected one in a viewer. An Agent not owned by the current Agent is named
-with its owners up to it, as `<name> ‹ <owner> ‹ …`. The viewer shows the
+`/agents` lists the Agents in the current Agent's tree, including Programs'
+Agents, busy ones first and newest first within each group, with their state
+and first input, and opens the selected one in a viewer. An Agent not owned
+by the current Agent is named with its owners up to it, as
+`<name> ‹ <owner> ‹ …`, where a Program is `Program <id>`. The viewer shows the
 Agent's conversation and updates while it works; the current Session keeps
 running behind it.
 
@@ -399,6 +405,7 @@ in its owner's process.
 
 A delivered message enters the recipient's current branch. An offline root
 Agent is loaded in the background with its saved working directory and
-model and the current configuration, and exits after handling its inputs.
+model and the current configuration, and exits once it has handled its
+inputs and is `idle` (§3).
 One runtime uses a Session at a time. If a Session is occupied at interactive
 startup, its ownership error stays visible until the user dismisses it, then Pi exits.

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deferred, waitForChange, type Deferred } from "../agents/agents.ts";
-import { shortId } from "../agents/registry.ts";
+import { shortId, trackTreeWork } from "../agents/registry.ts";
 import { boundBlocks, boundText } from "../output.ts";
 import type { ProgramFiles, ProgramOutcome, ProgramRunResult } from "./execute.ts";
 
@@ -54,6 +54,7 @@ export class Programs {
 	private closing = false;
 
 	constructor(
+		private rootId: string,
 		private hooks: {
 			appendEntry(customType: string, data: unknown): void;
 			notify(text: string): void;
@@ -85,12 +86,14 @@ export class Programs {
 		const controller = new AbortController();
 		const program: Running = { record, controller, waiters: 0 };
 		this.programs.set(record.id, program);
+		// The tree stays busy until the Program ends and its notification is delivered.
+		const release = trackTreeWork(this.rootId);
 		this.persist(record);
 		this.hooks.changed?.();
 		program.done = run(record.id, controller.signal, () => controller.abort(new Error("Program stopped"))).then(
 			({ outcome, result, files }) => this.end(program, outcome, result.content, result.isError === true, files),
 			(error: unknown) => this.end(program, "failed", [{ type: "text", text: `Script failed\nOutput:\nScript error:\n${error instanceof Error ? error.message : String(error)}` }], true),
-		);
+		).finally(release);
 		return record;
 	}
 

@@ -1,46 +1,58 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, TruncatedText } from "@earendil-works/pi-tui";
-import { label, nodes, onTreeChange, treeEntries, type AgentNode } from "../agents/registry.ts";
-import type { Programs } from "../programs/programs.ts";
+import { label, nodes, onTreeChange, programLabel, programsOf, type AgentNode } from "../agents/registry.ts";
 
 const WIDGET_KEY = "pi-agents";
 
 const MAX_LINES = 10;
 
-/** The task panel: the Agent's live owned Agents as a tree, then its running background Programs. Empty when none. */
-function panelLines(self: AgentNode, programs: Programs | undefined): string[] {
-	const depth = new Map<string, number>([[self.id, 0]]);
-	const parent = new Map<string, string>();
-	const rows = new Map<string, string>();
-	const shown = new Set<string>();
+/**
+ * The task panel: the Agent's live owned Agents and running background Programs as a tree, in the
+ * order they started, with their Programs' live Agents under them. Empty when none.
+ */
+export function panelLines(self: AgentNode): string[] {
+	const rows: Array<{ line: string; parent?: number; shown: boolean }> = [];
 	const ids = self.agents.ids();
 	let live = 0;
-	for (const entry of treeEntries(self.scopeId)) {
-		const level = entry.ownerId === undefined ? undefined : depth.get(entry.ownerId);
-		if (level === undefined) continue;
-		depth.set(entry.id, level + 1);
-		parent.set(entry.id, entry.ownerId!);
-		const own = nodes.get(entry.ownerId!)?.agents.counts(entry.id);
-		const queued = own?.queued ? [`${own.queued} queued`] : [];
-		rows.set(entry.id, `${"  ".repeat(level)}Agent ${[label(entry, ids), entry.state, ...queued].join("  ")}`);
-		// A live Agent is listed with its owners, so the tree stays readable.
-		if (own?.busy || queued.length > 0) {
-			live += 1;
-			for (let id: string | undefined = entry.id; id !== undefined && id !== self.id && !shown.has(id); id = parent.get(id)) shown.add(id);
+	// A live row is listed with its owners, so the tree stays readable.
+	const show = (index: number | undefined) => {
+		for (let row = index === undefined ? undefined : rows[index]; row && !row.shown; row = row.parent === undefined ? undefined : rows[row.parent]) row.shown = true;
+	};
+	const visit = (node: AgentNode, level: number, parent?: number) => {
+		const children = [
+			...node.agents.owned().map((entry) => ({ at: entry.createdAt ?? "", entry })),
+			...programsOf(node).filter((program) => program.background).map((program) => ({ at: program.createdAt ?? "", program })),
+		].sort((a, b) => a.at.localeCompare(b.at));
+		for (const child of children) {
+			const index = rows.length;
+			if ("program" in child) {
+				rows.push({ line: `${"  ".repeat(level)}${programLabel(child.program)}  running`, parent, shown: false });
+				live += 1;
+				show(index);
+				visit(child.program, level + 1, index);
+				continue;
+			}
+			const { entry } = child;
+			const own = node.agents.counts(entry.id);
+			const queued = own?.queued ? [`${own.queued} queued`] : [];
+			rows.push({ line: `${"  ".repeat(level)}Agent ${[label(entry, ids), entry.state, ...queued].join("  ")}`, parent, shown: false });
+			if (own?.busy || queued.length > 0) {
+				live += 1;
+				show(index);
+			}
+			const loaded = nodes.get(entry.id);
+			if (loaded) visit(loaded, level + 1, index);
 		}
-	}
-	const running = programs?.list().filter((record) => record.state === "running") ?? [];
-	const lines = [
-		...[...rows].filter(([id]) => shown.has(id)).map(([, row]) => row),
-		...running.map((record) => `Program ${programs!.label(record)}  running`),
-	];
+	};
+	visit(self, 0);
+	const lines = rows.filter((row) => row.shown).map((row) => row.line);
 	if (lines.length === 0) return [];
 	if (lines.length > MAX_LINES - 1) lines.splice(MAX_LINES - 2, Infinity, `+${lines.length - (MAX_LINES - 2)} more`);
-	return [`Tasks (${live + running.length} live, /tasks to hide)`, ...lines.map((line) => `  ${line}`)];
+	return [`Tasks (${live} live, /tasks to hide)`, ...lines.map((line) => `  ${line}`)];
 }
 
 /** Keeps the task panel above the editor current while the Session is loaded; `toggle` hides or shows it. */
-export function createPanel(getNode: () => AgentNode | undefined, getPrograms: () => Programs | undefined) {
+export function createPanel(getNode: () => AgentNode | undefined) {
 	let ctx: ExtensionContext | undefined;
 	let hidden = false;
 	let scheduled = false;
@@ -50,7 +62,7 @@ export function createPanel(getNode: () => AgentNode | undefined, getPrograms: (
 		scheduled = false;
 		const node = getNode();
 		if (!ctx?.hasUI || !node) return;
-		const lines = hidden ? [] : panelLines(node, getPrograms());
+		const lines = hidden ? [] : panelLines(node);
 		ctx.ui.setWidget(WIDGET_KEY, lines.length === 0 ? undefined : (_tui, theme) => {
 			const panel = new Container();
 			lines.forEach((line, index) => panel.addChild(new TruncatedText(theme.fg(index === 0 ? "accent" : "muted", line), 0, 0)));

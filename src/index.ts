@@ -86,7 +86,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	let node: AgentNode | undefined;
 	let programs: Programs | undefined;
 	let ctx: ExtensionContext | undefined;
-	const panel = createPanel(() => node, () => programs);
+	const panel = createPanel(() => node);
 
 	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: rootPaths().ownership });
 	installHostPatches(AgentSession, ExtensionRunner, piCodemode.codemodeSchema);
@@ -136,7 +136,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			},
 		};
 		nodes.set(id, node);
-		programs = new Programs({
+		programs = new Programs(rootId, {
 			appendEntry: (customType, data) => pi.appendEntry(customType, data),
 			notify: (text) => agents.notify(text),
 			changed: () => panel.update(),

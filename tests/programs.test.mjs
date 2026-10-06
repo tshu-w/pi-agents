@@ -214,6 +214,28 @@ test("a Program's Agents are invisible to the caller, count toward its limit, an
 	await root.close();
 });
 
+test("a background Program keeps its caller's tree busy until it ends, and the user sees its Agents under it", async () => {
+	const root = await startRoot(undefined, undefined, {}, {}, [fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))]);
+	const { nodes, treeIdle, panelLines, ownedEntries } = globalThis.piAgentsTree;
+	const self = nodes.get(root.session.sessionManager.getSessionId());
+	const id = idOf(await root.text({ action: "run", background: true, code: `
+		await agent({ name: 'inner' }).send('hold');
+		while (true) await tools.read({ path: 'note.txt' });
+	` }));
+	await until(() => root.state.busy === 1, "inner Agent busy");
+	assert.deepEqual(panelLines(self).slice(1).map((line) => line.replace(/\(\S+\)/, "(id)")), [`  Program ${id}  running`, "    Agent inner (id)  busy"]);
+	assert.deepEqual(ownedEntries(self).map((entry) => entry.name), ["inner"]);
+	// After its Agent answers, the Program only calls tools, and the tree stays busy.
+	root.state.hold.open();
+	await until(() => panelLines(self).length === 2, "inner Agent idle");
+	assert.equal(treeIdle(self.rootId), false);
+	await root.text({ action: "stop", target: id });
+	await root.session.waitForIdle();
+	assert.equal(treeIdle(self.rootId), true);
+	assert.deepEqual(panelLines(self), []);
+	await root.close();
+});
+
 test("an owned Agent gives up its slot while its foreground Program waits for an Agent under it", async () => {
 	const root = await startRoot(undefined, undefined, { maxConcurrent: 1, maxOutstanding: 2 });
 	const run = { action: "run", code: "return await agent().send('inner')" };
