@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { deferred, waitForChange, type Deferred } from "../agents/agents.ts";
+import { deferred, settlesBy, waitForChange, type Deferred } from "../agents/agents.ts";
 import { shortId, trackTreeWork } from "../agents/registry.ts";
 import { boundBlocks, boundText } from "../output.ts";
 import type { ProgramFiles, ProgramOutcome, ProgramRunResult } from "./execute.ts";
 
 const PROGRAM_ENTRY = "pi-agents-program";
-const CLEANUP_TIMEOUT_MS = 10_000;
+const CLEANUP_TIMEOUT_MS = 15_000;
+/** Ends the result of a Program some of whose work did not stop. */
+export const CLEANUP_ERROR = "Cleanup error: some of the Program's work did not stop within the timeout and may still be running.";
 
 type Item = ProgramRunResult["result"]["content"][number];
 
@@ -29,6 +31,10 @@ interface Running {
 	record: ProgramRecord;
 	controller?: AbortController;
 	done?: Promise<void>;
+	/** Stops counting the Program as the tree's work. */
+	release?: () => void;
+	/** Whether some of its work did not stop. */
+	abandoned?: boolean;
 	waiters: number;
 }
 
@@ -87,11 +93,14 @@ export class Programs {
 		const program: Running = { record, controller, waiters: 0 };
 		this.programs.set(record.id, program);
 		// The tree stays busy until the Program ends and its notification is delivered.
-		const release = trackTreeWork(this.rootId);
+		const release = program.release = trackTreeWork(this.rootId);
 		this.persist(record);
 		this.hooks.changed?.();
 		program.done = run(record.id, controller.signal, () => controller.abort(new Error("Program stopped"))).then(
-			({ outcome, result, files }) => this.end(program, outcome, result.content, result.isError === true, files),
+			({ outcome, result, files, abandoned }) => {
+				if (abandoned) program.abandoned = true;
+				this.end(program, outcome, result.content, result.isError === true, files);
+			},
 			(error: unknown) => this.end(program, "failed", [{ type: "text", text: `Script failed\nOutput:\nScript error:\n${error instanceof Error ? error.message : String(error)}` }], true),
 		).finally(release);
 		return record;
@@ -122,11 +131,20 @@ export class Programs {
 		return [...this.programs.values()].map((program) => program.record).sort((a, b) => b.startedAt - a.startedAt);
 	}
 
-	/** Returns whether the Program was running; it has ended when this resolves. */
+	/**
+	 * Returns whether the Program was running; it has ended when this resolves. A Program that has
+	 * not stopped within the timeout is abandoned and ends as stopped; this throws when some of its
+	 * work did not stop.
+	 */
 	async stop(program: Running, reason = "Program stopped"): Promise<boolean> {
 		if (ended(program.record)) return false;
 		program.controller?.abort(new Error(reason));
-		await this.settle(program);
+		if (!await settlesBy(program.done!, Date.now() + CLEANUP_TIMEOUT_MS)) {
+			program.abandoned = true;
+			this.end(program, "stopped", [{ type: "text", text: "Script failed\nOutput:\n" }, { type: "text", text: CLEANUP_ERROR }], true);
+			program.release?.();
+		}
+		if (program.abandoned) throw new Error(`Program ${this.label(program.record)} did not stop within the timeout and may still be running.`);
 		return true;
 	}
 
@@ -182,20 +200,15 @@ export class Programs {
 
 	async shutdown(): Promise<void> {
 		this.closing = true;
-		await Promise.allSettled([...this.programs.values()].map((program) => this.stop(program, "the caller went offline")));
-	}
-
-	private async settle(program: Running): Promise<void> {
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		try {
-			await Promise.race([program.done, new Promise((resolve) => { timer = setTimeout(resolve, CLEANUP_TIMEOUT_MS); })]);
-		} finally {
-			clearTimeout(timer);
-		}
+		const stopped = await Promise.allSettled([...this.programs.values()].map((program) => this.stop(program, "the caller went offline")));
+		const errors = stopped.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+		if (errors.length > 0) throw new Error(errors.map((error) => error instanceof Error ? error.message : String(error)).join("\n"));
 	}
 
 	private end(program: Running, outcome: ProgramOutcome, content: Item[], isError: boolean, files?: ProgramFiles): void {
 		const { record } = program;
+		// An abandoned Program may end later.
+		if (ended(record)) return;
 		record.state = outcome;
 		record.content = content;
 		record.isError = isError;

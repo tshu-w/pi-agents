@@ -24,6 +24,8 @@ export interface ProgramRunResult {
 	outcome: ProgramOutcome;
 	result: AgentToolResult<unknown> & { isError?: boolean };
 	files: ProgramFiles;
+	/** Whether some of the Program's work did not stop during cleanup. */
+	abandoned?: boolean;
 }
 
 export interface ProgramRunOptions {

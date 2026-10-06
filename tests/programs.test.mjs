@@ -19,7 +19,7 @@ const bodyOf = (text) => text.split("\n").slice(1, -1).join("\n").split("\n\nWhe
  *
  * Agents answer `answer:<body>`. A body `submit:<json>[|<json>]` calls `submit_result` with the
  * first value, and with the second after an error; `hold` counts itself in `state.busy` and answers
- * once `state.hold` opens; `call:<json>` and `program:<json>` call `agent` or `program` with those
+ * once `state.hold` opens, and `stuck` does so even after an abort; `call:<json>` and `program:<json>` call `agent` or `program` with those
  * arguments and answer with the result.
  */
 async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), sessionFile = undefined, limits = {}, settings = {}, extensions = []) {
@@ -43,6 +43,10 @@ async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), se
 			if (tool) {
 				if (last.role !== "toolResult") return ai.fauxAssistantMessage(ai.fauxToolCall(tool === "call" ? "agent" : "program", JSON.parse(json)));
 				return ai.fauxAssistantMessage(textOf(last.content));
+			}
+			if (body === "stuck") {
+				state.busy += 1;
+				await state.hold.promise;
 			}
 			if (body === "hold") {
 				state.busy += 1;
@@ -111,10 +115,11 @@ test("stop and timeout stop background Programs", async () => {
 	const loop = "while (true) await tools.read({ path: 'note.txt' })";
 	const stopped = idOf(await root.text({ action: "run", background: true, code: loop }));
 	const timedOut = idOf(await root.text({ action: "run", background: true, code: loop, timeout: 0.2 }));
+	const spinning = idOf(await root.text({ action: "run", background: true, code: "while (true) {}" }));
 	assert.equal(await root.text({ action: "stop", target: stopped }), `Program ${stopped} stopped.`);
-	const results = await root.text({ action: "wait", target: [stopped, timedOut], timeout: 10 });
-	assert.match(results, new RegExp(`<program-result id="${stopped}" status="stopped">`));
-	assert.match(results, new RegExp(`<program-result id="${timedOut}" status="stopped">`));
+	assert.equal(await root.text({ action: "stop", target: spinning }), `Program ${spinning} stopped.`);
+	const results = await root.text({ action: "wait", target: [stopped, timedOut, spinning], timeout: 10 });
+	for (const id of [stopped, timedOut, spinning]) assert.match(results, new RegExp(`<program-result id="${id}" status="stopped">`));
 	await root.close();
 });
 
@@ -211,6 +216,16 @@ test("a Program's Agents are invisible to the caller, count toward its limit, an
 	assert.equal(await root.text({ action: "stop", target: id }), `Program ${id} stopped.`);
 	const result = await root.text({ action: "wait", target: id, timeout: 10 });
 	assert.match(result, /status="stopped">\n[\s\S]*Input rejected: 2 inputs have not ended/);
+	await root.close();
+});
+
+test("a Program whose Agent does not stop reports the abandoned work as an error", async () => {
+	const root = await startRoot();
+	const id = idOf(await root.text({ action: "run", background: true, code: "await agent().send('stuck')" }));
+	await until(() => root.state.busy === 1, "stuck Agent busy");
+	await assert.rejects(root.text({ action: "stop", target: id }), new RegExp(`^Error: Program ${id} did not stop within the timeout and may still be running\\.$`));
+	assert.match(await root.text({ action: "wait", target: id, timeout: 10 }), /status="stopped">\n[\s\S]*Script aborted[\s\S]*\nCleanup error: some of the Program's work did not stop within the timeout and may still be running\.\n<\/program-result>/);
+	root.state.hold.open();
 	await root.close();
 });
 

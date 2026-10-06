@@ -92,9 +92,10 @@ input fails. `send()` throws if `schema` is used without `followUp`.
 
 When a Program ends, it cancels its unfinished tool calls and aborts its
 Agents' unfinished inputs, and waits for its Agents to go offline. It
-returns its result after cleanup, or after a
-cleanup timeout if some work does not stop. Stopping a Program does not
-undo completed tool calls.
+returns its result after cleanup. Work not stopped within the cleanup
+timeout is abandoned and may keep running; the Program's result and `stop`
+report it as an error.
+Stopping a Program does not undo completed tool calls.
 
 When the caller goes offline, its running Programs stop. Their results
 remain available when the caller is loaded again.
@@ -249,6 +250,19 @@ No Programs.
 ```text
 Program <id> stopped.
 Program <id> has already ended.
+```
+
+When some of the Program's work does not stop within the timeout, `stop`
+fails with:
+
+```text
+Program <id> did not stop within the timeout and may still be running.
+```
+
+and the Program's result ends with:
+
+```text
+Cleanup error: some of the Program's work did not stop within the timeout and may still be running.
 ```
 
 errors:

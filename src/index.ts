@@ -70,6 +70,8 @@ export function readSettings(agentDir: string): Settings {
 }
 
 const MIN_PI_VERSION = "1.0.0";
+/** How long a root process may take to clean up on exit before it is killed. */
+const EXIT_GRACE_MS = 30_000;
 
 function olderThan(version: string, minimum: string): boolean {
 	const a = version.split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0);
@@ -156,16 +158,23 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		addProgramFiles(event.branchEntries as never, event.preparation.firstKeptEntryId, event.preparation.fileOps);
 	});
 
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (event) => {
 		const closing = node;
 		if (!closing) return;
+		if (event.reason === "quit" && closing.ownerId === undefined) {
+			setTimeout(() => {
+				console.error(`[pi-agents] Cleanup did not finish within ${EXIT_GRACE_MS / 1000}s; killing the process.`);
+				process.kill(process.pid, "SIGKILL");
+			}, EXIT_GRACE_MS).unref();
+		}
 		panel.stop();
 		node = undefined;
 		const stopping = programs;
 		programs = undefined;
 		try {
-			await stopping?.shutdown();
-			await closing.agents.shutdown();
+			const results = await Promise.allSettled([stopping?.shutdown(), closing.agents.shutdown()]);
+			const errors = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+			if (errors.length > 0) throw new Error(errors.map((error) => error instanceof Error ? error.message : String(error)).join("\n"));
 		} finally {
 			if (nodes.get(closing.id) === closing) nodes.delete(closing.id);
 		}

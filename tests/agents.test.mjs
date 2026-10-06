@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 const agentDir = mkdtempSync(join(tmpdir(), "pi-agents-home-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -14,12 +15,12 @@ const bodyOf = (text) => text.startsWith("<agent-message ") ? text.split("\n").s
  * Starts a root Session whose model answers from its last message: owned Agents answer
  * `answer:<first input>`, and the root acknowledges notifications with plain text. While
  * `state.hold` is set, owned Agents count their turns in `state.busy` and answer once it opens,
- * or end when their turn is aborted.
+ * or end when their turn is aborted unless `state.stuck` is set.
  */
 async function startRoot(limits = {}) {
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
 	const cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-"));
-	const state = { hold: undefined, busy: 0, rootMessages: [] };
+	const state = { hold: undefined, stuck: false, busy: 0, rootMessages: [] };
 	const route = async (context, options) => {
 		const messages = context.messages;
 		const first = textOf(messages.find((message) => message.role === "user")?.content ?? "");
@@ -33,15 +34,15 @@ async function startRoot(limits = {}) {
 			state.busy += 1;
 			await Promise.race([
 				state.hold.promise,
-				new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true })),
+				...state.stuck ? [] : [new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }))],
 			]);
-			if (signal?.aborted) return ai.fauxAssistantMessage("", { stopReason: "aborted" });
+			if (signal?.aborted && !state.stuck) return ai.fauxAssistantMessage("", { stopReason: "aborted" });
 		}
 		const inputs = messages.filter((message) => message.role === "user").map((message) => bodyOf(textOf(message.content)));
 		return ai.fauxAssistantMessage(`answer:${inputs.slice(-1)[0]}|seen:${inputs.join(",")}`);
 	};
 	const sessionManager = pi.SessionManager.create(cwd, join(cwd, "sessions"));
-	const session = await createSession({ cwd, route, extensions: [EXTENSION], sessionManager, tools: ["read", "agent"] });
+	const session = await createSession({ cwd, route, extensions: [EXTENSION, fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))], sessionManager, tools: ["read", "agent"] });
 	await session.bindExtensions({ mode: "print" });
 	const tool = session.getToolDefinition("agent");
 	let calls = 0;
@@ -172,6 +173,19 @@ test("abort ends the current turn and queued inputs, and the Agent stays usable"
 	root.state.hold = undefined;
 	await root.call({ action: "send", target: "worker", message: "three" });
 	assert.match(await root.call({ action: "wait", target: "worker", timeout: 10 }), /^answer:three/);
+	await root.close();
+});
+
+test("a turn that does not stop within the abort timeout is abandoned, and the tree becomes idle", async () => {
+	const root = await startRoot();
+	root.state.hold = gate();
+	root.state.stuck = true;
+	await root.call({ action: "spawn", name: "worker", message: "one" });
+	await root.waitBusy(1);
+	await assert.rejects(root.call({ action: "abort", target: "worker" }), /^Error: Agent worker \(\S+\) did not stop within the timeout and may still be running\.$/);
+	assert.match(await root.call({ action: "wait", target: "worker", timeout: 10 }), /aborted/);
+	assert.equal(globalThis.piAgentsTree.treeIdle(root.session.sessionManager.getSessionId()), true);
+	root.state.hold.open();
 	await root.close();
 });
 

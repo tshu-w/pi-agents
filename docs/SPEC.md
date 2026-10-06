@@ -76,6 +76,10 @@ goes offline, they go offline too, from the bottom of the tree up, and their
 unfinished inputs end as `aborted`. They return as `idle` when their owner
 is loaded again.
 
+On abort or when going offline, work that has not stopped within a timeout
+is abandoned: it no longer counts as live work and may keep running until
+the process exits; the timeout is reported.
+
 A root Agent is `busy` while it has a turn in progress or pending messages,
 or while its tree has live work (§7 Task panel); otherwise it is `idle`.
 
@@ -407,5 +411,7 @@ A delivered message enters the recipient's current branch. An offline root
 Agent is loaded in the background with its saved working directory and
 model and the current configuration, and exits once it has handled its
 inputs and is `idle` (§3).
+If a root process cannot finish cleanup within a grace period on exit, it is
+forcibly terminated.
 One runtime uses a Session at a time. If a Session is occupied at interactive
 startup, its ownership error stays visible until the user dismisses it, then Pi exits.

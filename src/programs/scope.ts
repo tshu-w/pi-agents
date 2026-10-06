@@ -1,14 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Agents, SUBMIT_RESULT_TOOL_NAME, THINKING_LEVELS, type Limits } from "../agents/agents.ts";
+import { Agents, settlesBy, SUBMIT_RESULT_TOOL_NAME, THINKING_LEVELS, type Limits } from "../agents/agents.ts";
 import { label, messageText, nodes, treeChanged, visibleIds, type AgentNode } from "../agents/registry.ts";
 import type { AgentOptions, ProgramAgentHost, SendOptions } from "./sandbox.ts";
 
-const CLEANUP_TIMEOUT_MS = 10_000;
+const CLEANUP_TIMEOUT_MS = 15_000;
 const DELIVERIES = ["followUp", "steer", "write"];
 
 export interface ProgramScope {
 	host: ProgramAgentHost;
-	/** Aborts unfinished inputs and takes the Agents offline, or gives up after a timeout. */
+	/** Aborts unfinished inputs and takes the Agents offline; work not stopped within the timeout is abandoned, and this throws. */
 	close(): Promise<void>;
 }
 
@@ -81,14 +81,11 @@ export function programScope(
 	return {
 		host,
 		close: async () => {
-			let timer: ReturnType<typeof setTimeout> | undefined;
 			try {
-				await Promise.race([
-					agents.shutdown(),
-					new Promise((resolve) => { timer = setTimeout(resolve, CLEANUP_TIMEOUT_MS); }),
-				]);
+				if (!await settlesBy(agents.shutdown(), Date.now() + CLEANUP_TIMEOUT_MS)) {
+					throw new Error(`The Program's Agents did not stop within the timeout and may still be running.`);
+				}
 			} finally {
-				clearTimeout(timer);
 				nodes.delete(id);
 				treeChanged();
 			}

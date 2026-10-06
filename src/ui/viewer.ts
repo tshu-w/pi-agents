@@ -113,7 +113,8 @@ class AgentViewer implements Component, Focusable {
 			embedWorkingStatus: true,
 		});
 		this.editor.onSubmit = (text) => this.send(text, "steer");
-		this.editor.onEscape = () => void this.owner.agents.abortAgent(this.entry.id);
+		this.editor.onEscape = () => void this.owner.agents.abortAgent(this.entry.id).catch((error: unknown) =>
+			this.ctx.ui.notify(error instanceof Error ? error.message : String(error), "error"));
 		this.editor.onAction("app.clear", () => {
 			if (this.editor.getText()) this.editor.setText("");
 			else this.done();

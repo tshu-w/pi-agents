@@ -2,7 +2,7 @@ import { buildSessionContext, getAgentDir, getPackageDir, hasTrustRequiringProje
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { treeMetadata } from "../agents/registry.ts";
+import { trackTreeWork, treeMetadata } from "../agents/registry.ts";
 import { isBackgroundWorker } from "./background.mjs";
 import { sendViaSupervisor } from "./client.mjs";
 import { rootPaths } from "./paths.mjs";
@@ -120,7 +120,13 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 		signal.throwIfAborted();
 		if (!seen.has(message.id)) {
 			seen.add(message.id);
-			await hooks.receive(message);
+			// The tree stays busy until the message is in the Session.
+			const release = trackTreeWork(message.recipient);
+			try {
+				await hooks.receive(message);
+			} finally {
+				release();
+			}
 		}
 		if (isBackgroundWorker(active)) {
 			// The transport aborts this signal when the acknowledgement connection closes.

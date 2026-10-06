@@ -163,6 +163,22 @@ export async function waitForChange(change: Promise<void>, ms: number, signal?: 
 	}
 }
 
+/** Whether `work` settles by `deadline`; a rejection passes through. */
+export async function settlesBy(work: Promise<unknown>, deadline: number): Promise<boolean> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		const settled = work.then(() => true);
+		// A rejection after the deadline has no one to report to.
+		settled.catch(() => {});
+		return await Promise.race([
+			settled,
+			new Promise<boolean>((resolve) => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now()), false); }),
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 function ended(input: InputRecord): boolean {
 	return input.state === "completed" || input.state === "failed" || input.state === "aborted";
 }
@@ -186,6 +202,9 @@ interface Turn {
 	pending: Message[];
 	abort: AbortController;
 	started: boolean;
+	/** Whether the turn holds a scheduler slot. */
+	slot: boolean;
+	finished: boolean;
 	done: Deferred;
 }
 
@@ -453,20 +472,29 @@ export class Agents {
 		if (changed.size > 0) treeChanged();
 	}
 
-	/** Stops the current turn and withdraws queued inputs; returns whether there was anything to stop. */
-	async abort(agent: Owned): Promise<boolean> {
+	/**
+	 * Stops the current turn and withdraws queued inputs; returns whether there was anything to stop.
+	 * A turn that has not stopped by `deadline` is abandoned: its inputs end as aborted, and this throws.
+	 */
+	async abort(agent: Owned, deadline = Date.now() + SHUTDOWN_TIMEOUT_MS): Promise<boolean> {
 		const turn = agent.turn;
 		if (!turn && agent.queue.length === 0) return false;
 		for (const input of agent.queue.splice(0)) this.end(agent, input, "aborted", "");
 		this.changed();
 		if (turn) {
 			turn.abort.abort();
-			if (turn.started && agent.session) {
-				agent.session.abortCompaction();
-				agent.session.abortRetry();
-				await agent.session.abort();
+			const stopping = (async () => {
+				if (turn.started && agent.session) {
+					agent.session.abortCompaction();
+					agent.session.abortRetry();
+					await agent.session.abort();
+				}
+				await turn.done.promise;
+			})();
+			if (!await settlesBy(stopping, deadline)) {
+				this.finish(agent, turn, { outcome: "aborted", result: "" });
+				throw new Error(`Agent ${label(agent.record, this.ids())} did not stop within the timeout and may still be running.`);
 			}
-			await turn.done.promise;
 		}
 		return true;
 	}
@@ -492,25 +520,26 @@ export class Agents {
 		}
 	}
 
+	/** Takes the Agents offline; aborting and shutting down share one timeout, after which work is abandoned and this throws. */
 	async shutdown(): Promise<void> {
 		this.closing = true;
+		const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
 		const agents = [...this.agents.values()];
-		await Promise.allSettled(agents.map((agent) => this.abort(agent)));
-		await Promise.allSettled(agents.map(async (agent) => {
+		const aborted = await Promise.allSettled(agents.map((agent) => this.abort(agent, deadline)));
+		const closed = await Promise.allSettled(agents.map(async (agent) => {
 			const session = agent.session ?? await agent.loading?.catch(() => undefined);
 			if (!session) return;
-			let timer: ReturnType<typeof setTimeout> | undefined;
 			try {
-				await Promise.race([
-					session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }),
-					new Promise((resolve) => { timer = setTimeout(resolve, SHUTDOWN_TIMEOUT_MS); }),
-				]);
+				if (!await settlesBy(session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }), deadline)) {
+					throw new Error(`Agent ${label(agent.record, this.ids())} did not shut down within the timeout and may still be running.`);
+				}
 			} finally {
-				clearTimeout(timer);
 				session.dispose();
 				agent.session = undefined;
 			}
 		}));
+		const errors = [...aborted, ...closed].flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+		if (errors.length > 0) throw new Error(errors.map((error) => error instanceof Error ? error.message : String(error)).join("\n"));
 	}
 
 	private write(agent: Owned, text: string): void {
@@ -564,18 +593,16 @@ export class Agents {
 		if (agent.turn || this.closing) return;
 		const head = agent.queue.shift();
 		if (!head) return;
-		const turn: Turn = { inputs: [head], pending: [], abort: new AbortController(), started: false, done: deferred() };
+		const turn: Turn = { inputs: [head], pending: [], abort: new AbortController(), started: false, slot: false, finished: false, done: deferred() };
 		agent.turn = turn;
 		void this.runTurn(agent, turn);
 	}
 
 	private async runTurn(agent: Owned, turn: Turn): Promise<void> {
-		const rootId = this.self.rootId;
-		let slot = false;
 		let answer: { outcome: Outcome; result: string } = { outcome: "aborted", result: "" };
 		try {
-			await scheduler.acquireQueued(rootId, agent.record.id, this.limits.maxConcurrent, turn.abort.signal);
-			slot = true;
+			await scheduler.acquireQueued(this.self.rootId, agent.record.id, this.limits.maxConcurrent, turn.abort.signal);
+			turn.slot = true;
 			const session = await this.load(agent);
 			turn.abort.signal.throwIfAborted();
 			const before = session.getSessionStats().assistantMessages;
@@ -603,13 +630,20 @@ export class Agents {
 		} catch (error) {
 			if (!turn.abort.signal.aborted) answer = { outcome: "failed", result: error instanceof Error ? error.message : String(error) };
 		} finally {
-			if (slot) scheduler.release(rootId, agent.record.id);
-			agent.turn = undefined;
-			for (const input of turn.inputs) this.end(agent, input, answer.outcome, answer.result);
-			turn.done.resolve();
-			this.changed();
-			this.pump(agent);
+			this.finish(agent, turn, answer);
 		}
+	}
+
+	/** Ends a turn once: when it returns, or when an abort abandons it. */
+	private finish(agent: Owned, turn: Turn, answer: { outcome: Outcome; result: string }): void {
+		if (turn.finished) return;
+		turn.finished = true;
+		if (turn.slot) scheduler.release(this.self.rootId, agent.record.id);
+		if (agent.turn === turn) agent.turn = undefined;
+		for (const input of turn.inputs) this.end(agent, input, answer.outcome, answer.result);
+		turn.done.resolve();
+		this.changed();
+		this.pump(agent);
 	}
 
 	private end(agent: Owned, input: Input, outcome: Outcome, result: string): void {

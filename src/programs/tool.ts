@@ -9,7 +9,7 @@ import type { PiCodemode } from "./codemode.ts";
 import { executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./execute.ts";
 import { programDescription, programLoadout, programRenderers } from "./loadout.ts";
 import { randomUUID } from "node:crypto";
-import { programListLine, Programs, renderProgramWait } from "./programs.ts";
+import { CLEANUP_ERROR, programListLine, Programs, renderProgramWait } from "./programs.ts";
 import { agentGlobals, withAgentPrefix } from "./sandbox.ts";
 
 const PROGRAM_DESCRIPTION = `Run JavaScript that composes tool calls and Agents; only its output and return value reach the caller. \`run\` runs a Program in the foreground, or in the background with \`background\`; \`wait\` waits for background Programs and returns their results; \`list\` lists background Programs; \`stop\` stops a running Program. When a background Program ends while its caller is not waiting for it, the caller receives a notification; \`wait\` returns the result.
@@ -74,8 +74,9 @@ export function registerProgramTools(
 		options: Pick<ProgramRunOptions, "timeout" | "onUpdate" | "background" | "abort">,
 	) => {
 		const scope = programScope(id, caller, pi, current, { agentDir, limits: settings, extensions: settings.extensions, background: options.background === true });
+		let run: Awaited<ReturnType<typeof executeProgram>> | undefined;
 		try {
-			return await executeProgram(toolCallId, code, signal, current, {
+			run = await executeProgram(toolCallId, code, signal, current, {
 				...options,
 				globals: agentGlobals(scope.host),
 				prepare: withAgentPrefix,
@@ -83,8 +84,15 @@ export function registerProgramTools(
 				getToolNamespace: (name) => pi.getAllTools().find((tool) => tool.name === name)?.namespace,
 			});
 		} finally {
-			await scope.close();
+			// A cleanup failure ends the result, which keeps the Program's output and calls.
+			await scope.close().catch(() => {
+				if (!run) return;
+				run.result.content.push({ type: "text", text: CLEANUP_ERROR });
+				run.result.isError = true;
+				run.abandoned = true;
+			});
 		}
+		return run;
 	};
 
 	pi.registerTool({
