@@ -16,8 +16,8 @@ export interface SendOptions {
 
 /** What `agent()` and its handles do on the host. */
 export interface ProgramAgentHost {
-	create(id: string, name: string, options: AgentOptions, signal: AbortSignal): Promise<void>;
-	send(id: string, message: string, options: SendOptions, signal: AbortSignal): Promise<unknown>;
+	create(id: string, name: string, options: AgentOptions): Promise<void>;
+	send(id: string, message: string, options: SendOptions): Promise<unknown>;
 	abort(id: string): Promise<void>;
 }
 
@@ -61,9 +61,9 @@ export function agentGlobals(host: ProgramAgentHost): CodemodeTool[] {
 		{
 			name: "__agent.create",
 			spread: true,
-			execute: (args, { signal }) => {
+			execute: (args) => {
 				const [id, name, options] = args as [string, string, AgentOptions];
-				const creation = host.create(id, name, options ?? {}, signal);
+				const creation = host.create(id, name, options ?? {});
 				created.set(id, creation);
 				return creation;
 			},
@@ -71,10 +71,10 @@ export function agentGlobals(host: ProgramAgentHost): CodemodeTool[] {
 		{
 			name: "__agent.send",
 			spread: true,
-			execute: async (args, { signal }) => {
+			execute: async (args) => {
 				const [id, message, options] = args as [string, string, SendOptions | undefined];
 				await ready(id);
-				return host.send(id, message, options ?? {}, signal);
+				return host.send(id, message, options ?? {});
 			},
 		},
 		{

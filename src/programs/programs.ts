@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { deferred, shortId, type Deferred } from "../agents/agents.ts";
+import { deferred, shortId, waitForChange, type Deferred } from "../agents/agents.ts";
 import { boundBlocks, boundText } from "../output.ts";
 import type { ProgramFiles, ProgramOutcome, ProgramRunResult } from "./execute.ts";
 
@@ -100,13 +100,18 @@ export class Programs {
 		const matches = [...this.programs.values()].filter(({ record }) => record.id.startsWith(id));
 		if (matches.length === 0) throw new Error(`No Program matches "${id}". Use list to find Programs.`);
 		if (matches.length > 1) {
-			throw new Error(`"${id}" matches several Programs: ${matches.map(({ record }) => shortId(record.id, this.ids())).join(", ")}. Retry with a longer ID prefix.`);
+			throw new Error(`"${id}" matches several Programs: ${matches.map(({ record }) => this.label(record)).join(", ")}. Retry with a longer ID prefix.`);
 		}
 		return matches[0]!;
 	}
 
 	ids(): string[] {
 		return [...this.programs.keys()];
+	}
+
+	/** A Program's short ID among this caller's Programs. */
+	label(record: ProgramRecord): string {
+		return shortId(record.id, this.ids());
 	}
 
 	list(): ProgramRecord[] {
@@ -139,21 +144,7 @@ export class Programs {
 				const remaining = deadline - Date.now();
 				if (remaining <= 0) break;
 				signal?.throwIfAborted();
-				let timer: ReturnType<typeof setTimeout> | undefined;
-				let onAbort: (() => void) | undefined;
-				try {
-					await Promise.race([
-						this.change.promise,
-						new Promise<void>((resolve) => { timer = setTimeout(resolve, remaining); }),
-						new Promise<void>((resolve) => {
-							onAbort = resolve;
-							signal?.addEventListener("abort", onAbort, { once: true });
-						}),
-					]);
-				} finally {
-					clearTimeout(timer);
-					if (onAbort) signal?.removeEventListener("abort", onAbort);
-				}
+				await waitForChange(this.change.promise, remaining, signal);
 			}
 			signal?.throwIfAborted();
 			returned = true;
@@ -218,7 +209,7 @@ export class Programs {
 		if (this.closing || record.notified) return;
 		record.notified = true;
 		this.persist(record);
-		this.hooks.notify(`Program ${shortId(record.id, this.ids())} ${record.state}.`);
+		this.hooks.notify(`Program ${this.label(record)} ${record.state}.`);
 	}
 
 	private persist(record: ProgramRecord): void {

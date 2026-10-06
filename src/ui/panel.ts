@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, TruncatedText } from "@earendil-works/pi-tui";
-import { label, nodes, onTreeChange, shortId, treeEntries, type AgentNode } from "../agents/agents.ts";
+import { label, nodes, onTreeChange, treeEntries, type AgentNode } from "../agents/agents.ts";
 import type { Programs } from "../programs/programs.ts";
 
 const WIDGET_KEY = "pi-agents";
@@ -8,7 +8,7 @@ const WIDGET_KEY = "pi-agents";
 const MAX_LINES = 10;
 
 /** The task panel: the Agent's live owned Agents as a tree, then its running background Programs. Empty when none. */
-export function panelLines(self: AgentNode, programs: Programs | undefined): string[] {
+function panelLines(self: AgentNode, programs: Programs | undefined): string[] {
 	const depth = new Map<string, number>([[self.id, 0]]);
 	const parent = new Map<string, string>();
 	const rows = new Map<string, string>();
@@ -32,7 +32,7 @@ export function panelLines(self: AgentNode, programs: Programs | undefined): str
 	const running = programs?.list().filter((record) => record.state === "running") ?? [];
 	const lines = [
 		...[...rows].filter(([id]) => shown.has(id)).map(([, row]) => row),
-		...running.map((record) => `Program ${shortId(record.id, programs!.ids())}  running`),
+		...running.map((record) => `Program ${programs!.label(record)}  running`),
 	];
 	if (lines.length === 0) return [];
 	if (lines.length > MAX_LINES - 1) lines.splice(MAX_LINES - 2, Infinity, `+${lines.length - (MAX_LINES - 2)} more`);

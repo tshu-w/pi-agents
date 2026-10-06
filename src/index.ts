@@ -19,16 +19,13 @@ import {
 	visibleIds,
 	nodes,
 	receivedMessageIds,
-	restoredUsage,
-	setTreeUsage,
 	treeIdle,
 	treeMetadata,
-	usageEntry,
 	type AgentNode,
 	type Limits,
 } from "./agents/agents.ts";
 import { registerAgentTool } from "./agents/tool.ts";
-import { loadPiCodemode } from "./programs/codemode.ts";
+import { CODEMODE_TOOL_NAME, loadPiCodemode } from "./programs/codemode.ts";
 import { PROGRAM_TOOL_NAME } from "./programs/execute.ts";
 import { installHostPatches } from "./programs/host-patches.ts";
 import { applyProgramOnlyFlag, PROGRAM_ONLY_FLAG } from "./programs/loadout.ts";
@@ -93,7 +90,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	const panel = createPanel(() => node, () => programs);
 
 	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: rootPaths().ownership });
-	installHostPatches(AgentSession, ExtensionRunner, PROGRAM_TOOL_NAME, piCodemode.codemodeSchema);
+	installHostPatches(AgentSession, ExtensionRunner, piCodemode.codemodeSchema);
 	const roots = createRootRuntime(pi, {
 		receive: async (message) => {
 			const delivery = message.deliverAs ?? "followUp";
@@ -138,12 +135,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 					? { deliverAs: "steer" }
 					: { deliverAs: delivery, triggerTurn: true });
 			},
-			persistUsage: (usage) => {
-				if (!metadata) pi.appendEntry(...usageEntry(usage));
-			},
 		};
 		nodes.set(id, node);
-		if (!metadata) setTreeUsage(id, restoredUsage(current));
 		programs = new Programs({
 			appendEntry: (customType, data) => pi.appendEntry(customType, data),
 			notify: (text) => agents.notify(text),
@@ -155,7 +148,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
 	pi.on("before_agent_start", (_event, current) => {
 		const active = pi.getActiveTools();
-		if (warnedBothScriptTools || !active.includes(PROGRAM_TOOL_NAME) || !active.includes("codemode")) return;
+		if (warnedBothScriptTools || !active.includes(PROGRAM_TOOL_NAME) || !active.includes(CODEMODE_TOOL_NAME)) return;
 		warnedBothScriptTools = true;
 		current.ui.notify("Both `program` and `codemode` are active and do a similar job; disable `codemode` to avoid declaring the script API twice.", "warning");
 	});
@@ -176,7 +169,6 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			await closing.agents.shutdown();
 		} finally {
 			if (nodes.get(closing.id) === closing) nodes.delete(closing.id);
-			if (closing.ownerId === undefined) setTreeUsage(closing.id, undefined);
 		}
 	});
 

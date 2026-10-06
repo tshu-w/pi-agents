@@ -7,6 +7,8 @@ import { getPackageDir, type AgentToolResult, type AgentToolUpdateCallback, type
 
 type Codemode = typeof import("@earendil-works/pi-codemode");
 
+export const CODEMODE_TOOL_NAME = "codemode";
+
 let loaded: Promise<Codemode> | undefined;
 
 /** Imports a package from Pi's own dependencies rather than the copy Pi aliases for extensions. */

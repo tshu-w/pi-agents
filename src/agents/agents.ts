@@ -20,7 +20,6 @@ import { TreeScheduler } from "./scheduler.ts";
 export const MESSAGE_TYPE = "pi-agents";
 const AGENT_ENTRY = "pi-agents-agent";
 const TREE_ENTRY = "pi-agents-tree";
-const USAGE_ENTRY = "pi-agents-usage";
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 const EXTENSION_PATH = fileURLToPath(new URL("../index.ts", import.meta.url));
 export const SUBMIT_RESULT_TOOL_NAME = "submit_result";
@@ -58,15 +57,6 @@ export interface AgentRecord {
 	inputs: InputRecord[];
 }
 
-export interface Usage {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	cost: number;
-	turns: number;
-}
-
 /** An Agent loaded in this process: a root Session or an owned child Session. */
 export interface AgentNode {
 	id: string;
@@ -83,7 +73,6 @@ export interface AgentNode {
 	agents: Agents;
 	/** Delivers a message to this node; used only for root Agents. */
 	receive(text: string, delivery: Delivery, messageId?: string): void;
-	persistUsage(usage: Usage): void;
 }
 
 export interface Entry {
@@ -102,7 +91,6 @@ export interface Entry {
 interface Shared {
 	scheduler: TreeScheduler;
 	nodes: Map<string, AgentNode>;
-	usage: Map<string, Usage>;
 	listeners?: Set<() => void>;
 	/** The other root Agents last listed, for short IDs shown to a root Agent. */
 	rootIds?: string[];
@@ -111,7 +99,6 @@ interface Shared {
 const shared = ((globalThis as Record<symbol, unknown>)[Symbol.for("pi-agents:runtime")] ??= {
 	scheduler: new TreeScheduler(),
 	nodes: new Map(),
-	usage: new Map(),
 }) as Shared;
 // Child Sessions load their own copy of this module; keep shared state but adopt current methods.
 Object.setPrototypeOf(shared.scheduler, TreeScheduler.prototype);
@@ -119,7 +106,7 @@ const listeners = shared.listeners ??= new Set();
 
 export const nodes = shared.nodes;
 
-/** Calls `listener` when an Agent's state, inputs, or usage change in any tree of this process. */
+/** Calls `listener` when an Agent's state or inputs change in any tree of this process. */
 export function onTreeChange(listener: () => void): () => void {
 	listeners.add(listener);
 	return () => listeners.delete(listener);
@@ -165,46 +152,6 @@ function recipientIds(target: Entry): string[] {
 	return visibleIds(owner?.program ? target.id : owner?.scopeId ?? target.id, false);
 }
 
-export function emptyUsage(): Usage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
-}
-
-export function treeUsage(rootId: string): Usage {
-	return shared.usage.get(rootId) ?? emptyUsage();
-}
-
-export function setTreeUsage(rootId: string, usage: Usage | undefined): void {
-	if (usage) shared.usage.set(rootId, usage);
-	else shared.usage.delete(rootId);
-}
-
-function addUsage(rootId: string, delta: Usage): void {
-	const current = treeUsage(rootId);
-	const next = {
-		input: current.input + delta.input,
-		output: current.output + delta.output,
-		cacheRead: current.cacheRead + delta.cacheRead,
-		cacheWrite: current.cacheWrite + delta.cacheWrite,
-		cost: current.cost + delta.cost,
-		turns: current.turns + delta.turns,
-	};
-	shared.usage.set(rootId, next);
-	shared.nodes.get(rootId)?.persistUsage(next);
-	treeChanged();
-}
-
-export function restoredUsage(ctx: ExtensionContext): Usage {
-	let usage = emptyUsage();
-	for (const entry of ctx.sessionManager.getEntries()) {
-		if (entry.type === "custom" && entry.customType === USAGE_ENTRY) usage = { ...emptyUsage(), ...(entry.data as Usage) };
-	}
-	return usage;
-}
-
-export function usageEntry(usage: Usage): [string, Usage] {
-	return [USAGE_ENTRY, usage];
-}
-
 export interface TreeMetadata {
 	rootId: string;
 	ownerId: string;
@@ -242,7 +189,7 @@ export function treeEntries(scopeId: string): Entry[] {
 	return entries;
 }
 
-export function resolveTarget(scopeId: string, target: string): Entry {
+function resolveTarget(scopeId: string, target: string): Entry {
 	return resolveIn(treeEntries(scopeId), target);
 }
 
@@ -314,7 +261,7 @@ function defaultSessionDirectory(cwd: string, agentDir: string): string {
 	return path.join(path.resolve(agentDir), "sessions", safePath);
 }
 
-export function childSessionDirectory(cwd: string, currentCwd: string, currentSessionDir: string, agentDir: string): string {
+function childSessionDirectory(cwd: string, currentCwd: string, currentSessionDir: string, agentDir: string): string {
 	const targetDefault = defaultSessionDirectory(cwd, agentDir);
 	if (!currentSessionDir) return path.join(targetDefault, "subagents");
 	const current = path.resolve(currentSessionDir);
@@ -359,13 +306,14 @@ function lastAnswer(session: AgentSession, before: number): { outcome: Outcome; 
 }
 
 /** Takes this extension's messages left in the agent queues after a run settles. */
-function takeQueued(agent: AgentSession["agent"]): QueuedMessage[] {
+function takeQueued(agent: AgentSession["agent"]) {
 	// peekQueuedMessages returns one message in one-at-a-time mode; read the queues whole.
 	const queues = agent as unknown as Record<"steeringQueue" | "followUpQueue", { messages: QueuedMessage[] }>;
 	const steering = queues.steeringQueue.messages.slice();
 	const followUps = queues.followUpQueue.messages.slice();
 	agent.clearAllQueues();
-	const ours = (message: QueuedMessage) => message.role === "custom" && message.customType === MESSAGE_TYPE;
+	const ours = (message: QueuedMessage): message is QueuedMessage & ReturnType<typeof customMessage> =>
+		message.role === "custom" && message.customType === MESSAGE_TYPE;
 	for (const message of steering) if (!ours(message)) agent.steer(message);
 	for (const message of followUps) if (!ours(message)) agent.followUp(message);
 	return [...steering, ...followUps].filter(ours);
@@ -380,6 +328,25 @@ export function deferred(): Deferred {
 	let resolve!: () => void;
 	const promise = new Promise<void>((done) => { resolve = done; });
 	return { promise, resolve };
+}
+
+/** Resolves when `change` resolves, `ms` pass, or `signal` aborts. */
+export async function waitForChange(change: Promise<void>, ms: number, signal?: AbortSignal): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let onAbort: (() => void) | undefined;
+	try {
+		await Promise.race([
+			change,
+			new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }),
+			new Promise<void>((resolve) => {
+				onAbort = resolve;
+				signal?.addEventListener("abort", onAbort, { once: true });
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+		if (onAbort) signal?.removeEventListener("abort", onAbort);
+	}
 }
 
 function ended(input: InputRecord): boolean {
@@ -476,14 +443,13 @@ export class Agents {
 		}));
 	}
 
-	/** Queued inputs and unread results of an owned Agent. */
-	counts(id: string): { busy: boolean; queued: number; unread: number } | undefined {
+	/** Whether an owned Agent is busy, and its queued inputs. */
+	counts(id: string): { busy: boolean; queued: number } | undefined {
 		const agent = this.agents.get(id);
 		if (!agent) return undefined;
 		return {
 			busy: agent.turn?.started === true,
 			queued: agent.queue.length + (agent.turn && !agent.turn.started ? agent.turn.inputs.length : 0),
-			unread: agent.record.inputs.filter((input) => ended(input) && !input.read).length,
 		};
 	}
 
@@ -513,18 +479,12 @@ export class Agents {
 	 * result. `steer` joins the current turn, or starts one when the Agent is idle.
 	 */
 	prompt(id: string, text: string, delivery: "followUp" | "steer"): void {
-		const agent = this.agents.get(id);
-		if (!agent) throw new Error(`Agent ${id} is not owned by ${this.self.id}.`);
-		const input: Input = { text, user: true, permit: this.reserve() };
-		if (delivery === "steer" && agent.turn) this.join(agent, agent.turn, input);
-		else this.enqueue(agent, input);
+		this.add(this.agent(id), { text, user: true, permit: this.reserve() }, delivery);
 	}
 
 	/** Loads an owned Agent's Session without starting a turn. */
 	open(id: string): Promise<AgentSession> {
-		const agent = this.agents.get(id);
-		if (!agent) throw new Error(`Agent ${id} is not owned by ${this.self.id}.`);
-		return this.load(agent);
+		return this.load(this.agent(id));
 	}
 
 	/** Stops an owned Agent's current turn and withdraws its queued inputs. */
@@ -588,12 +548,10 @@ export class Agents {
 	 * `submit_result` with a matching value, which becomes the input's `value`; `text` tells it so.
 	 */
 	async request(id: string, text: string, delivery: "followUp" | "steer", schema?: unknown): Promise<InputRecord> {
-		const agent = this.agents.get(id);
-		if (!agent) throw new Error(`Agent ${id} is not owned by ${this.self.id}.`);
+		const agent = this.agent(id);
 		const input: Input = { text, permit: this.reserve(), record: this.newRecord(agent), done: deferred() };
 		if (schema !== undefined) input.schema = schema;
-		if (delivery === "steer" && agent.turn) this.join(agent, agent.turn, input);
-		else this.enqueue(agent, input);
+		this.add(agent, input, delivery);
 		await input.done!.promise;
 		return input.record!;
 	}
@@ -610,8 +568,7 @@ export class Agents {
 	}
 
 	accept(id: string, text: string, delivery: Delivery, options: { fromOwner: boolean; notification: boolean }): { queued: boolean } {
-		const agent = this.agents.get(id);
-		if (!agent) throw new Error(`Agent ${id} is not owned by ${this.self.id}.`);
+		const agent = this.agent(id);
 		if (delivery === "write") {
 			this.write(agent, text);
 			return { queued: false };
@@ -619,11 +576,7 @@ export class Agents {
 		// Notifications keep their owner informed even at the input limit.
 		const permit = options.notification ? undefined : this.reserve();
 		const input: Input = { text, permit, record: options.fromOwner && !options.notification ? this.newRecord(agent) : undefined };
-		if (delivery === "steer" && agent.turn) {
-			this.join(agent, agent.turn, input);
-			return { queued: false };
-		}
-		return { queued: this.enqueue(agent, input) };
+		return { queued: this.add(agent, input, delivery) };
 	}
 
 	async wait(targets: Owned[] | undefined, history: number, timeoutSeconds: number, signal?: AbortSignal): Promise<WaitOutcome> {
@@ -643,21 +596,7 @@ export class Agents {
 				const remaining = deadline - Date.now();
 				if (remaining <= 0) break;
 				signal?.throwIfAborted();
-				let timer: ReturnType<typeof setTimeout> | undefined;
-				let onAbort: (() => void) | undefined;
-				try {
-					await Promise.race([
-						this.change.promise,
-						new Promise<void>((resolve) => { timer = setTimeout(resolve, remaining); }),
-						new Promise<void>((resolve) => {
-							onAbort = resolve;
-							signal?.addEventListener("abort", onAbort, { once: true });
-						}),
-					]);
-				} finally {
-					clearTimeout(timer);
-					if (onAbort) signal?.removeEventListener("abort", onAbort);
-				}
+				await waitForChange(this.change.promise, remaining, signal);
 			}
 			signal?.throwIfAborted();
 			const results: WaitResult[] = [];
@@ -673,12 +612,13 @@ export class Agents {
 			if (suspended) await shared.scheduler.resume(this.self.rootId, this.self.id, this.limits.maxConcurrent, signal);
 			for (const agent of unique) {
 				agent.waiters -= 1;
+				let notified = false;
 				for (const input of agent.record.inputs) {
 					if (!ended(input) || input.notified) continue;
-					if (returned) input.notified = true;
+					if (returned) input.notified = notified = true;
 					else this.notifyLater(agent, input);
 				}
-				this.persist(agent);
+				if (notified) this.persist(agent);
 			}
 		}
 	}
@@ -781,6 +721,13 @@ export class Agents {
 		return queued;
 	}
 
+	/** A steer joins the current turn; other inputs queue. Returns whether the input waits for a slot. */
+	private add(agent: Owned, input: Input, delivery: "followUp" | "steer"): boolean {
+		if (delivery !== "steer" || !agent.turn) return this.enqueue(agent, input);
+		this.join(agent, agent.turn, input);
+		return false;
+	}
+
 	private join(agent: Owned, turn: Turn, input: Input): void {
 		turn.inputs.push(input);
 		if (input.record && turn.started) input.record.state = "running";
@@ -806,15 +753,13 @@ export class Agents {
 	private async runTurn(agent: Owned, turn: Turn): Promise<void> {
 		const rootId = this.self.rootId;
 		let slot = false;
-		let session: AgentSession | undefined;
-		let before: ReturnType<AgentSession["getSessionStats"]> | undefined;
 		let answer: { outcome: Outcome; result: string } = { outcome: "aborted", result: "" };
 		try {
 			await shared.scheduler.acquireQueued(rootId, agent.record.id, this.limits.maxConcurrent, turn.abort.signal);
 			slot = true;
-			session = await this.load(agent);
+			const session = await this.load(agent);
 			turn.abort.signal.throwIfAborted();
-			before = session.getSessionStats();
+			const before = session.getSessionStats().assistantMessages;
 			turn.started = true;
 			for (const input of turn.inputs) if (input.record) input.record.state = "running";
 			this.persist(agent);
@@ -827,37 +772,19 @@ export class Agents {
 				await session.waitForIdle();
 				const leftover = takeQueued(session.agent);
 				for (const message of leftover) {
-					if ((message as { details?: { delivery?: Delivery } }).details?.delivery !== "write") continue;
-					await session.sendCustomMessage(message as ReturnType<typeof customMessage>, { triggerTurn: false });
+					if (message.details.delivery === "write") await session.sendCustomMessage(message, { triggerTurn: false });
 				}
 				batch = [
 					...turn.pending.splice(0),
-					...leftover.flatMap((message) => {
-						const details = (message as { details?: { delivery?: Delivery; user?: boolean } }).details;
-						return details?.delivery === "write" ? [] : [{ text: String((message as { content: unknown }).content), user: details?.user }];
-					}),
+					...leftover.flatMap(({ content, details }) => details.delivery === "write" ? [] : [{ text: content, user: details.user }]),
 				];
 			}
-			answer = turn.abort.signal.aborted ? { outcome: "aborted", result: "" } : lastAnswer(session, before.assistantMessages);
-			if (turn.abort.signal.aborted) {
-				const last = lastAnswer(session, before.assistantMessages);
-				if (last.outcome !== "failed") answer.result = last.result;
-			}
+			const last = lastAnswer(session, before);
+			answer = !turn.abort.signal.aborted ? last : { outcome: "aborted", result: last.outcome === "failed" ? "" : last.result };
 		} catch (error) {
 			if (!turn.abort.signal.aborted) answer = { outcome: "failed", result: error instanceof Error ? error.message : String(error) };
 		} finally {
 			if (slot) shared.scheduler.release(rootId, agent.record.id);
-			if (session && before) {
-				const after = session.getSessionStats();
-				addUsage(rootId, {
-					input: Math.max(0, after.tokens.input - before.tokens.input),
-					output: Math.max(0, after.tokens.output - before.tokens.output),
-					cacheRead: Math.max(0, after.tokens.cacheRead - before.tokens.cacheRead),
-					cacheWrite: Math.max(0, after.tokens.cacheWrite - before.tokens.cacheWrite),
-					cost: Math.max(0, after.cost - before.cost),
-					turns: Math.max(0, after.assistantMessages - before.assistantMessages),
-				});
-			}
 			agent.turn = undefined;
 			for (const input of turn.inputs) this.end(agent, input, answer.outcome, answer.result);
 			turn.done.resolve();
@@ -914,6 +841,12 @@ export class Agents {
 		} finally {
 			if (suspended) await shared.scheduler.resume(this.self.rootId, this.self.id, this.limits.maxConcurrent, signal);
 		}
+	}
+
+	private agent(id: string): Owned {
+		const agent = this.agents.get(id);
+		if (!agent) throw new Error(`Agent ${id} is not owned by ${this.self.id}.`);
+		return agent;
 	}
 
 	private pending(agent: Owned): boolean {

@@ -1,10 +1,9 @@
-import { highlightCode, keyHint, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { highlightCode, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import type { PiCodemode } from "./codemode.ts";
+import { CODEMODE_TOOL_NAME, type PiCodemode } from "./codemode.ts";
 import { PROGRAM_TOOL_NAME } from "./execute.ts";
-import { formatToolCall, renderTextResult, startDuration, type DurationState } from "../render-call.ts";
+import { formatToolCall, moreLines, renderTextResult, startDuration, type DurationState } from "../render-call.ts";
 
-const CODEMODE_TOOL_NAME = "codemode";
 /** The first line of the `codemode` description, which the `program` intro replaces. */
 const CODEMODE_FIRST_LINE = "Run JavaScript code to orchestrate/compose tool calls\n";
 const MODEL_API_START = "\n\nModel API:";
@@ -31,7 +30,7 @@ function programOnly(pi: ExtensionAPI): boolean {
 	return pi.getFlag(PROGRAM_ONLY_FLAG) === true || (globalThis as Record<symbol, unknown>)[PROGRAM_ONLY] === true;
 }
 
-function readSettings(pi: ExtensionAPI): { mode: "on" | "only"; inlineBudget?: number } {
+function codemodeSettings(pi: ExtensionAPI): { mode: "on" | "only"; inlineBudget?: number } {
 	const settings = pi.getSettings().codemode;
 	const budget = settings?.inlineBudget;
 	return {
@@ -59,8 +58,8 @@ function describeProgram(intro: string, agentApi: string, codemodeDescription: s
 export function programLoadout(pi: ExtensionAPI, piCodemode: PiCodemode, intro: string, agentApi: string): (loadout: Loadout) => Changes {
 	const { prepareLoadout } = piCodemode.createCodemodeToolDefinition({
 		models: true,
-		getMode: () => readSettings(pi).mode,
-		getInlineBudget: () => readSettings(pi).inlineBudget,
+		getMode: () => codemodeSettings(pi).mode,
+		getInlineBudget: () => codemodeSettings(pi).inlineBudget,
 	});
 	return (loadout) => {
 		const changes = prepareLoadout!(loadout) ?? {};
@@ -86,9 +85,7 @@ export function programRenderers(piCodemode: PiCodemode): Renderers {
 				const lines = highlightCode(code.replace(/\r/g, "").replace(/\t/g, "   ").trimEnd(), "javascript");
 				const shown = context.expanded ? lines : lines.slice(0, CODE_PREVIEW_LINES);
 				text += `\n${shown.join("\n")}`;
-				if (shown.length < lines.length) {
-					text += `\n${theme.fg("muted", `... (${lines.length - shown.length} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
-				}
+				if (shown.length < lines.length) text += `\n${moreLines(lines.length - shown.length, theme)}`;
 			}
 			const component = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 			component.setText(text);
@@ -96,7 +93,7 @@ export function programRenderers(piCodemode: PiCodemode): Renderers {
 		},
 		// `wait` shows how long it has waited; the other results render like `codemode`.
 		renderResult: (result, options, theme, context) => (context.args as { action?: string }).action === "wait"
-			? renderTextResult(result, options, theme, context, () => keyHint("app.tools.expand", "to expand"))
+			? renderTextResult(result, options, theme, context)
 			: piCodemode.renderResult(result, options, theme, context) as Text,
 	};
 }

@@ -1,3 +1,4 @@
+import { keyHint } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 
 type ToolCallTheme = {
@@ -19,6 +20,11 @@ export function renderToolCall(name: string, args: unknown, theme: ToolCallTheme
 }
 
 const RESULT_PREVIEW_LINES = 10;
+
+/** The notice below a collapsed preview: the number of hidden lines and the key that expands it. */
+export function moreLines(hidden: number, theme: { fg(color: "muted", text: string): string }): string {
+	return `${theme.fg("muted", `... (${hidden} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+}
 
 /** Per-row state of a timed call: when it started executing and when its result arrived. */
 export interface DurationState {
@@ -59,14 +65,12 @@ interface ResultTheme {
 /**
  * The text output like Pi's default result, with the duration of a timed call below it.
  * Like Pi's `bash` result, a blank line precedes the output and the duration.
- * `expandHint` renders the key hint for expanding a collapsed result.
  */
 export function renderTextResult(
 	result: { content: Array<{ type: string; text?: string }> },
 	options: { expanded: boolean; isPartial: boolean },
 	theme: ResultTheme,
 	context: { state: unknown; invalidate: () => void; lastComponent?: unknown },
-	expandHint: () => string,
 ): Text {
 	const output = result.content.flatMap((part) => part.type === "text" && part.text ? [part.text] : []).join("\n").trim();
 	const lines = output ? output.split("\n") : [];
@@ -74,7 +78,7 @@ export function renderTextResult(
 	const sections: string[] = [];
 	if (shown.length > 0) {
 		let text = shown.map((line) => theme.fg("toolOutput", line)).join("\n");
-		if (shown.length < lines.length) text += `\n${theme.fg("muted", `... (${lines.length - shown.length} more lines,`)} ${expandHint()}${theme.fg("muted", ")")}`;
+		if (shown.length < lines.length) text += `\n${moreLines(lines.length - shown.length, theme)}`;
 		sections.push(text);
 	}
 	const duration = updateDuration(context.state as DurationState, options.isPartial, context.invalidate);

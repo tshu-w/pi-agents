@@ -4,9 +4,10 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentSession, ExtensionRunner } from "@earendil-works/pi-coding-agent";
+import { CODEMODE_TOOL_NAME } from "./codemode.ts";
+import { PROGRAM_TOOL_NAME } from "./execute.ts";
 
 const PATCHED = Symbol.for("pi-agents:patched");
-const CODEMODE_TOOL_NAME = "codemode";
 const MCP_EXTENSION_PATH = "builtin:mcp";
 
 interface DetachedCall {
@@ -41,7 +42,6 @@ type Patchable = Record<PropertyKey, any>;
 export function installHostPatches(
 	session: typeof AgentSession,
 	runner: typeof ExtensionRunner,
-	programToolName: string,
 	codemodeSchema: unknown,
 ): void {
 	const sessionProto = session.prototype as unknown as Patchable;
@@ -86,15 +86,15 @@ export function installHostPatches(
 		runnerProto.bindCore = function (this: Patchable, ...args: unknown[]) {
 			bindCore.apply(this, args);
 			const mcp = (this.extensions as Patchable[]).find((extension) => extension.path === MCP_EXTENSION_PATH);
-			if (mcp) aliasProgramForMcp(this, mcp, programToolName, codemodeSchema);
+			if (mcp) aliasProgramForMcp(this, mcp, codemodeSchema);
 		};
 	}
 }
 
-function aliasProgramForMcp(runner: Patchable, mcp: Patchable, programToolName: string, codemodeSchema: unknown): void {
+function aliasProgramForMcp(runner: Patchable, mcp: Patchable, codemodeSchema: unknown): void {
 	if (!mcp[PATCHED]) {
 		mcp[PATCHED] = true;
-		const asCodemodeCall = (event: Patchable) => event.toolName === programToolName && event.input?.action === "run"
+		const asCodemodeCall = (event: Patchable) => event.toolName === PROGRAM_TOOL_NAME && event.input?.action === "run"
 			? { ...event, toolName: CODEMODE_TOOL_NAME, input: { code: event.input.code } }
 			: event;
 		for (const [type, handlers] of mcp.handlers as Map<string, Function[]>) {
@@ -112,16 +112,16 @@ function aliasProgramForMcp(runner: Patchable, mcp: Patchable, programToolName: 
 	const { getActiveTools, getAllTools, setActiveTools } = runtime;
 	runtime.getActiveTools = () => {
 		const active: string[] = getActiveTools();
-		return inMcp.getStore() && active.includes(programToolName) && !active.includes(CODEMODE_TOOL_NAME) ? [...active, CODEMODE_TOOL_NAME] : active;
+		return inMcp.getStore() && active.includes(PROGRAM_TOOL_NAME) && !active.includes(CODEMODE_TOOL_NAME) ? [...active, CODEMODE_TOOL_NAME] : active;
 	};
 	runtime.getAllTools = () => {
 		const tools: Patchable[] = getAllTools();
-		const program = inMcp.getStore() && tools.find((tool) => tool.name === programToolName);
+		const program = inMcp.getStore() && tools.find((tool) => tool.name === PROGRAM_TOOL_NAME);
 		return program ? [...tools, { ...program, name: CODEMODE_TOOL_NAME, parameters: codemodeSchema }] : tools;
 	};
 	runtime.setActiveTools = (names: string[]) => {
 		if (inMcp.getStore() && names.includes(CODEMODE_TOOL_NAME) && !getActiveTools().includes(CODEMODE_TOOL_NAME)) {
-			names = [...new Set(names.map((name) => name === CODEMODE_TOOL_NAME ? programToolName : name))];
+			names = [...new Set(names.map((name) => name === CODEMODE_TOOL_NAME ? PROGRAM_TOOL_NAME : name))];
 		}
 		return setActiveTools(names);
 	};

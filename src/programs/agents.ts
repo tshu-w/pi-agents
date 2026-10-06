@@ -34,7 +34,6 @@ export function programScope(
 		busy: () => true,
 		sessionFile: () => undefined,
 		receive: () => { throw new Error("A Program does not receive messages."); },
-		persistUsage: () => {},
 	});
 	const from = { id, name: self.name() };
 	const host: ProgramAgentHost = {

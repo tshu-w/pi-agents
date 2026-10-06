@@ -7,6 +7,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { CodemodeResult, CodemodeTool } from "@earendil-works/pi-codemode";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { loadCodemode, loadPiCodemode } from "./codemode.ts";
+import type { DetachedCallOptions } from "./host-patches.ts";
 
 export const PROGRAM_TOOL_NAME = "program";
 
@@ -105,7 +106,8 @@ export async function executeProgram(
 			value: (name: string, args: unknown, callOptions: { signal?: AbortSignal } = {}) => {
 				if (!options.background) return ctx.executeTool(name, args, callOptions);
 				addFile(name, args);
-				return ctx.executeTool(name, args, { ...callOptions, detachedCallerId: `${toolCallId}:${++detachedCalls}`, detachedAbort: () => options.abort?.() } as never);
+				const detachedOptions = { ...callOptions, detachedCallerId: `${toolCallId}:${++detachedCalls}`, detachedAbort: () => options.abort?.() } satisfies DetachedCallOptions;
+				return ctx.executeTool(name, args, detachedOptions as never);
 			},
 		},
 	}) as ExtensionToolContext;

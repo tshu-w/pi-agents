@@ -8,7 +8,6 @@ import type { PiCodemode } from "./codemode.ts";
 import { executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./execute.ts";
 import { programDescription, programLoadout, programRenderers } from "./loadout.ts";
 import { randomUUID } from "node:crypto";
-import { shortId } from "../agents/agents.ts";
 import { programListLine, Programs, renderProgramWait } from "./programs.ts";
 import { agentGlobals, withAgentPrefix } from "./sandbox.ts";
 
@@ -142,7 +141,7 @@ export function registerProgramTools(
 					const code = params.code;
 					if (params.background) {
 						const record = programs.start((id, programSignal, abort) => runProgram(id, self, toolCallId, code, programSignal, current, { timeout: params.timeout, background: true, abort }));
-						return { content: [{ type: "text", text: `Program ${shortId(record.id, programs.ids())} started.` }], details: { id: record.id } };
+						return { content: [{ type: "text", text: `Program ${programs.label(record)} started.` }], details: { id: record.id } };
 					}
 					const { result } = await self.agents.whileSuspended(() => runProgram(randomUUID(), self, toolCallId, code, signal ?? new AbortController().signal, current, {
 						timeout: params.timeout,
@@ -180,7 +179,7 @@ export function registerProgramTools(
 					const program = programs.target(targets[0]!);
 					const stopped = await programs.stop(program);
 					return {
-						content: [{ type: "text", text: `Program ${shortId(program.record.id, programs.ids())} ${stopped ? "stopped" : "has already ended"}.` }],
+						content: [{ type: "text", text: `Program ${programs.label(program.record)} ${stopped ? "stopped" : "has already ended"}.` }],
 						details: { id: program.record.id, stopped },
 					};
 				}

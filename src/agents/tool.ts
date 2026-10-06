@@ -1,4 +1,4 @@
-import { keyHint, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { boundBlocks, boundText } from "../output.ts";
@@ -32,7 +32,7 @@ function resultDetails({ agent, input, history }: WaitResult, result?: string) {
 }
 
 /** Renders wait results; returns the text and the results the caller has now read. */
-export function renderWait(outcome: WaitOutcome, ids: string[]): { text: string; read: WaitResult[]; details: Record<string, unknown> } {
+function renderWait(outcome: WaitOutcome, ids: string[]): { text: string; read: WaitResult[]; details: Record<string, unknown> } {
 	const { results, pending } = outcome;
 	const pendingLine = pending.length > 0 ? `Still pending: ${pending.map((agent) => label(agent, ids)).join(", ")}` : "";
 	if (results.length === 0) return { text: pendingLine || "No results.", read: [], details: { results: [], pending: pending.map((agent) => agent.id) } };
@@ -85,7 +85,7 @@ export function registerAgentTool(
 			return renderToolCall("agent", args, theme, context.lastComponent);
 		},
 		// `wait` shows how long it has waited.
-		renderResult: (result, options, theme, context) => renderTextResult(result, options, theme, context, () => keyHint("app.tools.expand", "to expand")),
+		renderResult: (result, options, theme, context) => renderTextResult(result, options, theme, context),
 		description: `Create, message, and coordinate Agents. \`spawn\` creates an owned Agent and sends its first input; \`send\` sends an input or a write to a visible Agent; \`wait\` waits for owned Agents and returns unread results; \`list\` finds visible Agents; \`abort\` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification naming the Agent and outcome; \`wait\` returns the result. Owned Agents under the same root share \`${maxConcurrent}\` execution slots and a limit of \`${maxOutstanding}\` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.`,
 		promptSnippet: "Create, message, and coordinate Agents",
 		promptGuidelines: [
