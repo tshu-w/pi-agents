@@ -2,7 +2,7 @@ import { buildSessionContext, getAgentDir, getPackageDir, hasTrustRequiringProje
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { treeMetadata } from "../agents/agents.ts";
+import { treeMetadata } from "../agents/registry.ts";
 import { isBackgroundWorker } from "./background.mjs";
 import { sendViaSupervisor } from "./client.mjs";
 import { rootPaths } from "./paths.mjs";

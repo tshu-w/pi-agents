@@ -102,6 +102,11 @@ test("an owned Agent answers its first input, and wait returns the answer once",
 	assert.deepEqual(listed.details, { total: 1, agents: [{ id, name: "worker", ownerId: root.session.sessionManager.getSessionId(), state: "idle" }] });
 	assert.deepEqual((await root.callResult({ action: "list", offset: 1 })).details, { total: 1, agents: [] });
 	assert.match(await root.call({ action: "list" }), new RegExp(`^worker \\(${idOf(spawned)}\\)  idle  `));
+	assert.equal((await root.callResult({ action: "list", query: "hello" })).details.total, 1);
+	// A later input in the same Session file is found after its first search.
+	await root.call({ action: "send", target: "worker", message: "zebra" });
+	await root.call({ action: "wait", target: "worker", timeout: 10 });
+	assert.match(await root.call({ action: "list", query: "zebra" }), /zebra/);
 	await root.close();
 });
 

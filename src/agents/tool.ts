@@ -6,22 +6,23 @@ import { rejectFields } from "../params.ts";
 import { renderTextResult, renderToolCall, startDuration, type DurationState } from "../render-call.ts";
 import type { RootRuntime } from "../roots/runtime.ts";
 import {
-	deliver,
-	label,
-	listLine,
-	nodes,
-	rememberRoots,
-	shortId,
-	resolveIn,
-	searchEntries,
 	THINKING_LEVELS,
-	treeEntries,
-	type AgentNode,
-	type Entry,
 	type Limits,
 	type WaitOutcome,
 	type WaitResult,
 } from "./agents.ts";
+import {
+	deliver,
+	label,
+	nodes,
+	rememberRoots,
+	shortId,
+	resolveIn,
+	treeEntries,
+	type AgentNode,
+	type Entry,
+} from "./registry.ts";
+import { listLine, searchEntries } from "./search.ts";
 
 function resultBlock({ agent, input, history }: WaitResult, ids: string[]): string {
 	return `<agent-result name="${agent.name}" id="${shortId(agent.id, ids)}" status="${input.state}"${history ? ' history="true"' : ""}>\n${input.result ?? ""}\n</agent-result>`;

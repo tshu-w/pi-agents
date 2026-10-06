@@ -11,8 +11,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
+import { Agents, type Limits } from "./agents/agents.ts";
 import {
-	Agents,
 	customMessage,
 	messageText,
 	rememberRoots,
@@ -22,8 +22,7 @@ import {
 	treeIdle,
 	treeMetadata,
 	type AgentNode,
-	type Limits,
-} from "./agents/agents.ts";
+} from "./agents/registry.ts";
 import { registerAgentTool } from "./agents/tool.ts";
 import { CODEMODE_TOOL_NAME, loadPiCodemode } from "./programs/codemode.ts";
 import { PROGRAM_TOOL_NAME } from "./programs/execute.ts";

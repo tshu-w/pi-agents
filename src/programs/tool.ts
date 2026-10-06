@@ -1,9 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { nodes, SUBMIT_RESULT_TOOL_NAME, type AgentNode, type Limits } from "../agents/agents.ts";
+import { SUBMIT_RESULT_TOOL_NAME, type Limits } from "../agents/agents.ts";
+import { nodes, type AgentNode } from "../agents/registry.ts";
 import { rejectFields } from "../params.ts";
-import { programScope } from "./agents.ts";
+import { programScope } from "./scope.ts";
 import type { PiCodemode } from "./codemode.ts";
 import { executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./execute.ts";
 import { programDescription, programLoadout, programRenderers } from "./loadout.ts";

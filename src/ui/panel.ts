@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, TruncatedText } from "@earendil-works/pi-tui";
-import { label, nodes, onTreeChange, treeEntries, type AgentNode } from "../agents/agents.ts";
+import { label, nodes, onTreeChange, treeEntries, type AgentNode } from "../agents/registry.ts";
 import type { Programs } from "../programs/programs.ts";
 
 const WIDGET_KEY = "pi-agents";

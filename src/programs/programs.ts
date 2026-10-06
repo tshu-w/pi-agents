@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { deferred, shortId, waitForChange, type Deferred } from "../agents/agents.ts";
+import { deferred, waitForChange, type Deferred } from "../agents/agents.ts";
+import { shortId } from "../agents/registry.ts";
 import { boundBlocks, boundText } from "../output.ts";
 import type { ProgramFiles, ProgramOutcome, ProgramRunResult } from "./execute.ts";
 

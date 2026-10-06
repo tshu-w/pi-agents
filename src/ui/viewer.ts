@@ -31,7 +31,8 @@ import {
 	type SelectItem,
 	type TUI,
 } from "@earendil-works/pi-tui";
-import { firstInput, MESSAGE_TYPE, nodes, onTreeChange, treeEntries, type AgentNode, type Entry } from "../agents/agents.ts";
+import { MESSAGE_TYPE, nodes, onTreeChange, treeEntries, type AgentNode, type Entry } from "../agents/registry.ts";
+import { firstInput } from "../agents/search.ts";
 import { execFileSync } from "node:child_process";
 
 type Message = AgentSession["messages"][number];
