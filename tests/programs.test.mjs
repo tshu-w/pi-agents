@@ -7,12 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const agentDir = mkdtempSync(join(tmpdir(), "pi-agents-home-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
-const { pi, PI_PACKAGE } = await import("./pi.mjs");
-const ai = await import(join(PI_PACKAGE, "node_modules/@earendil-works/pi-ai/dist/index.js"));
-
-const textOf = (content) => typeof content === "string"
-	? content
-	: content.filter((block) => block.type === "text").map((block) => block.text).join("");
+const { pi, ai, EXTENSION, textOf, gate, until, createSession } = await import("./pi.mjs");
 
 /** The text an Agent received from its owner, without the header and the schema instruction. */
 const bodyOf = (text) => text.split("\n").slice(1, -1).join("\n").split("\n\nWhen done, call")[0];
@@ -20,22 +15,20 @@ const bodyOf = (text) => text.split("\n").slice(1, -1).join("\n").split("\n\nWhe
 /**
  * A root Session whose model calls a tool with the arguments of each `call`, and otherwise
  * records the message and answers "noted". Programs call tools only within the agent loop.
+ * `state.declared` holds the tool declarations the root's model saw last.
  *
  * Agents answer `answer:<body>`. A body `submit:<json>[|<json>]` calls `submit_result` with the
- * first value, and with the second after an error; `hold` answers once `state.release` is called;
- * `call:<json>` calls `agent` with those arguments and answers with its result.
+ * first value, and with the second after an error; `hold` counts itself in `state.busy` and answers
+ * once `state.hold` opens; `call:<json>` and `program:<json>` call `agent` or `program` with those
+ * arguments and answer with the result.
  */
 async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), sessionFile = undefined, limits = {}, settings = {}, extensions = []) {
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ...settings, "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
 	writeFileSync(join(cwd, "note.txt"), "note");
 	const messages = [];
 	const pending = [];
-	const state = { busy: 0 };
-	let release;
-	const released = new Promise((resolve) => { release = resolve; });
-	state.release = release;
-	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "model" }], tokensPerSecond: 0 });
-	faux.setResponses(Array.from({ length: 200 }, () => async (context, options) => {
+	const state = { busy: 0, hold: gate(), declared: [] };
+	const route = async (context, options) => {
 		const last = context.messages.at(-1);
 		const first = textOf(context.messages.find((message) => message.role === "user")?.content ?? "");
 		if (first.startsWith("<agent-message ")) {
@@ -46,36 +39,28 @@ async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), se
 				if (last.isError && retry !== undefined) return ai.fauxAssistantMessage(ai.fauxToolCall("submit_result", { value: retry }));
 				return ai.fauxAssistantMessage(textOf(last.content));
 			}
-			if (body.startsWith("call:")) {
-				if (last.role !== "toolResult") return ai.fauxAssistantMessage(ai.fauxToolCall("agent", JSON.parse(body.slice("call:".length))));
+			const [, tool, json] = /^(call|program):(.*)$/s.exec(body) ?? [];
+			if (tool) {
+				if (last.role !== "toolResult") return ai.fauxAssistantMessage(ai.fauxToolCall(tool === "call" ? "agent" : "program", JSON.parse(json)));
 				return ai.fauxAssistantMessage(textOf(last.content));
 			}
 			if (body === "hold") {
 				state.busy += 1;
-				await Promise.race([released, new Promise((resolve) => options?.signal?.addEventListener("abort", resolve, { once: true }))]);
+				await Promise.race([state.hold.promise, new Promise((resolve) => options?.signal?.addEventListener("abort", resolve, { once: true }))]);
 				if (options?.signal?.aborted) return ai.fauxAssistantMessage("", { stopReason: "aborted" });
 			}
 			return ai.fauxAssistantMessage(`answer:${body}`);
 		}
+		state.declared = context.messages.filter((message) => message.role === "system").flatMap((message) => message.toolsAdded ?? []);
 		if (last?.role === "user" && textOf(last.content) === "call") {
 			const [tool, args] = pending.shift();
 			return ai.fauxAssistantMessage(ai.fauxToolCall(tool, args));
 		}
 		if (last?.role !== "toolResult") messages.push(textOf(last?.content ?? ""));
 		return ai.fauxAssistantMessage("noted");
-	}));
-	const modelRuntime = await pi.ModelRuntime.create({ authPath: join(cwd, "auth.json"), modelsPath: null });
-	modelRuntime.registerNativeProvider(faux.provider);
-	const settingsManager = pi.SettingsManager.create(cwd, agentDir, { projectTrusted: true });
-	const resourceLoader = new pi.DefaultResourceLoader({
-		cwd, agentDir, settingsManager, noExtensions: true,
-		additionalExtensionPaths: [fileURLToPath(new URL("../src/index.ts", import.meta.url)), ...extensions],
-	});
-	await resourceLoader.reload();
+	};
 	const sessionManager = sessionFile ? pi.SessionManager.open(sessionFile) : pi.SessionManager.create(cwd, join(cwd, "sessions"));
-	const { session } = await pi.createAgentSession({
-		cwd, agentDir, settingsManager, resourceLoader, sessionManager, modelRuntime, model: faux.getModel(), tools: ["read", "program", "agent"],
-	});
+	const session = await createSession({ cwd, route, extensions: [EXTENSION, ...extensions], sessionManager, tools: ["read", "program", "agent"] });
 	await session.bindExtensions({ mode: "print" });
 	const call = async (args, tool = "program") => {
 		await session.waitForIdle();
@@ -114,9 +99,7 @@ test("a foreground Program calls the caller's tools except program and keeps sto
 test("a background Program runs on after run returns, notifies its caller, and wait returns its result once", async () => {
 	const root = await startRoot();
 	const id = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' }); return 'done'" }));
-	const deadline = Date.now() + 10000;
-	while (!root.messages.includes(`Program ${id} completed.`) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
-	assert.ok(root.messages.includes(`Program ${id} completed.`), root.messages.join("\n"));
+	await until(() => root.messages.includes(`Program ${id} completed.`), "notification");
 	assert.match(await root.text({ action: "wait", timeout: 10 }), /done$/);
 	assert.equal(await root.text({ action: "wait", timeout: 10 }), "No results.");
 	assert.match(await root.text({ action: "list" }), new RegExp(`^${id}  completed$`));
@@ -139,16 +122,16 @@ test("a background Program's calls keep distinct IDs across turns, and their hoo
 	const hookExtension = fileURLToPath(new URL("./fixtures/hook-extension.mjs", import.meta.url));
 	const root = await startRoot(undefined, undefined, {}, {}, [hookExtension]);
 	const { hooks } = await import(hookExtension);
-	hooks.holdMs = 300;
+	hooks.holdMs = 80;
 	const id = idOf(await root.text({ action: "run", background: true, code: "for (let i = 0; i < 4; i++) await tools.read({ path: 'note.txt' }); return 'done'" }));
-	// A caller turn that is aborted while the Program calls tools.
-	const turn = root.call({ action: "run", code: "await tools.read({ path: 'note.txt' }); return 'fg'" });
-	await new Promise((resolve) => setTimeout(resolve, 100));
+	// A caller turn that is aborted while a foreground Program and the background one call tools.
+	const turn = root.call({ action: "run", code: "await tools.read({ path: 'foreground.txt' }); return 'fg'" });
+	const foreground = await until(() => hooks.calls.find((call) => call.path === "foreground.txt"), "foreground call");
 	await root.session.abort();
 	await turn;
+	assert.equal(foreground.aborted, true);
 	assert.match(await root.text({ action: "wait", target: id, timeout: 10 }), /done$/);
-	const runCallId = root.session.messages.find((message) => message.role === "toolResult" && textOf(message.content) === `Program ${id} started.`).toolCallId;
-	const background = hooks.calls.filter((call) => call.id.startsWith(`${runCallId}:`));
+	const background = hooks.calls.filter((call) => call.path === "note.txt");
 	assert.equal(background.length, 4);
 	assert.equal(new Set(background.map((call) => call.id)).size, 4);
 	assert.ok(background.every((call) => call.signal && !call.aborted));
@@ -160,7 +143,7 @@ test("a background Program's calls keep distinct IDs across turns, and their hoo
 	await root.text({ action: "stop", target: stopped });
 	assert.equal(hooks.calls[0].aborted, true);
 	// ctx.abort() in a hook stops the Program, not the caller's turn.
-	hooks.holdMs = 300;
+	hooks.holdMs = 80;
 	const aborted = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' }); await tools.read({ path: 'abort.txt' }); return 'unreachable'" }));
 	const caller = await root.call({ action: "run", code: "await tools.read({ path: 'note.txt' }); await tools.read({ path: 'note.txt' }); return 'fg'" });
 	assert.match(textOf(caller.content), /fg$/);
@@ -231,6 +214,14 @@ test("a Program's Agents are invisible to the caller, count toward its limit, an
 	await root.close();
 });
 
+test("an owned Agent gives up its slot while its foreground Program waits for an Agent under it", async () => {
+	const root = await startRoot(undefined, undefined, { maxConcurrent: 1, maxOutstanding: 2 });
+	const run = { action: "run", code: "return await agent().send('inner')" };
+	await root.text({ action: "spawn", name: "outer", message: `program:${JSON.stringify(run)}` }, "agent");
+	assert.match(await root.text({ action: "wait", target: "outer", timeout: 10 }, "agent"), /^Script completed\n[\s\S]*answer:inner$/);
+	await root.close();
+});
+
 test("each of a Program's Agents sees only itself and the Agents under it", async () => {
 	const root = await startRoot();
 	const result = await root.text({ action: "run", code: `
@@ -248,41 +239,35 @@ test("each of a Program's Agents sees only itself and the Agents under it", asyn
 });
 
 test("codemode.mode decides whether program lists the direct tools or they keep their own declarations", async () => {
-	const declared = (root) => Object.fromEntries(root.session.agent.state.tools.map((tool) => [tool.name, tool.description]));
+	const declared = async (root) => {
+		await root.session.prompt("hello");
+		return Object.fromEntries(root.state.declared.map((tool) => [tool.name, tool.description]));
+	};
 	const on = await startRoot();
 	const readDescription = on.session.getAllTools().find((tool) => tool.name === "read").description;
-	let tools = declared(on);
+	let tools = await declared(on);
+	assert.deepEqual(Object.keys(tools).sort(), ["agent", "program", "read"]);
 	assert.ok(tools.read.startsWith(readDescription) && tools.read.length > readDescription.length);
 	assert.ok(!tools.program.includes(readDescription));
-	assert.deepEqual([...on.session._hiddenDeclarations], []);
 	await on.close();
 	const only = await startRoot(undefined, undefined, {}, { codemode: { mode: "only" } });
-	tools = declared(only);
+	tools = await declared(only);
+	assert.deepEqual(Object.keys(tools), ["program"]);
 	assert.ok(tools.program.includes(readDescription));
-	assert.deepEqual([...only.session._hiddenDeclarations].sort(), ["agent", "read"]);
 	await only.close();
 });
 
 test("MCP activates program, and a Program waits for the MCP server its code names", async () => {
-	process.env.PI_AGENTS_TEST_MCP_DELAY = "1500";
+	process.env.PI_AGENTS_TEST_MCP_DELAY = "300";
 	const cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-"));
-	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "model" }], tokensPerSecond: 0 });
-	faux.setResponses([
-		() => {
-			return ai.fauxAssistantMessage(ai.fauxToolCall("program", { action: "run", code: "return (await tools.mcp__echo__shout({ text: 'hi' })).content[0].text" }));
-		},
-		() => ai.fauxAssistantMessage("done"),
-	]);
-	const modelRuntime = await pi.ModelRuntime.create({ authPath: join(cwd, "auth.json"), modelsPath: null });
-	modelRuntime.registerNativeProvider(faux.provider);
-	const settingsManager = pi.SettingsManager.create(cwd, agentDir, { projectTrusted: true });
-	const resourceLoader = new pi.DefaultResourceLoader({
-		cwd, agentDir, settingsManager, noExtensions: true,
+	const route = (context) => context.messages.at(-1).role === "toolResult"
+		? ai.fauxAssistantMessage("done")
+		: ai.fauxAssistantMessage(ai.fauxToolCall("program", { action: "run", code: "return (await tools.mcp__echo__shout({ text: 'hi' })).content[0].text" }));
+	const session = await createSession({
+		cwd, route, sessionManager: pi.SessionManager.inMemory(cwd),
 		extensionFactories: [{ name: "codemode", builtin: true, factory: pi.createCodemodeExtension() }, { name: "mcp", builtin: true, factory: pi.createMcpExtension() }],
-		additionalExtensionPaths: ["builtin:codemode", "builtin:mcp", fileURLToPath(new URL("../src/index.ts", import.meta.url)), fileURLToPath(new URL("./fixtures/mcp-extension.mjs", import.meta.url))],
+		extensions: ["builtin:codemode", "builtin:mcp", EXTENSION, fileURLToPath(new URL("./fixtures/mcp-extension.mjs", import.meta.url))],
 	});
-	await resourceLoader.reload();
-	const { session } = await pi.createAgentSession({ cwd, agentDir, settingsManager, resourceLoader, sessionManager: pi.SessionManager.inMemory(cwd), modelRuntime, model: faux.getModel() });
 	const notes = [];
 	const noop = () => undefined;
 	const uiContext = { notify: (message) => notes.push(message), setStatus: noop, setWidget: noop, setFooter: noop, setTitle: noop, setWorkingMessage: noop, select: noop, confirm: noop, input: noop, editor: noop, custom: noop, onTerminalInput: () => noop };

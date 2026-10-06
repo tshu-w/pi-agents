@@ -9,7 +9,7 @@ export default function (pi) {
 	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName !== "read" || !event.parentToolCallId) return;
 		const signal = ctx.signal;
-		const call = { id: event.toolCallId, signal, aborted: false };
+		const call = { id: event.toolCallId, path: event.input.path, signal, aborted: false };
 		hooks.calls.push(call);
 		if (event.input.path === "abort.txt") ctx.abort();
 		if (!hooks.holdMs) return;

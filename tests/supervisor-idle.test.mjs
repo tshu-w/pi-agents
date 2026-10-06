@@ -30,7 +30,7 @@ test('a caller that stops waiting does not cancel a wake shared with a longer ca
   });
   const short = assert.rejects(router.accept(message, { timeoutMs: 20 }), { code: 'ETIMEDOUT', uncertainDelivery: false });
   const long = router.accept(message, { timeoutMs: 100 });
-  for (let i = 0; i < 20; i++) await Promise.resolve();
+  while (!wakes) await new Promise(resolve => setImmediate(resolve));
   assert.equal(wakes, 1);
   t.mock.timers.tick(20);
   await short;
@@ -132,6 +132,7 @@ test('supervisor preserves a spawned worker, exits idle and restarts on demand',
   `);
   await writeFile(join(directory, 'runner.mjs'), `
     import assert from 'node:assert/strict';
+    import { existsSync } from 'node:fs';
     import { setTimeout as delay } from 'node:timers/promises';
     import { rootPaths } from '${url('../src/roots/paths.mjs')}';
     import { listenWorker, request } from '${url('../src/roots/transport.mjs')}';
@@ -157,7 +158,9 @@ test('supervisor preserves a spawned worker, exits idle and restarts on demand',
       pid = (await request(paths.supervisor, { action: 'status' })).pid;
       await delay(450);
       process.kill(pid, 0);
-      await delay(900);
+      // A status request would count as activity, so watch the socket file. Date.now runs fast
+      // here, so the 5 s cap counts polls.
+      for (let i = 0; i < 250 && existsSync(paths.supervisor); i++) await delay(20);
       await assert.rejects(request(paths.supervisor, { action: 'status' }), { code: 'ENOENT' });
       const first = pid;
       assert.equal((await sendViaSupervisor(paths, { ...message, id: 'second' }, options)).accepted, true);

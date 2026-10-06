@@ -12,7 +12,7 @@
     ]
   },
   "scripts": {
-    "test": "node --test tests/",
+    "test": "node --test --test-timeout=30000 tests/",
     "typecheck": "tsc -p tsconfig.json"
   },
   "allowScripts": {

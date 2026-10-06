@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 // Everything a background Worker needs is inherited through the environment.
@@ -20,27 +19,15 @@ Object.assign(process.env, {
 	PI_SKIP_VERSION_CHECK: "1",
 	PI_TELEMETRY: "0",
 });
-const { pi, PI_PACKAGE } = await import("./pi.mjs");
+const { pi, PI_PACKAGE, EXTENSION: extension, textOf, until } = await import("./pi.mjs");
 const { rootPaths } = await import("../src/roots/paths.mjs");
 const { request } = await import("../src/roots/transport.mjs");
 const { reserve } = await import("../src/roots/ownership.mjs");
 const { default: ownershipExtension } = await import("../src/roots/ownership-extension.mjs");
 const paths = rootPaths();
-const extension = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 const cli = join(PI_PACKAGE, "dist/bundle/cli.js");
 
-const textOf = (content) => content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
 const entriesOf = (file) => readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-
-async function until(check, label, timeoutMs = 20000) {
-	const deadline = Date.now() + timeoutMs;
-	do {
-		const value = await check();
-		if (value) return value;
-		await delay(25);
-	} while (Date.now() < deadline);
-	throw new Error(`Timed out: ${label}`);
-}
 
 /** Writes a root Session that is not loaded anywhere. */
 function offlineRoot(id, name) {
@@ -138,6 +125,14 @@ test("a root whose Session another process holds without answering is busy", asy
 	holder.kill("SIGKILL");
 	await new Promise((resolve) => holder.once("exit", resolve));
 	assert.match(await sender.call({ action: "list", query: "held" }), /held \(held-d\)\s+offline/);
+});
+
+test("a write to an offline root is rejected and does not wake it", async () => {
+	const target = offlineRoot("offline-w", "dormant");
+	await assert.rejects(sender.call({ action: "send", target: "dormant", message: "note", deliverAs: "write" }), /dormant \(\S+\) is offline\./);
+	reserve(paths.ownership, target.file, target.id).release();
+	assert.equal(existsSync(paths.worker(target.id)), false);
+	assert.equal(entriesOf(target.file).length, 3);
 });
 
 test("a root in another process is listed with its state and cannot be opened twice", async () => {

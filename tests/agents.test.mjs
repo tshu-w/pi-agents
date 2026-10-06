@@ -3,34 +3,23 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
 
 const agentDir = mkdtempSync(join(tmpdir(), "pi-agents-home-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
-const { pi, PI_PACKAGE } = await import("./pi.mjs");
-const ai = await import(join(PI_PACKAGE, "node_modules/@earendil-works/pi-ai/dist/index.js"));
+const { pi, ai, EXTENSION, textOf, gate, until, createSession } = await import("./pi.mjs");
 
-const textOf = (content) => typeof content === "string"
-	? content
-	: content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
 const bodyOf = (text) => text.startsWith("<agent-message ") ? text.split("\n").slice(1, -1).join("\n") : text;
-
-/** A gate that holds owned Agents' answers until opened, or until their turn is aborted. */
-function gate() {
-	let open;
-	const promise = new Promise((resolve) => { open = resolve; });
-	return { promise, open };
-}
 
 /**
  * Starts a root Session whose model answers from its last message: owned Agents answer
- * `answer:<first input>`, and the root acknowledges notifications with plain text.
+ * `answer:<first input>`, and the root acknowledges notifications with plain text. While
+ * `state.hold` is set, owned Agents count their turns in `state.busy` and answer once it opens,
+ * or end when their turn is aborted.
  */
 async function startRoot(limits = {}) {
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
 	const cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-"));
-	const state = { hold: undefined, rootMessages: [] };
-	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "model" }], tokensPerSecond: 0 });
+	const state = { hold: undefined, busy: 0, rootMessages: [] };
 	const route = async (context, options) => {
 		const messages = context.messages;
 		const first = textOf(messages.find((message) => message.role === "user")?.content ?? "");
@@ -41,6 +30,7 @@ async function startRoot(limits = {}) {
 		}
 		if (state.hold) {
 			const signal = options?.signal;
+			state.busy += 1;
 			await Promise.race([
 				state.hold.promise,
 				new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true })),
@@ -50,22 +40,8 @@ async function startRoot(limits = {}) {
 		const inputs = messages.filter((message) => message.role === "user").map((message) => bodyOf(textOf(message.content)));
 		return ai.fauxAssistantMessage(`answer:${inputs.slice(-1)[0]}|seen:${inputs.join(",")}`);
 	};
-	faux.setResponses(Array.from({ length: 200 }, () => route));
-	const modelRuntime = await pi.ModelRuntime.create({ authPath: join(cwd, "auth.json"), modelsPath: null });
-	modelRuntime.registerNativeProvider(faux.provider);
-	const settingsManager = pi.SettingsManager.create(cwd, agentDir, { projectTrusted: true });
-	const resourceLoader = new pi.DefaultResourceLoader({
-		cwd,
-		agentDir,
-		settingsManager,
-		noExtensions: true,
-		additionalExtensionPaths: [fileURLToPath(new URL("../src/index.ts", import.meta.url))],
-	});
-	await resourceLoader.reload();
 	const sessionManager = pi.SessionManager.create(cwd, join(cwd, "sessions"));
-	const { session } = await pi.createAgentSession({
-		cwd, agentDir, settingsManager, resourceLoader, sessionManager, modelRuntime, model: faux.getModel(), tools: ["read", "agent"],
-	});
+	const session = await createSession({ cwd, route, extensions: [EXTENSION], sessionManager, tools: ["read", "agent"] });
 	await session.bindExtensions({ mode: "print" });
 	const tool = session.getToolDefinition("agent");
 	let calls = 0;
@@ -80,7 +56,8 @@ async function startRoot(limits = {}) {
 		await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		session.dispose();
 	};
-	return { session, call, callResult, state, close };
+	const waitBusy = (count) => until(() => state.busy >= count, `${count} held turns`);
+	return { session, call, callResult, state, waitBusy, close };
 }
 
 const idOf = (text) => /\((\S+)\)/.exec(text)[1];
@@ -134,9 +111,7 @@ test("wait details bound result text and leave omitted results unread", async ()
 test("the owner is notified when an input ends while it is not waiting", async () => {
 	const root = await startRoot();
 	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "hello" }));
-	await new Promise((resolve) => setTimeout(resolve, 200));
-	await root.session.waitForIdle();
-	assert.ok(root.state.rootMessages.includes(`Agent worker (${id}) completed.`), root.state.rootMessages.join("\n"));
+	await until(() => root.state.rootMessages.includes(`Agent worker (${id}) completed.`), "notification");
 	assert.equal(await root.call({ action: "wait", target: id, timeout: 10 }), "answer:hello|seen:hello");
 	await root.close();
 });
@@ -148,9 +123,7 @@ test("the user's input from the viewer reaches the Agent without a sender header
 	const owner = globalThis[Symbol.for("pi-agents:runtime")].nodes.get(root.session.sessionManager.getSessionId());
 	const fullId = owner.agents.ownedTarget(id).record.id;
 	owner.agents.prompt(fullId, "two", "steer");
-	const deadline = Date.now() + 10000;
-	const answered = () => owner.agents.conversation(fullId).messages.filter((message) => message.role === "assistant").length === 2;
-	while (!answered() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+	await until(() => owner.agents.conversation(fullId).messages.filter((message) => message.role === "assistant").length === 2, "second answer");
 	const messages = owner.agents.conversation(fullId).messages;
 	assert.ok(messages.some((message) => message.role === "custom" && message.content === "two" && message.details.user), JSON.stringify(messages));
 	assert.equal(messages.at(-1).role, "assistant");
@@ -177,11 +150,10 @@ test("a steer input joins the current turn, and a followUp input gets its own tu
 	const root = await startRoot();
 	root.state.hold = gate();
 	await root.call({ action: "spawn", name: "worker", message: "one" });
-	await new Promise((resolve) => setTimeout(resolve, 50));
+	await root.waitBusy(1);
 	await root.call({ action: "send", target: "worker", message: "two", deliverAs: "steer" });
 	await root.call({ action: "send", target: "worker", message: "three" });
 	root.state.hold.open();
-	await new Promise((resolve) => setTimeout(resolve, 50));
 	const results = await root.call({ action: "wait", target: "worker", timeout: 10 });
 	const answers = [...results.matchAll(/status="completed">\n(.*)/g)].map((match) => match[1]);
 	assert.deepEqual(answers, ["answer:two|seen:one,two", "answer:two|seen:one,two", "answer:three|seen:one,two,three"]);
@@ -193,7 +165,7 @@ test("abort ends the current turn and queued inputs, and the Agent stays usable"
 	root.state.hold = gate();
 	await root.call({ action: "spawn", name: "worker", message: "one" });
 	await root.call({ action: "send", target: "worker", message: "two" });
-	await new Promise((resolve) => setTimeout(resolve, 50));
+	await root.waitBusy(1);
 	assert.match(await root.call({ action: "abort", target: "worker" }), /^Agent worker \(\S+\) aborted\.$/);
 	const results = await root.call({ action: "wait", target: "worker", timeout: 10 });
 	assert.equal([...results.matchAll(/status="aborted"/g)].length, 2);
