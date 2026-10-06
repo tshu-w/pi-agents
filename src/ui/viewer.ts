@@ -11,6 +11,7 @@ import {
 	ToolExecutionComponent,
 	UserMessageComponent,
 	type AgentSession,
+	type AgentSessionEvent,
 	type ExtensionContext,
 	type ReadonlyFooterDataProvider,
 	type Theme,
@@ -79,6 +80,10 @@ class AgentViewer implements Component, Focusable {
 	private readonly footer: FooterComponent;
 	private session?: AgentSession;
 	private streaming?: Message;
+	/** The streaming message's component and tool calls from the last rebuild, which its updates change in place. */
+	private live?: { component: AssistantMessageComponent; calls: string };
+	/** Tool components without a result from the last rebuild. */
+	private tools = new Map<string, ToolExecutionComponent>();
 	private running = new Map<string, { name: string; partial?: ToolResult }>();
 	private expanded = false;
 	/** Lines scrolled up from the end. */
@@ -200,9 +205,30 @@ class AgentViewer implements Component, Focusable {
 				const tool = this.running.get(event.toolCallId);
 				if (tool) tool.partial = event.partialResult as ToolResult;
 			} else if (event.type === "tool_execution_end") this.running.delete(event.toolCallId);
-			this.dirty = true;
+			if (!this.update(event)) this.dirty = true;
 			this.tui.requestRender();
 		}));
+	}
+
+	/** Applies a streaming update to the shown components, as Pi does; false when the transcript needs a rebuild. */
+	private update(event: AgentSessionEvent): boolean {
+		if (this.dirty) return false;
+		if (event.type === "message_update") {
+			if (!this.live || event.message.role !== "assistant") return false;
+			const calls = event.message.content.flatMap((part) => part.type === "toolCall" ? [part] : []);
+			if (calls.map((call) => call.id).join("\n") !== this.live.calls) return false;
+			this.live.component.updateContent(event.message);
+			for (const call of calls) this.tools.get(call.id)?.updateArgs(call.arguments);
+			return true;
+		}
+		if (event.type === "tool_execution_start" || event.type === "tool_execution_update") {
+			const tool = this.tools.get(event.toolCallId);
+			if (!tool) return false;
+			if (event.type === "tool_execution_start") tool.markExecutionStarted();
+			else tool.updateResult(event.partialResult as ToolResult, true);
+			return true;
+		}
+		return false;
 	}
 
 	private refresh(): void {
@@ -230,6 +256,8 @@ class AgentViewer implements Component, Focusable {
 	private rebuild(conversation: ReturnType<AgentNode["agents"]["conversation"]>): void {
 		this.dirty = false;
 		this.transcript.clear();
+		this.live = undefined;
+		this.tools.clear();
 		if (!conversation) return;
 		const messages = [...conversation.messages];
 		// An input leaves the outbox once it is in the conversation, or when the Agent ends its work without it.
@@ -239,10 +267,14 @@ class AgentViewer implements Component, Focusable {
 			message.role === "custom" && message.content === text && (message.details as { user?: boolean } | undefined)?.user));
 		if (this.streaming && !messages.includes(this.streaming)) messages.push(this.streaming);
 		const markdown = getMarkdownTheme();
-		const pending = new Map<string, ToolExecutionComponent>();
 		for (const message of messages) {
 			if (message.role === "assistant") {
-				this.transcript.addChild(new AssistantMessageComponent(message, false, markdown));
+				const component = new AssistantMessageComponent(message, false, markdown);
+				if (message === this.streaming) {
+					const calls = message.content.flatMap((part) => part.type === "toolCall" ? [part.id] : []);
+					this.live = { component, calls: calls.join("\n") };
+				}
+				this.transcript.addChild(component);
 				for (const part of message.content) {
 					if (part.type !== "toolCall") continue;
 					const tool = new ToolExecutionComponent(part.name, part.id, part.arguments, { showImages: false },
@@ -252,12 +284,12 @@ class AgentViewer implements Component, Focusable {
 					if (message.stopReason === "aborted" || message.stopReason === "error") {
 						tool.updateResult({ content: [{ type: "text", text: message.errorMessage || "Operation aborted" }], isError: true });
 					} else {
-						pending.set(part.id, tool);
+						this.tools.set(part.id, tool);
 					}
 				}
 			} else if (message.role === "toolResult") {
-				pending.get(message.toolCallId)?.updateResult(message);
-				pending.delete(message.toolCallId);
+				this.tools.get(message.toolCallId)?.updateResult(message);
+				this.tools.delete(message.toolCallId);
 			} else if (message.role === "user") {
 				const text = typeof message.content === "string"
 					? message.content
@@ -280,7 +312,7 @@ class AgentViewer implements Component, Focusable {
 				this.transcript.addChild(new CompactionSummaryMessageComponent(message, markdown));
 			}
 		}
-		for (const [id, tool] of pending) {
+		for (const [id, tool] of this.tools) {
 			const running = this.running.get(id);
 			if (!running) continue;
 			tool.markExecutionStarted();
