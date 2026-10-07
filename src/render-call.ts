@@ -46,8 +46,8 @@ function formatDuration(ms: number): string {
 	return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${totalSeconds % 60}s`;
 }
 
-/** "Elapsed …" while the call runs, refreshed every second, then "Took …". */
-function updateDuration(state: DurationState, isPartial: boolean, invalidate: () => void): string | undefined {
+/** "Elapsed …" while the call runs, refreshed every second, then "Took …" from Pi's recorded `durationMs` when present. */
+function updateDuration(state: DurationState, isPartial: boolean, durationMs: number | undefined, invalidate: () => void): string | undefined {
 	if (state.startedAt === undefined) return undefined;
 	if (isPartial && !state.interval) state.interval = setInterval(invalidate, 1000);
 	if (!isPartial) {
@@ -55,7 +55,8 @@ function updateDuration(state: DurationState, isPartial: boolean, invalidate: ()
 		clearInterval(state.interval);
 		state.interval = undefined;
 	}
-	return `${isPartial ? "Elapsed" : "Took"} ${formatDuration((state.endedAt ?? Date.now()) - state.startedAt)}`;
+	const ms = !isPartial && durationMs !== undefined ? durationMs : (state.endedAt ?? Date.now()) - state.startedAt;
+	return `${isPartial ? "Elapsed" : "Took"} ${formatDuration(ms)}`;
 }
 
 interface ResultTheme {
@@ -70,7 +71,7 @@ export function renderTextResult(
 	result: { content: Array<{ type: string; text?: string }> },
 	options: { expanded: boolean; isPartial: boolean },
 	theme: ResultTheme,
-	context: { state: unknown; invalidate: () => void; lastComponent?: unknown },
+	context: { state: unknown; invalidate: () => void; lastComponent?: unknown; durationMs?: number },
 ): Text {
 	const output = result.content.flatMap((part) => part.type === "text" && part.text ? [part.text] : []).join("\n").trim();
 	const lines = output ? output.split("\n") : [];
@@ -81,7 +82,7 @@ export function renderTextResult(
 		if (shown.length < lines.length) text += `\n${moreLines(lines.length - shown.length, theme)}`;
 		sections.push(text);
 	}
-	const duration = updateDuration(context.state as DurationState, options.isPartial, context.invalidate);
+	const duration = updateDuration(context.state as DurationState, options.isPartial, context.durationMs, context.invalidate);
 	if (duration) sections.push(theme.fg("muted", duration));
 	const component = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
 	component.setText(sections.map((section) => `\n${section}`).join("\n"));
