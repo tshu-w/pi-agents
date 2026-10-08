@@ -517,7 +517,7 @@ export class Agents {
 			for (const input of record.inputs) {
 				if (ended(input)) continue;
 				input.state = "aborted";
-				input.result = "";
+				input.result = "The process exited before this input ended.";
 				input.notified = true;
 			}
 			this.persist(agent);
