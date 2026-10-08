@@ -370,7 +370,7 @@ The panel updates as states change and is shown while it has a row.
 
 `/agents` lists the Agents in the current Agent's tree, including Programs'
 Agents, those not `idle` first and newest first within each group, with their state
-and first input, and opens the selected one in a viewer. An Agent not owned
+and latest activity, and opens the selected one in a viewer. An Agent not owned
 by the current Agent is named with its owners up to it, as
 `<name> ‹ <owner> ‹ …`, where a Program is `Program <id>`. The viewer shows the
 Agent's conversation and updates while it works; the current Session keeps

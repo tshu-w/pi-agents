@@ -257,18 +257,23 @@ test("a background Program keeps its caller's tree busy until it ends, and the u
 	await root.close();
 });
 
-test("an owned Agent is waiting while its wait blocks on its own Agent, and running or idle otherwise", async () => {
+test("an owned Agent is waiting while its wait blocks on its own Agent, and the viewer's list shows each Agent's latest activity", async () => {
 	const root = await startRoot(undefined, undefined, {}, {}, [fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))]);
-	const { nodes, ownedEntries } = globalThis.piAgentsTree;
+	const { nodes, ownedEntries, latestActivity } = globalThis.piAgentsTree;
 	const self = nodes.get(root.session.sessionManager.getSessionId());
 	const calls = [{ action: "spawn", name: "inner", message: "hold" }, { action: "wait", target: "inner", timeout: 60 }];
 	await root.text({ action: "spawn", name: "outer", message: `calls:${JSON.stringify(calls)}` }, "agent");
-	const state = (name) => ownedEntries(self).find((entry) => entry.name === name)?.state;
+	const entry = (name) => ownedEntries(self).find((entry) => entry.name === name);
+	const state = (name) => entry(name)?.state;
+	const activity = (name) => latestActivity(entry(name)?.sessionFile);
 	await until(() => state("outer") === "waiting", "outer Agent waiting");
 	assert.equal(state("inner"), "running");
+	assert.equal(activity("outer"), "wait inner");
+	assert.equal(activity("inner"), "hold");
 	root.state.hold.open();
 	assert.equal(await root.text({ action: "wait", target: "outer", timeout: 10 }, "agent"), "answer:hold");
 	assert.equal(state("outer"), "idle");
+	assert.equal(activity("outer"), "answer:hold");
 	await root.close();
 });
 

@@ -33,7 +33,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { MESSAGE_TYPE, nodes, onTreeChange, programLabel, programsOf, type AgentNode, type Entry } from "../agents/registry.ts";
-import { firstInput } from "../agents/search.ts";
+import { latestActivity } from "../agents/search.ts";
 import { execFileSync } from "node:child_process";
 
 type Message = AgentSession["messages"][number];
@@ -419,7 +419,7 @@ export async function openAgentViewer(ctx: ExtensionContext, self: AgentNode, pa
 	const items: SelectItem[] = entries.map((entry) => ({
 		value: entry.id,
 		label: path(entry),
-		description: [entry.state, firstInput(entry.sessionFile) ?? ""].filter(Boolean).join("  "),
+		description: [entry.state, latestActivity(entry.sessionFile) ?? ""].filter(Boolean).join("  "),
 	}));
 	const id = await ctx.ui.custom<string | undefined>((_tui, theme, keys, done) =>
 		new ListSelector("Open Agent:", items, theme, keys, (value) => done(value), () => done(undefined)));

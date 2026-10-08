@@ -90,19 +90,42 @@ export function listLine(item: ListItem, ids: Iterable<string>): string {
 	return item.match ? `${line}\n  ${formatTime(item.match.time)}  ${item.match.excerpt}` : line;
 }
 
-/** The first input an Agent received, without its sender header; a forked conversation is not its input. */
-export function firstInput(sessionFile: string | undefined): string | undefined {
+/**
+ * An Agent's latest activity on one line: its last tool call, as `$ <command>` for bash, the tool and
+ * its path for file tools, or the `agent` action and its targets; or the last line of its last reply; before it has any, its first input without the sender header. A forked
+ * conversation is not its input.
+ */
+export function latestActivity(sessionFile: string | undefined): string | undefined {
 	if (!sessionFile || !existsSync(sessionFile)) return undefined;
-	let text: string | undefined;
+	let input: string | undefined;
+	let activity: string | undefined;
 	for (const line of readFileSync(sessionFile, "utf8").split("\n")) {
 		let entry: Record<string, any>;
 		try { entry = JSON.parse(line); } catch { continue; }
-		if (entry.type === "custom_message" && entry.customType === MESSAGE_TYPE && typeof entry.content === "string") {
-			text = entry.content;
-			break;
+		if (input === undefined && entry.type === "custom_message" && entry.customType === MESSAGE_TYPE && typeof entry.content === "string") {
+			input = entry.content.startsWith(`<${MESSAGE_TAG} `) ? entry.content.slice(entry.content.indexOf("\n") + 1, entry.content.lastIndexOf("\n")) : entry.content;
+		}
+		if (input !== undefined && entry.type === "message" && entry.message?.role === "assistant" && Array.isArray(entry.message.content)) {
+			activity = replyActivity(entry.message.content) ?? activity;
 		}
 	}
-	if (text === undefined) return undefined;
-	const body = text.startsWith(`<${MESSAGE_TAG} `) ? text.slice(text.indexOf("\n") + 1, text.lastIndexOf("\n")) : text;
-	return body.replace(/\s+/g, " ").trim();
+	return (activity ?? input)?.replace(/\s+/g, " ").trim();
+}
+
+function toolActivity(name: string, args: Record<string, any>): string {
+	if (name === "bash" && typeof args.command === "string") return `$ ${args.command}`;
+	if (typeof args.path === "string") return `${name} ${args.path}`;
+	if (name === "agent" && typeof args.action === "string") {
+		const targets = [args.target, args.name].flat().filter((target) => typeof target === "string");
+		return [args.action, targets.join(", ")].filter(Boolean).join(" ");
+	}
+	return name;
+}
+
+function replyActivity(content: Array<Record<string, any>>): string | undefined {
+	for (const block of [...content].reverse()) {
+		if (block.type === "toolCall") return toolActivity(block.name, block.arguments ?? {});
+		if (block.type === "text" && typeof block.text === "string" && block.text.trim()) return block.text.trim().split("\n").at(-1);
+	}
+	return undefined;
 }
