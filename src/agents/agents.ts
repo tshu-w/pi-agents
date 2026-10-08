@@ -21,6 +21,7 @@ import {
 	label,
 	messageText,
 	MESSAGE_TYPE,
+	nodes,
 	resolveTarget,
 	scheduler,
 	shortId,
@@ -28,6 +29,7 @@ import {
 	trackTreeWork,
 	treeChanged,
 	visibleIds,
+	type AgentState,
 	type Delivery,
 	type Entry,
 	type TreeMetadata,
@@ -248,6 +250,8 @@ export interface WaitOutcome {
 
 /** The Agents owned by one loaded Agent. */
 export class Agents {
+	/** Waits in progress that keep this Agent's turn `waiting`. */
+	waiting = 0;
 	private agents = new Map<string, Owned>();
 	private change = deferred();
 	private closing = false;
@@ -272,7 +276,7 @@ export class Agents {
 			id: agent.record.id,
 			name: agent.record.name,
 			cwd: agent.record.cwd,
-			state: agent.turn?.started ? "busy" : "idle",
+			state: this.state(agent),
 			sessionFile: agent.record.sessionFile,
 			createdAt: agent.record.createdAt,
 		}));
@@ -283,14 +287,17 @@ export class Agents {
 		return [...this.agents.values()].some((agent) => agent.turn !== undefined || agent.queue.length > 0);
 	}
 
-	/** Whether an owned Agent is busy, and its queued inputs. */
-	counts(id: string): { busy: boolean; queued: number } | undefined {
+	/** An owned Agent's state, and its inputs pending behind its current or next turn. */
+	counts(id: string): { state: AgentState; pending: number } | undefined {
 		const agent = this.agents.get(id);
 		if (!agent) return undefined;
-		return {
-			busy: agent.turn?.started === true,
-			queued: agent.queue.length + (agent.turn && !agent.turn.started ? agent.turn.inputs.length : 0),
-		};
+		return { state: this.state(agent), pending: agent.queue.length };
+	}
+
+	private state(agent: Owned): AgentState {
+		if (!agent.turn) return "idle";
+		if (!agent.turn.slot) return "queued";
+		return (nodes.get(agent.record.id)?.agents.waiting ?? 0) > 0 ? "waiting" : "running";
 	}
 
 	/** An owned Agent's loaded Session, or its saved messages while it is not loaded. */
@@ -427,8 +434,9 @@ export class Agents {
 			? []
 			: agent.record.inputs.filter((input) => ended(input) && input.read).slice(-history)]));
 		for (const agent of unique) agent.waiters += 1;
-		const suspended = unique.some((agent) => this.pending(agent)) && this.self.ownerId !== undefined &&
-			scheduler.suspend(this.self.rootId, this.self.id);
+		const blocking = unique.some((agent) => this.pending(agent));
+		const suspended = blocking && this.self.ownerId !== undefined && scheduler.suspend(this.self.rootId, this.self.id);
+		if (blocking) this.markWaiting(1);
 		let returned = false;
 		try {
 			const deadline = Date.now() + timeoutSeconds * 1000;
@@ -449,6 +457,7 @@ export class Agents {
 			returned = true;
 			return { results, pending: unique.filter((agent) => this.pending(agent)).map((agent) => agent.record) };
 		} finally {
+			if (blocking) this.markWaiting(-1);
 			if (suspended) await scheduler.resume(this.self.rootId, this.self.id, this.limits.maxConcurrent, signal);
 			for (const agent of unique) {
 				agent.waiters -= 1;
@@ -691,20 +700,30 @@ export class Agents {
 	/** Delivers a notification to this Agent as a steer. */
 	notify(text: string): void {
 		try {
-			deliver(undefined, { id: this.self.id, name: this.self.name(), ownerId: this.self.ownerId, cwd: "", state: "busy" }, "steer", text);
+			deliver(undefined, { id: this.self.id, name: this.self.name(), ownerId: this.self.ownerId, cwd: "", state: "running" }, "steer", text);
 		} catch (error) {
 			console.warn(`[pi-agents] notification failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
-	/** Runs `work` while an owned caller gives up its slot, and takes one again before returning. */
-	async whileSuspended<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+	/**
+	 * Runs `work` while an owned caller gives up its slot, and takes one again before returning.
+	 * `waiting` marks the caller as waiting meanwhile.
+	 */
+	async whileSuspended<T>(work: () => Promise<T>, signal?: AbortSignal, waiting = false): Promise<T> {
 		const suspended = this.self.ownerId !== undefined && scheduler.suspend(this.self.rootId, this.self.id);
+		if (waiting) this.markWaiting(1);
 		try {
 			return await work();
 		} finally {
+			if (waiting) this.markWaiting(-1);
 			if (suspended) await scheduler.resume(this.self.rootId, this.self.id, this.limits.maxConcurrent, signal);
 		}
+	}
+
+	private markWaiting(delta: number): void {
+		this.waiting += delta;
+		treeChanged();
 	}
 
 	private agent(id: string): Owned {

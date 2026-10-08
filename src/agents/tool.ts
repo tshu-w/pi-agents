@@ -107,7 +107,7 @@ export function registerAgentTool(
 			history: Type.Optional(Type.Integer({ minimum: 0, description: "Number of most recent read results to return again per selected Agent for `wait` (default: 0)." })),
 			timeout: Type.Optional(Type.Number({ minimum: 10, maximum: 3600, description: "Maximum seconds for `wait` (default: 30, min: 10, max: 3600). Timeout does not abort Agents." })),
 			query: Type.Optional(Type.String({ description: "Search query for `list`, matching ID, name, cwd, summaries, and user messages. Case-insensitive; spaces mean AND; `|` means OR." })),
-			state: Type.Optional(StringEnum(["busy", "idle", "offline"] as const, { description: "State for `list`: busy, idle, or offline." })),
+			state: Type.Optional(StringEnum(["running", "waiting", "queued", "idle"] as const, { description: "State for `list`: running, waiting, queued, or idle." })),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, description: "Maximum Agents returned by `list` (default: 20, max: 200)." })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, description: "Number of Agents to skip for `list` (default: 0)." })),
 		}),

@@ -20,7 +20,7 @@ const bodyOf = (text) => text.split("\n").slice(1, -1).join("\n").split("\n\nWhe
  * Agents answer `answer:<body>`. A body `submit:<json>[|<json>]` calls `submit_result` with the
  * first value, and with the second after an error; `hold` counts itself in `state.busy` and answers
  * once `state.hold` opens, and `stuck` does so even after an abort; `call:<json>` and `program:<json>` call `agent` or `program` with those
- * arguments and answer with the result.
+ * arguments and answer with the result; `calls:<json>` makes `agent` calls with each arguments in turn.
  */
 async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), sessionFile = undefined, limits = {}, settings = {}, extensions = []) {
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ...settings, "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
@@ -37,6 +37,12 @@ async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), se
 				const [value, retry] = body.slice("submit:".length).split("|").map((json) => JSON.parse(json));
 				if (last.role !== "toolResult") return ai.fauxAssistantMessage(ai.fauxToolCall("submit_result", { value }));
 				if (last.isError && retry !== undefined) return ai.fauxAssistantMessage(ai.fauxToolCall("submit_result", { value: retry }));
+				return ai.fauxAssistantMessage(textOf(last.content));
+			}
+			if (body.startsWith("calls:")) {
+				const calls = JSON.parse(body.slice("calls:".length));
+				const done = context.messages.filter((message) => message.role === "toolResult").length;
+				if (done < calls.length) return ai.fauxAssistantMessage(ai.fauxToolCall("agent", calls[done]));
 				return ai.fauxAssistantMessage(textOf(last.content));
 			}
 			const [, tool, json] = /^(call|program):(.*)$/s.exec(body) ?? [];
@@ -212,7 +218,7 @@ test("a Program's Agents are invisible to the caller, count toward its limit, an
 	` }));
 	await waitBusy(2);
 	// Other roots may be listed; the Program's Agents share the caller's cwd.
-	assert.match(await root.text({ action: "list", query: root.cwd }, "agent"), /^outside \(\S+\)  busy  \S+$/);
+	assert.match(await root.text({ action: "list", query: root.cwd }, "agent"), /^outside \(\S+\)  running  \S+$/);
 	assert.equal(await root.text({ action: "stop", target: id }), `Program ${id} stopped.`);
 	const result = await root.text({ action: "wait", target: id, timeout: 10 });
 	assert.match(result, /status="stopped">\n[\s\S]*Input rejected: 2 inputs have not ended/);
@@ -238,7 +244,7 @@ test("a background Program keeps its caller's tree busy until it ends, and the u
 		while (true) await tools.read({ path: 'note.txt' });
 	` }));
 	await until(() => root.state.busy === 1, "inner Agent busy");
-	assert.deepEqual(panelLines(self).slice(1).map((line) => line.replace(/\(\S+\)/, "(id)")), [`  Program ${id}  running`, "    Agent inner (id)  busy"]);
+	assert.deepEqual(panelLines(self).slice(1).map((line) => line.replace(/\(\S+\)/, "(id)")), [`  Program ${id}  running`, "    Agent inner (id)  running"]);
 	assert.deepEqual(ownedEntries(self).map((entry) => entry.name), ["inner"]);
 	// After its Agent answers, the Program only calls tools, and the tree stays busy.
 	root.state.hold.open();
@@ -248,6 +254,21 @@ test("a background Program keeps its caller's tree busy until it ends, and the u
 	await root.session.waitForIdle();
 	assert.equal(treeIdle(self.rootId), true);
 	assert.deepEqual(panelLines(self), []);
+	await root.close();
+});
+
+test("an owned Agent is waiting while its wait blocks on its own Agent, and running or idle otherwise", async () => {
+	const root = await startRoot(undefined, undefined, {}, {}, [fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))]);
+	const { nodes, ownedEntries } = globalThis.piAgentsTree;
+	const self = nodes.get(root.session.sessionManager.getSessionId());
+	const calls = [{ action: "spawn", name: "inner", message: "hold" }, { action: "wait", target: "inner", timeout: 60 }];
+	await root.text({ action: "spawn", name: "outer", message: `calls:${JSON.stringify(calls)}` }, "agent");
+	const state = (name) => ownedEntries(self).find((entry) => entry.name === name)?.state;
+	await until(() => state("outer") === "waiting", "outer Agent waiting");
+	assert.equal(state("inner"), "running");
+	root.state.hold.open();
+	assert.equal(await root.text({ action: "wait", target: "outer", timeout: 10 }, "agent"), "answer:hold");
+	assert.equal(state("outer"), "idle");
 	await root.close();
 });
 

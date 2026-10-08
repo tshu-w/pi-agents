@@ -139,6 +139,9 @@ test("inputs queue for a slot and are rejected beyond the input limit", async ()
 	root.state.hold = gate();
 	assert.match(await root.call({ action: "spawn", name: "a", message: "one" }), /started\.$/);
 	assert.match(await root.call({ action: "spawn", name: "b", message: "two" }), /queued: all 1 slots are busy\.$/);
+	const listed = await root.call({ action: "list" });
+	assert.match(listed, /^a \(\S+\)\s+running/m);
+	assert.match(listed, /^b \(\S+\)\s+queued/m);
 	await assert.rejects(root.call({ action: "send", target: "a", message: "three" }), /Input rejected: 2 inputs have not ended/);
 	root.state.hold.open();
 	const results = await root.call({ action: "wait", target: ["a", "b"], timeout: 10 });

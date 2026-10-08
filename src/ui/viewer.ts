@@ -241,7 +241,8 @@ class AgentViewer implements Component, Focusable {
 	/** The working status in the editor's border, and its color from the Agent's thinking level, as in Pi. */
 	private syncStatus(conversation: ReturnType<AgentNode["agents"]["conversation"]>): void {
 		this.editor.borderColor = this.theme.getThinkingBorderColor((conversation?.thinkingLevel ?? "off") as never);
-		const busy = this.owner.agents.counts(this.entry.id)?.busy === true;
+		const state = this.owner.agents.counts(this.entry.id)?.state;
+		const busy = state === "running" || state === "waiting";
 		const tool = [...this.running.values()].at(-1);
 		const abort = `${keyText("app.interrupt")} to abort`;
 		const text = !busy ? "" : tool ? `Running ${tool.name}... (${abort})` : `Working... (${abort})`;
@@ -262,8 +263,8 @@ class AgentViewer implements Component, Focusable {
 		if (!conversation) return;
 		const messages = [...conversation.messages];
 		// An input leaves the outbox once it is in the conversation, or when the Agent ends its work without it.
-		const counts = this.owner.agents.counts(this.entry.id);
-		const working = counts !== undefined && (counts.busy || counts.queued > 0);
+		const state = this.owner.agents.counts(this.entry.id)?.state;
+		const working = state !== undefined && state !== "idle";
 		this.outbox = this.outbox.filter(({ text, after }) => working && !messages.slice(after).some((message) =>
 			message.role === "custom" && message.content === text && (message.details as { user?: boolean } | undefined)?.user));
 		if (this.streaming && !messages.includes(this.streaming)) messages.push(this.streaming);
@@ -383,7 +384,7 @@ class ListSelector extends Container implements Focusable {
 	}
 }
 
-/** The Agents in the current Agent's tree, including Programs' Agents, busy ones first and newest first within each group. */
+/** The Agents in the current Agent's tree, including Programs' Agents, those not idle first and newest first within each group. */
 export function ownedEntries(self: AgentNode): Entry[] {
 	const entries: Entry[] = [];
 	const visit = (node: AgentNode) => {
@@ -395,7 +396,7 @@ export function ownedEntries(self: AgentNode): Entry[] {
 		for (const program of programsOf(node)) visit(program);
 	};
 	visit(self);
-	return entries.sort((a, b) => Number(b.state === "busy") - Number(a.state === "busy") || (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+	return entries.sort((a, b) => Number(b.state !== "idle") - Number(a.state !== "idle") || (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
 }
 
 /** `/agents`: picks an owned Agent and opens it in the viewer. */

@@ -97,7 +97,7 @@ test("an input restores the offline root's active branch, which answers and exit
 		{ type: "model_change", id: "abandoned", parentId: "n", provider: "unavailable", modelId: "missing", timestamp },
 		{ type: "session_info", id: "active", parentId: "n", name: "reviewer", timestamp },
 	].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
-	assert.match(await sender.call({ action: "list", query: "reviewer" }), /reviewer \(offline-\)\s+offline/);
+	assert.match(await sender.call({ action: "list", query: "reviewer" }), /reviewer \(offline-\)\s+idle/);
 	assert.equal(await sender.call({ action: "send", target: "reviewer", message: "hello" }), "Input accepted by reviewer (offline-).");
 	const answered = await until(() => entriesOf(target.file).find((entry) => entry.type === "message" && entry.message.role === "assistant"), "answer");
 	assert.match(textOf(answered.message.content), /^answer:<agent-message from="sender" id="\S+" note="Reply with send">\nhello\n<\/agent-message>$/);
@@ -121,10 +121,10 @@ test("a root whose Session another process holds without answering is busy", asy
 	], { stdio: ["ignore", "pipe", "inherit"] });
 	children.push(holder);
 	await new Promise((resolve) => holder.stdout.once("data", resolve));
-	assert.match(await sender.call({ action: "list", query: "held" }), /held \(held-d\)\s+busy/);
+	assert.match(await sender.call({ action: "list", query: "held" }), /held \(held-d\)\s+running/);
 	holder.kill("SIGKILL");
 	await new Promise((resolve) => holder.once("exit", resolve));
-	assert.match(await sender.call({ action: "list", query: "held" }), /held \(held-d\)\s+offline/);
+	assert.match(await sender.call({ action: "list", query: "held" }), /held \(held-d\)\s+idle/);
 });
 
 test("a write to an offline root is rejected and does not wake it", async () => {

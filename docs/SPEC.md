@@ -39,7 +39,7 @@ context, and returns the Agent's ID. Names are unique among siblings.
 `send` sends a message to a visible Agent by address. An ambiguous or
 unknown address is rejected.
 
-An input to a busy Agent is either answered by the current turn
+An input to an Agent with a turn in progress is either answered by the current turn
 (`steer`) or by a new turn after it (`followUp`, the default).
 
 A write is added at the recipient's next tool boundary, or at once if it is
@@ -62,8 +62,10 @@ inputs. The Agent stays available.
 
 ## 3. Lifecycle
 
-An Agent is `busy` while a turn is in progress, `idle` when loaded without
-one, and `offline` when not loaded.
+An Agent is `running` while a turn is in progress, `waiting` while its turn
+waits in `wait` (§4), `queued` while its next turn waits for a slot (§4),
+and `idle` otherwise. An Agent goes offline when its runtime unloads it; it
+stays `idle`.
 
 `send` returns once the recipient's runtime accepts the message, waking it
 if needed. Acceptance does not mean the recipient has handled it; a message
@@ -80,7 +82,7 @@ On abort or when going offline, work that has not stopped within a timeout
 is abandoned: it no longer counts as live work and may keep running until
 the process exits; the timeout is reported.
 
-A root Agent is `busy` while it has a turn in progress or pending messages,
+A root Agent is `running` while it has a turn in progress or pending messages,
 or while its tree has live work (§7 Task panel); otherwise it is `idle`.
 
 ## 4. Visibility and limits
@@ -93,7 +95,7 @@ Limits apply to owned Agents in each tree.
 An owned Agent needs a slot to run a turn. `maxConcurrent` (default 3) is
 the number of slots. An input that would start a turn waits for a free
 slot, and `spawn` or `send` reports that it is queued. A `steer` input to
-a busy Agent joins its current turn and needs no new slot. An Agent gives
+an Agent with a turn in progress joins it and needs no new slot. An Agent gives
 up its slot while it waits in `wait`, and takes one again before
 continuing, ahead of inputs that have not started.
 
@@ -165,7 +167,7 @@ parameters:
 - `history`: Number of most recent read results to return again per selected Agent for `wait` (default: 0).
 - `timeout`: Maximum seconds for `wait` (default: 30, min: 10, max: 3600). Timeout does not abort Agents.
 - `query`: Search query for `list`, matching ID, name, cwd, summaries, and user messages. Case-insensitive; spaces mean AND; `|` means OR.
-- `state`: State for `list`: busy, idle, or offline.
+- `state`: State for `list`: running, waiting, queued, or idle.
 - `limit`: Maximum Agents returned by `list` (default: 20, max: 200).
 - `offset`: Number of Agents to skip for `list` (default: 0).
 
@@ -349,15 +351,15 @@ asking for a reply:
 A panel above the editor shows the current Agent's live work:
 
     Tasks (<N> live, /tasks to hide)
-      Agent <name> (<id>)  <state>  <N> queued
+      Agent <name> (<id>)  <state>  <N> pending
         Agent <name> (<id>)  <state>
       Program <id>  running
         Agent <name> (<id>)  <state>
       +<N> more
 
-The live work is the owned Agents that are busy or have queued inputs, and
-the running background Programs with their Agents that are busy or have
-queued inputs. The rows list them as a tree in the order they started, each
+The live work is the owned Agents that are not `idle`, and the running
+background Programs with their Agents that are not `idle`. The rows list
+them as a tree in the order they started, each
 under its owner and each Program under its caller, with the owners needed to
 keep the tree. Rows that do not fit are counted in the last row.
 
@@ -367,7 +369,7 @@ The panel updates as states change and is shown while it has a row.
 ### Agent viewer
 
 `/agents` lists the Agents in the current Agent's tree, including Programs'
-Agents, busy ones first and newest first within each group, with their state
+Agents, those not `idle` first and newest first within each group, with their state
 and first input, and opens the selected one in a viewer. An Agent not owned
 by the current Agent is named with its owners up to it, as
 `<name> ‹ <owner> ‹ …`, where a Program is `Program <id>`. The viewer shows the

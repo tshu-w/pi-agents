@@ -6,7 +6,7 @@ import { TreeScheduler } from "./scheduler.ts";
 export const MESSAGE_TYPE = "pi-agents";
 export const TREE_ENTRY = "pi-agents-tree";
 
-export type AgentState = "busy" | "idle" | "offline";
+export type AgentState = "running" | "waiting" | "queued" | "idle";
 export type Delivery = "followUp" | "steer" | "write";
 
 /** An Agent loaded in this process: a root Session or an owned child Session. */
@@ -158,7 +158,7 @@ export function treeEntries(scopeId: string): Entry[] {
 		id: root.id,
 		name: root.name(),
 		cwd: root.cwd(),
-		state: root.busy() ? "busy" : "idle",
+		state: root.busy() ? "running" : "idle",
 		sessionFile: root.sessionFile(),
 	}];
 	const visit = (node: AgentNode) => {
@@ -234,7 +234,7 @@ export function receivedMessageIds(ctx: ExtensionContext): string[] {
 			: []);
 }
 
-/** Whether a tree has no live work: unended inputs, busy or queued owned Agents, background Programs, or undelivered notifications. */
+/** Whether a tree has no live work: unended inputs, owned Agents that are not idle, background Programs, or undelivered notifications. */
 export function treeIdle(rootId: string): boolean {
 	return shared.scheduler.outstanding(rootId) === 0 &&
 		![...work.values()].includes(rootId) &&

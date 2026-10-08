@@ -34,9 +34,9 @@ export function panelLines(self: AgentNode): string[] {
 			}
 			const { entry } = child;
 			const own = node.agents.counts(entry.id);
-			const queued = own?.queued ? [`${own.queued} queued`] : [];
-			rows.push({ line: `${"  ".repeat(level)}Agent ${[label(entry, ids), entry.state, ...queued].join("  ")}`, parent, shown: false });
-			if (own?.busy || queued.length > 0) {
+			const pending = own?.pending ? [`${own.pending} pending`] : [];
+			rows.push({ line: `${"  ".repeat(level)}Agent ${[label(entry, ids), entry.state, ...pending].join("  ")}`, parent, shown: false });
+			if (entry.state !== "idle") {
 				live += 1;
 				show(index);
 			}

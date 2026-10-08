@@ -39,7 +39,7 @@ test("a root stays busy while it receives a message from another root", async (t
 	const socket = rootPaths().worker(id);
 	const receipt = request(socket, { action: "deliver", message: { id: "message", sender: { id: "sender" }, recipient: id, body: "work" } });
 	await entered.promise;
-	assert.equal((await request(socket, { action: "status" })).state, "busy");
+	assert.equal((await request(socket, { action: "status" })).state, "running");
 	receiving.open();
 	await receipt;
 	assert.equal((await request(socket, { action: "status" })).state, "idle");

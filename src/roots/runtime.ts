@@ -25,7 +25,7 @@ export interface RootEntry {
 	id: string;
 	name?: string;
 	cwd: string;
-	state: "busy" | "idle" | "offline";
+	state: "running" | "idle";
 	sessionFile: string;
 }
 
@@ -89,7 +89,7 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 			name: pi.getSessionName(),
 			cwd: ctx.cwd,
 			sessionFile: ctx.sessionManager.getSessionFile()!,
-			state: idle() ? "idle" : "busy",
+			state: idle() ? "idle" : "running",
 			ready,
 			pid: process.pid,
 			background: isBackgroundWorker(ctx),

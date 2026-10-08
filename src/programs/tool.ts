@@ -165,7 +165,7 @@ export function registerProgramTools(
 					const selected = programs.select(targets);
 					onUpdate?.({ content: [], details: undefined });
 					const waitFor = () => programs!.wait(selected, timeout, signal);
-					const outcome = programs.running(selected) ? await self.agents.whileSuspended(waitFor, signal) : await waitFor();
+					const outcome = programs.running(selected) ? await self.agents.whileSuspended(waitFor, signal, true) : await waitFor();
 					const rendered = renderProgramWait(outcome, programs.ids());
 					programs.markReturned(rendered.returned);
 					return { content: rendered.content, details: { running: outcome.running.map((record) => record.id) } };
