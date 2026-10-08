@@ -780,7 +780,12 @@ export class Agents {
 		}
 		if (!model) throw new Error("Cannot spawn an Agent without a model.");
 		const thinkingLevel = request.thinkingLevel ?? this.pi.getThinkingLevel();
-		const cwd = path.resolve(ctx.cwd, request.cwd ?? ".");
+		// In a pi-env execution environment, the Agent runs in the same environment and `cwd` is a path there.
+		const envEntry = ctx.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "env-state").pop();
+		const envState = envEntry?.type === "custom" ? structuredClone(envEntry.data) as { environment?: string | null } : undefined;
+		const envTarget = envState?.environment?.match(/^((?:docker|ssh):[^:]+):(.+)$/);
+		if (envTarget && request.cwd !== undefined) envState!.environment = `${envTarget[1]}:${path.posix.resolve(envTarget[2], request.cwd)}`;
+		const cwd = envTarget ? ctx.cwd : path.resolve(ctx.cwd, request.cwd ?? ".");
 		const sessionManager = SessionManager.create(cwd, childSessionDirectory(cwd, ctx.cwd, ctx.sessionManager.getSessionDir(), this.agentDir), {
 			id: id ?? randomUUID(),
 			parentSession: ctx.sessionManager.getSessionFile(),
@@ -791,8 +796,7 @@ export class Agents {
 		sessionManager.appendSessionInfo(name);
 		sessionManager.appendModelChange(model.provider, model.id);
 		sessionManager.appendThinkingLevelChange(thinkingLevel);
-		const sshState = ctx.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "ssh-state").pop();
-		if (sshState?.type === "custom") sessionManager.appendCustomEntry("ssh-state", structuredClone(sshState.data));
+		if (envState) sessionManager.appendCustomEntry("env-state", envState);
 		if (request.context === "fork") {
 			// Tools run after Pi persists the assistant message that called them; fork before it
 			// so the child never inherits a tool call without its result.

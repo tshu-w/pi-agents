@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -86,6 +86,22 @@ test("an owned Agent answers its first input, and wait returns the answer once",
 	await root.call({ action: "wait", target: "worker", timeout: 10 });
 	assert.match(await root.call({ action: "list", query: "zebra" }), /zebra/);
 	await root.close();
+});
+
+test("an owned Agent runs in its owner's execution environment, with cwd resolved there", async () => {
+	const root = await startRoot();
+	try {
+		root.session.sessionManager.appendCustomEntry("env-state", { environment: "docker:box:/work", home: "/root" });
+		await root.call({ action: "spawn", name: "worker", message: "hello", cwd: "src" });
+		await root.call({ action: "wait", target: "worker", timeout: 10 });
+		const dir = join(root.session.sessionManager.getSessionDir(), "subagents");
+		const entries = readdirSync(dir).flatMap((file) => readFileSync(join(dir, file), "utf8").trim().split("\n").map((line) => JSON.parse(line)));
+		const header = entries.find((entry) => entry.type === "session");
+		assert.equal(header.cwd, root.session.sessionManager.getCwd());
+		assert.deepEqual(entries.find((entry) => entry.customType === "env-state").data, { environment: "docker:box:/work/src", home: "/root" });
+	} finally {
+		await root.close();
+	}
 });
 
 test("wait details bound result text and leave omitted results unread", async () => {
