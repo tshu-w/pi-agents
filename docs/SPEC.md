@@ -113,7 +113,7 @@ returns the results so far and names the Agents still pending. It can also
 return read results again.
 
 When an input ends and its owner is not waiting for that Agent, the owner
-receives a notification. The notification is an input delivered as `steer`,
+receives a notification, unless the owner aborted it. The notification is an input delivered as `steer`,
 and it names the Agent and how the input ended. It does not include the
 result; the owner reads the result with `wait`.
 

@@ -193,7 +193,7 @@ export function registerAgentTool(
 					rejectFields(params, "abort", ["name", "message", "cwd", "context", "model", "thinkingLevel", "deliverAs", "history", "timeout", "query", "state", "limit", "offset"]);
 					if (targets?.length !== 1) throw new Error("abort requires one target");
 					const agent = agents.ownedTarget(targets[0]!);
-					const aborted = await agents.abort(agent);
+					const aborted = await agents.abort(agent, { silent: true });
 					return {
 						content: [{ type: "text", text: `Agent ${label(agent.record, ids())} ${aborted ? "aborted" : "has no turn or queued inputs"}.` }],
 						details: { id: agent.record.id, aborted },

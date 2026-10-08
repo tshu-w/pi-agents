@@ -192,6 +192,8 @@ interface Input {
 	schema?: unknown;
 	submitted?: { value: unknown };
 	done?: Deferred;
+	/** Ended by the owner's abort, so the owner is not notified. */
+	silent?: boolean;
 }
 
 type Message = Pick<Input, "text" | "user">;
@@ -475,10 +477,12 @@ export class Agents {
 	/**
 	 * Stops the current turn and withdraws queued inputs; returns whether there was anything to stop.
 	 * A turn that has not stopped by `deadline` is abandoned: its inputs end as aborted, and this throws.
+	 * `silent` marks an abort by the owner, which is not notified of the inputs it ends.
 	 */
-	async abort(agent: Owned, deadline = Date.now() + SHUTDOWN_TIMEOUT_MS): Promise<boolean> {
+	async abort(agent: Owned, { silent = false, deadline = Date.now() + SHUTDOWN_TIMEOUT_MS } = {}): Promise<boolean> {
 		const turn = agent.turn;
 		if (!turn && agent.queue.length === 0) return false;
+		if (silent) for (const input of [...agent.queue, ...(turn?.inputs ?? [])]) input.silent = true;
 		for (const input of agent.queue.splice(0)) this.end(agent, input, "aborted", "");
 		this.changed();
 		if (turn) {
@@ -525,7 +529,7 @@ export class Agents {
 		this.closing = true;
 		const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
 		const agents = [...this.agents.values()];
-		const aborted = await Promise.allSettled(agents.map((agent) => this.abort(agent, deadline)));
+		const aborted = await Promise.allSettled(agents.map((agent) => this.abort(agent, { deadline })));
 		const closed = await Promise.allSettled(agents.map(async (agent) => {
 			const session = agent.session ?? await agent.loading?.catch(() => undefined);
 			if (!session) return;
@@ -662,9 +666,10 @@ export class Agents {
 		}
 		record.state = outcome;
 		record.result = result;
+		if (input.silent) record.notified = true;
 		this.persist(agent);
 		input.done?.resolve();
-		if (agent.waiters === 0) this.notifyLater(agent, record);
+		if (agent.waiters === 0 && !input.silent) this.notifyLater(agent, record);
 	}
 
 	private notifyLater(agent: Owned, record: InputRecord): void {

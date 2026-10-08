@@ -170,6 +170,7 @@ test("abort ends the current turn and queued inputs, and the Agent stays usable"
 	assert.match(await root.call({ action: "abort", target: "worker" }), /^Agent worker \(\S+\) aborted\.$/);
 	const results = await root.call({ action: "wait", target: "worker", timeout: 10 });
 	assert.equal([...results.matchAll(/status="aborted"/g)].length, 2);
+	assert.ok(!root.state.rootMessages.some((text) => text.endsWith("aborted.")), root.state.rootMessages.join("\n"));
 	root.state.hold = undefined;
 	await root.call({ action: "send", target: "worker", message: "three" });
 	assert.match(await root.call({ action: "wait", target: "worker", timeout: 10 }), /^answer:three/);
