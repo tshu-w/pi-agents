@@ -382,6 +382,12 @@ in Pi's editor.
 `app.interrupt` stops the Agent's current turn, as `abort` does.
 `app.clear` clears the input, and closes the viewer when the input is empty.
 
+### Workbench
+
+`pd agents` opens the workbench, which lists every root Session on this
+machine and lets the user open and message them. Interactive Sessions keep
+running after their terminal closes. See [WORKBENCH.md](WORKBENCH.md).
+
 ## 8. Configuration
 
 Settings live under `"pi-agents"` in the global `settings.json`:
@@ -410,13 +416,12 @@ An owned Agent is a child Session that records its owner and root, and runs
 in its owner's process.
 
 A delivered message enters the recipient's current branch. An offline root
-Agent is loaded in the background with its saved working directory and
-model and the current configuration, and exits once it has handled its
-inputs and is `idle` (§3).
+Agent is started in a host, detached, with its saved working directory and
+model and the current configuration (WORKBENCH §4).
 If a root process cannot finish cleanup within a grace period on exit, it is
 forcibly terminated.
 Before shutting down an idle Session, another extension can emit
 `busy:query` on `pi.events` with `{ busy: false }`; it is set to `true`
 while the tree has live work.
 One runtime uses a Session at a time. If a Session is occupied at interactive
-startup, its ownership error stays visible until the user dismisses it, then Pi exits.
+startup, its lock error stays visible until the user dismisses it, then Pi exits.

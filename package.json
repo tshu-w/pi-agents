@@ -1,8 +1,13 @@
 {
   "name": "pi-agents",
+  "version": "0.1.0",
   "description": "Multi-agent runtime for Pi: async agents, programmatic delegation, and inter-agent messaging",
   "private": true,
   "type": "module",
+  "bin": {
+    "pd": "bin/pd.mjs",
+    "pi-agents": "bin/pd.mjs"
+  },
   "keywords": [
     "pi-package"
   ],
@@ -15,17 +20,30 @@
     "test": "node --test --test-timeout=30000 tests/",
     "typecheck": "tsc -p tsconfig.json"
   },
-  "allowScripts": {
-    "fs-ext": true
-  },
   "dependencies": {
-    "fs-ext": "^2.1.1"
+    "@lydell/node-pty": "^1.2.0-beta.15",
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/headless": "^6.0.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "typescript": "5.9.3"

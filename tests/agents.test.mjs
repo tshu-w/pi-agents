@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const agentDir = mkdtempSync(join(tmpdir(), "pi-agents-home-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
+process.on("exit", () => rmSync(agentDir, { recursive: true, force: true }));
 const { pi, ai, EXTENSION, textOf, gate, until, createSession } = await import("./pi.mjs");
 
 const bodyOf = (text) => text.startsWith("<agent-message ") ? text.split("\n").slice(1, -1).join("\n") : text;
@@ -19,7 +20,7 @@ const bodyOf = (text) => text.startsWith("<agent-message ") ? text.split("\n").s
  */
 async function startRoot(limits = {}) {
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
-	const cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-"));
+	const cwd = mkdtempSync(join(agentDir, "cwd-"));
 	const state = { hold: undefined, stuck: false, busy: 0, rootMessages: [] };
 	const route = async (context, options) => {
 		const messages = context.messages;
@@ -114,6 +115,7 @@ test("wait details bound result text and leave omitted results unread", async ()
 		const result = await root.callResult({ action: "wait", target: ["long", "short"], timeout: 10 });
 		assert.equal(result.details.truncation.truncated, true);
 		assert.ok(textOf(result.content).includes(result.details.fullOutputPath));
+		rmSync(dirname(result.details.fullOutputPath), { recursive: true });
 		assert.equal(result.details.results.length, 2);
 		assert.equal(result.details.results[0].name, "long");
 		assert.ok(textOf(result.content).includes(result.details.results[0].result));

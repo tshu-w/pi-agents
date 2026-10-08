@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const home = mkdtempSync("/tmp/pa-root-runtime-");
 Object.assign(process.env, { PI_CODING_AGENT_DIR: home, PI_AGENTS_STATE_DIR: join(home, "state") });
+process.on("exit", () => rmSync(home, { recursive: true, force: true }));
 const { pi, gate } = await import("./pi.mjs");
-const { rootPaths } = await import("../src/roots/paths.mjs");
+const { statePaths } = await import("../src/roots/paths.mjs");
 const { request } = await import("../src/roots/transport.mjs");
 const loader = new pi.DefaultResourceLoader({
 	cwd: home, agentDir: home, noExtensions: true, additionalExtensionPaths: [fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))],
@@ -36,7 +37,7 @@ test("a root stays busy while it receives a message from another root", async (t
 		isIdle: () => true, hasPendingMessages: () => false, isProjectTrusted: () => true,
 	});
 	events.get("resources_discover")();
-	const socket = rootPaths().worker(id);
+	const socket = statePaths().session(id);
 	const receipt = request(socket, { action: "deliver", message: { id: "message", sender: { id: "sender" }, recipient: id, body: "work" } });
 	await entered.promise;
 	assert.equal((await request(socket, { action: "status" })).state, "running");

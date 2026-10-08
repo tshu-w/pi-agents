@@ -6,17 +6,17 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { listenWorker, request } from '../src/roots/transport.mjs';
-import { sendViaSupervisor } from '../src/roots/client.mjs';
-import { createSupervisor } from '../src/roots/supervisor.mjs';
+import { listen, request } from '../src/roots/transport.mjs';
+import { sendViaDaemon } from '../src/daemon/client.mjs';
+import { createRouter } from '../src/daemon/router.mjs';
 
 const message = { id: 'idle-message', sender: { id: 'sender' }, recipient: 'recipient', body: 'hello' };
 
 test('a caller that stops waiting does not cancel a wake shared with a longer caller', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let wakes = 0, wakeSignal, ready = false;
-  const router = createSupervisor({
-    deliverToWorker: async input => {
+  const router = createRouter({
+    deliverToSession: async input => {
       if (!ready) throw Object.assign(new Error('Offline'), { code: 'ENOENT' });
       return { accepted: true, messageId: input.id };
     },
@@ -45,7 +45,7 @@ test('idle close waits for connections, handlers and acknowledgements', async t 
   const path = join(directory, 's');
   let finish;
   const entered = Promise.withResolvers();
-  const server = await listenWorker(path, {
+  const server = await listen(path, {
     status: () => ({ ready: true }),
     accept: async () => {
       entered.resolve();
@@ -76,7 +76,7 @@ test('idle close waits for connections, handlers and acknowledgements', async t 
 
 test('client retries a disconnected status but never replays uncertain delivery', async t => {
   const directory = await mkdtemp('/tmp/pa-idle-');
-  const paths = { directory, supervisor: join(directory, 's') };
+  const paths = { runtime: directory, daemon: join(directory, 's') };
   let calls = 0, statuses = 0;
   const server = net.createServer(socket => {
     socket.on('data', bytes => {
@@ -87,20 +87,20 @@ test('client retries a disconnected status but never replays uncertain delivery'
       } else {
         calls++;
         socket.end(JSON.stringify({ ok: false, error: {
-          code: 'WORKER_CLOSED', message: 'Accepted but acknowledgement lost', uncertainDelivery: true,
+          code: 'SERVER_CLOSED', message: 'Accepted but acknowledgement lost', uncertainDelivery: true,
         } }) + '\n');
       }
     });
   });
-  server.listen(paths.supervisor);
+  server.listen(paths.daemon);
   await once(server, 'listening');
-  await chmod(paths.supervisor, 0o600);
+  await chmod(paths.daemon, 0o600);
   t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); });
-  await assert.rejects(sendViaSupervisor(paths, message, {}), { code: 'WORKER_CLOSED', uncertainDelivery: true });
+  await assert.rejects(sendViaDaemon(paths, message, {}), { code: 'SERVER_CLOSED', uncertainDelivery: true });
   assert.equal(calls, 1);
 });
 
-test('supervisor preserves a spawned worker, exits idle and restarts on demand', async t => {
+test('the daemon starts an offline recipient in a host, exits idle and restarts on demand', async t => {
   const directory = await mkdtemp('/tmp/pa-idle-');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const url = relative => new URL(relative, import.meta.url).href;
@@ -115,14 +115,10 @@ test('supervisor preserves a spawned worker, exits idle and restarts on demand',
     const interval = globalThis.setInterval;
     globalThis.setInterval = (fn, ms, ...args) => interval(fn, ms / 100, ...args);
   `);
-  await writeFile(join(directory, 'pi.mjs'), `
-    export const parseSessionEntries = () => [];
-    export const buildSessionContext = () => ({});
-  `);
-  await writeFile(join(directory, 'worker.mjs'), `
-    import { rootPaths } from '${url('../src/roots/paths.mjs')}';
-    import { listenWorker } from '${url('../src/roots/transport.mjs')}';
-    const server = await listenWorker(rootPaths().worker('recipient'), {
+  await writeFile(join(directory, 'recipient.mjs'), `
+    import { statePaths } from '${url('../src/roots/paths.mjs')}';
+    import { listen } from '${url('../src/roots/transport.mjs')}';
+    const server = await listen(statePaths().session('recipient'), {
       status: () => ({ id: 'recipient', cwd: ${JSON.stringify(directory)}, ready: true }),
       accept: message => ({ accepted: true, messageId: message.id }),
     });
@@ -134,43 +130,44 @@ test('supervisor preserves a spawned worker, exits idle and restarts on demand',
     import assert from 'node:assert/strict';
     import { existsSync } from 'node:fs';
     import { setTimeout as delay } from 'node:timers/promises';
-    import { rootPaths } from '${url('../src/roots/paths.mjs')}';
-    import { listenWorker, request } from '${url('../src/roots/transport.mjs')}';
-    import { prepareDirectory } from '${url('../src/roots/registry.mjs')}';
-    import { acquireOwnership } from '${url('../src/roots/ownership.mjs')}';
-    import { sendViaSupervisor } from '${url('../src/roots/client.mjs')}';
-    const paths = rootPaths();
-    const options = ${JSON.stringify({ cli: join(directory, 'worker.mjs'), sessionRoot: join(directory, 'sessions'), piIndex: join(directory, 'pi.mjs'), extension: 'unused' })};
+    import { statePaths } from '${url('../src/roots/paths.mjs')}';
+    import { listen, request } from '${url('../src/roots/transport.mjs')}';
+    import { prepareDirectory } from '${url('../src/roots/paths.mjs')}';
+    import { acquireLock } from '${url('../src/roots/locks.mjs')}';
+    import { sendViaDaemon } from '${url('../src/daemon/client.mjs')}';
+    const paths = statePaths();
+    const options = {
+      sessionDir: ${JSON.stringify(join(directory, 'sessions'))},
+      launch: { command: process.execPath, args: [${JSON.stringify(join(directory, 'recipient.mjs'))}], env: process.env },
+    };
     const message = ${JSON.stringify(message)};
     let pid;
-    await prepareDirectory(paths.directory);
-    const lease = acquireOwnership({ stateDir: paths.ownership, sessionId: 'supervisor', sessionFile: paths.supervisor });
-    const retiring = await listenWorker(paths.supervisor, {
+    await prepareDirectory(paths.runtime);
+    const lock = acquireLock({ stateDir: paths.locks, sessionId: 'daemon' });
+    const retiring = await listen(paths.daemon, {
       status: () => ({ ready: true }),
       accept: () => {
         setTimeout(() => retiring.close(), 0);
-        setTimeout(() => lease.release(), 200);
-        throw Object.assign(new Error('Closing before invocation'), { code: 'WORKER_CLOSED', uncertainDelivery: false });
+        setTimeout(() => lock.release(), 200);
+        throw Object.assign(new Error('Closing before invocation'), { code: 'SERVER_CLOSED', uncertainDelivery: false });
       },
     });
     try {
-      assert.equal((await sendViaSupervisor(paths, message, options)).accepted, true);
-      pid = (await request(paths.supervisor, { action: 'status' })).pid;
-      await delay(450);
-      process.kill(pid, 0);
+      assert.equal((await sendViaDaemon(paths, message, options)).accepted, true);
+      pid = (await request(paths.daemon, { action: 'status' })).pid;
       // A status request would count as activity, so watch the socket file. Date.now runs fast
       // here, so the 5 s cap counts polls.
-      for (let i = 0; i < 250 && existsSync(paths.supervisor); i++) await delay(20);
-      await assert.rejects(request(paths.supervisor, { action: 'status' }), { code: 'ENOENT' });
+      for (let i = 0; i < 250 && existsSync(paths.daemon); i++) await delay(20);
+      await assert.rejects(request(paths.daemon, { action: 'status' }), { code: 'ENOENT' });
       const first = pid;
-      assert.equal((await sendViaSupervisor(paths, { ...message, id: 'second' }, options)).accepted, true);
-      pid = (await request(paths.supervisor, { action: 'status' })).pid;
+      assert.equal((await sendViaDaemon(paths, { ...message, id: 'second' }, options)).accepted, true);
+      pid = (await request(paths.daemon, { action: 'status' })).pid;
       assert.notEqual(pid, first);
     } finally {
-      try { pid = (await request(paths.supervisor, { action: 'status' })).pid; } catch {}
+      try { pid = (await request(paths.daemon, { action: 'status' })).pid; } catch {}
       if (pid) { try { process.kill(pid, 'SIGTERM'); } catch {} }
       await retiring.close();
-      lease.release();
+      lock.release();
       await delay(100);
     }
   `);

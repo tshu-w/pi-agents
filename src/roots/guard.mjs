@@ -1,15 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { closeSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { acquireOwnership, canonicalPath, SessionOccupiedError } from './ownership.mjs';
-
-// Pi does not export its resolvePath; session paths only need ~ and file:// handling.
-export function resolvePath(input) {
-  const path = input.startsWith('file://') ? fileURLToPath(input) : input;
-  return resolve(path === '~' ? homedir() : path.startsWith('~/') ? join(homedir(), path.slice(2)) : path);
-}
+import { acquireLock, canonicalPath, SessionOccupiedError } from './locks.mjs';
+import { resolvePath } from './paths.mjs';
 
 /** The ID in a Session file's header, its first parseable entry. Reads only up to that entry. */
 export function readSessionId(path) {
@@ -37,7 +29,7 @@ export function readSessionId(path) {
 
 const installed = Symbol.for('pi-agents.guard');
 
-/** Patches Pi's Session classes so every persisted Session holds its ownership locks. Idempotent across /reload. */
+/** Patches Pi's Session classes so every persisted Session holds its locks. Idempotent across /reload. */
 export function installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir }) {
   const p = SessionManager.prototype;
   if (Object.hasOwn(p, installed)) return p[installed];
@@ -52,24 +44,24 @@ export function installGuard({ SessionManager, AgentSession, AgentSessionRuntime
       const scope = operations.getStore();
       if (scope?.collect) scope.managers.add(sm);
     }
-    if (value.disposed) throw new Error('Session ownership has been released');
+    if (value.disposed) throw new Error('Session lock has been released');
     return value;
   }
   function drop(resource) {
-    if (--resource.refs === 0) resource.lease.release();
+    if (--resource.refs === 0) resource.lock.release();
   }
-  function reserve(held, key, file) {
+  function reserve(held, key) {
     if (held.has(key)) return;
     const scope = operations.getStore();
     const borrowed = scope?.borrow?.get(key) ?? scope?.reserved?.get(key);
-    const resource = borrowed ?? { lease: acquireOwnership({ stateDir, sessionId: key, sessionFile: file }), refs: 0 };
+    const resource = borrowed ?? { lock: acquireLock({ stateDir, sessionId: key }), refs: 0 };
     resource.refs++;
     held.set(key, resource);
   }
   function reserveFile(held, file) {
-    reserve(held, `path:${canonicalPath(file)}`, file);
+    reserve(held, `path:${canonicalPath(file)}`);
     const id = readSessionId(file);
-    if (id !== undefined) reserve(held, `id:${id}`, file);
+    if (id !== undefined) reserve(held, `id:${id}`);
   }
   function keys(sm) {
     return [`path:${canonicalPath(sm.getSessionFile())}`, `id:${sm.getSessionId()}`];
@@ -77,7 +69,7 @@ export function installGuard({ SessionManager, AgentSession, AgentSessionRuntime
   function ensure(sm) {
     if (!sm.isPersisted()) return;
     const s = state(sm);
-    for (const key of keys(sm)) reserve(s.held, key, sm.getSessionFile());
+    for (const key of keys(sm)) reserve(s.held, key);
   }
   function release(sm) {
     if (!sm.isPersisted()) return;
@@ -203,7 +195,7 @@ export function installGuard({ SessionManager, AgentSession, AgentSessionRuntime
     if (!result.cancelled && scope?.kind === 'importFromJsonl') {
       const file = resolvePath(scope.input);
       reserveFile(scope.reserved, file);
-      reserve(scope.reserved, `path:${canonicalPath(resolvePath(args[1]))}`, resolvePath(args[1]));
+      reserve(scope.reserved, `path:${canonicalPath(resolvePath(args[1]))}`);
     }
     return result;
   };

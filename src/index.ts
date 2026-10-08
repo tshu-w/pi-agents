@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { Agents, type Limits } from "./agents/agents.ts";
 import {
 	customMessage,
+	liveWork,
 	messageText,
 	rememberRoots,
 	visibleIds,
@@ -24,6 +25,7 @@ import {
 	type AgentNode,
 } from "./agents/registry.ts";
 import { registerAgentTool } from "./agents/tool.ts";
+import { hostExtension } from "./host/extension.ts";
 import { CODEMODE_TOOL_NAME, loadPiCodemode } from "./programs/codemode.ts";
 import { PROGRAM_TOOL_NAME } from "./programs/execute.ts";
 import { installHostPatches } from "./programs/host-patches.ts";
@@ -31,10 +33,10 @@ import { applyProgramOnlyFlag, PROGRAM_ONLY_FLAG } from "./programs/loadout.ts";
 import { addProgramFiles, Programs } from "./programs/programs.ts";
 import { registerProgramTools } from "./programs/tool.ts";
 import { installGuard } from "./roots/guard.mjs";
-import ownershipExtension from "./roots/ownership-extension.mjs";
-import { rootPaths } from "./roots/paths.mjs";
+import lockExtension from "./roots/lock-extension.mjs";
+import { statePaths } from "./roots/paths.mjs";
+import { createReporter } from "./roots/report.ts";
 import { createRootRuntime } from "./roots/runtime.ts";
-import { waitForBackground } from "./roots/wait-ui.ts";
 import { createPanel } from "./ui/panel.ts";
 import { openAgentViewer } from "./ui/viewer.ts";
 
@@ -90,19 +92,24 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	let ctx: ExtensionContext | undefined;
 	const panel = createPanel(() => node);
 
-	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: rootPaths().ownership });
+	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: statePaths().locks });
 	installHostPatches(AgentSession, ExtensionRunner, piCodemode.codemodeSchema);
 	const roots = createRootRuntime(pi, {
 		receive: async (message) => {
 			const delivery = message.deliverAs ?? "followUp";
+			// The user's message from the workbench arrives as if typed in Pi's editor.
+			if (message.user) return pi.sendUserMessage(message.body, { deliverAs: delivery === "steer" ? "steer" : "followUp" });
 			// The header names the sender by a short ID unique among the roots this root sees.
 			rememberRoots((await roots.roots()).map((root) => root.id));
-			if (node) node.receive(messageText(message.sender, false, delivery, message.body, visibleIds(node.scopeId, true)), delivery, message.id);
+			if (node) node.receive(messageText(message.sender!, false, delivery, message.body, visibleIds(node.scopeId, true)), delivery, message.id);
 		},
 		treeIdle: () => node === undefined || treeIdle(node.rootId),
 		receivedIds: receivedMessageIds,
 	});
-	ownershipExtension(pi, { start: (current: ExtensionContext) => roots.start(current), stop: () => roots.stop(), waitForBackground, runner: ExtensionRunner });
+	lockExtension(pi, { start: (current: ExtensionContext) => roots.start(current), stop: () => roots.stop(), runner: ExtensionRunner });
+	const idle = () => node === undefined || treeIdle(node.rootId);
+	const host = hostExtension(pi, { treeIdle: idle });
+	createReporter(pi, { treeIdle: idle, liveWork: () => node ? liveWork(node) : 0, host });
 	// Event bus handlers run synchronously, so an extension that emits a query object reads the answer right after emit.
 	pi.events.on("busy:query", (query) => {
 		if (node && !treeIdle(node.rootId)) (query as { busy: boolean }).busy = true;

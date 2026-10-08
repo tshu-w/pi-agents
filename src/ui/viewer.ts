@@ -7,6 +7,7 @@ import {
 	FooterComponent,
 	getMarkdownTheme,
 	getSelectListTheme,
+	keyHint,
 	keyText,
 	ToolExecutionComponent,
 	UserMessageComponent,
@@ -26,6 +27,7 @@ import {
 	Spacer,
 	Text,
 	truncateToWidth,
+	visibleWidth,
 	type Component,
 	type Focusable,
 	type KeybindingsManager,
@@ -152,10 +154,13 @@ class AgentViewer implements Component, Focusable {
 		this.syncStatus(conversation);
 		const queue = this.outbox.map(({ text, delivery }) =>
 			truncateToWidth(this.theme.fg("dim", ` ${delivery === "steer" ? "Steering" : "Follow-up"}: ${text.replace(/\s+/g, " ")}`), width));
-		const title = truncateToWidth(this.theme.fg("dim", `Agent ${this.entry.name ?? this.entry.id} · ${keyText("app.clear")} to go back`), width);
 		const editor = this.editor.render(width);
-		const footer = this.footer.render(width);
-		const budget = Math.max(1, this.tui.terminal.rows - queue.length - editor.length - footer.length - 2);
+		const [cwd = "", ...footer] = this.footer.render(width);
+		// The way back sits at the right of the footer's first line, when it fits.
+		const back = keyHint("app.clear", "back");
+		const gap = width - visibleWidth(cwd) - visibleWidth(back);
+		footer.unshift(gap >= 2 ? cwd + " ".repeat(gap) + back : cwd);
+		const budget = Math.max(1, this.tui.terminal.rows - queue.length - editor.length - footer.length - 1);
 		const lines = this.transcript.render(width);
 		this.scroll = Math.min(this.scroll, Math.max(0, lines.length - budget));
 		const end = lines.length - this.scroll;
@@ -163,7 +168,7 @@ class AgentViewer implements Component, Focusable {
 		// Fill the screen so the Session behind the viewer does not show through.
 		const blank = " ".repeat(width);
 		const padding = Array.from({ length: budget - shown.length }, () => blank);
-		return [...padding, ...shown, blank, ...queue, title, ...editor, ...footer];
+		return [...padding, ...shown, blank, ...queue, ...editor, ...footer];
 	}
 
 	invalidate(): void {

@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-// Everything a background Worker needs is inherited through the environment.
+// Everything a woken root needs is inherited through the environment.
 const home = mkdtempSync("/tmp/pa-roots-");
 const agentDir = join(home, "agent");
-const sessionRoot = join(agentDir, "sessions");
+const sessionDir = join(agentDir, "sessions");
 const model = fileURLToPath(new URL("./fixtures/model.ts", import.meta.url));
 mkdirSync(agentDir, { recursive: true });
 writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: [model] }));
@@ -20,11 +20,12 @@ Object.assign(process.env, {
 	PI_TELEMETRY: "0",
 });
 const { pi, PI_PACKAGE, EXTENSION: extension, textOf, until } = await import("./pi.mjs");
-const { rootPaths } = await import("../src/roots/paths.mjs");
+const { statePaths } = await import("../src/roots/paths.mjs");
 const { request } = await import("../src/roots/transport.mjs");
-const { reserve } = await import("../src/roots/ownership.mjs");
-const { default: ownershipExtension } = await import("../src/roots/ownership-extension.mjs");
-const paths = rootPaths();
+const { listHosts } = await import("../src/host/client.mjs");
+const { reserve } = await import("../src/roots/locks.mjs");
+const { default: lockExtension } = await import("../src/roots/lock-extension.mjs");
+const paths = statePaths();
 const cli = join(PI_PACKAGE, "dist/bundle/cli.js");
 
 const entriesOf = (file) => readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
@@ -32,7 +33,7 @@ const entriesOf = (file) => readFileSync(file, "utf8").trim().split("\n").map((l
 /** Writes a root Session that is not loaded anywhere. */
 function offlineRoot(id, name) {
 	const cwd = mkdtempSync(join(home, "cwd-"));
-	const dir = join(sessionRoot, `--${id}--`);
+	const dir = join(sessionDir, `--${id}--`);
 	mkdirSync(dir, { recursive: true });
 	const file = join(dir, `${id}.jsonl`);
 	const timestamp = new Date().toISOString();
@@ -61,7 +62,7 @@ async function startRoot() {
 	const settingsManager = pi.SettingsManager.create(cwd, agentDir, { projectTrusted: true });
 	const resourceLoader = new pi.DefaultResourceLoader({ cwd, agentDir, settingsManager, noExtensions: true, additionalExtensionPaths: [extension, model] });
 	await resourceLoader.reload();
-	const sessionManager = pi.SessionManager.create(cwd, join(sessionRoot, "--sender--"));
+	const sessionManager = pi.SessionManager.create(cwd, join(sessionDir, "--sender--"));
 	const { session } = await pi.createAgentSession({ cwd, agentDir, settingsManager, resourceLoader, sessionManager, tools: ["agent"] });
 	await session.setModel(session.modelRuntime.getModel("agents-test", "fake"));
 	await session.bindExtensions({ mode: "print" });
@@ -82,15 +83,16 @@ const sender = await startRoot();
 after(async () => {
 	for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
 	try {
-		const supervisor = await request(paths.supervisor, { action: "status" }, { timeoutMs: 1000 });
-		process.kill(supervisor.pid, "SIGTERM");
-	} catch { /* the Supervisor did not start */ }
+		const daemon = await request(paths.daemon, { action: "status" }, { timeoutMs: 1000 });
+		process.kill(daemon.pid, "SIGTERM");
+	} catch { /* the daemon did not start */ }
+	for (const host of await listHosts(paths)) process.kill(host.pid, "SIGTERM");
 	await sender.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 	sender.session.dispose();
 	rmSync(home, { recursive: true, force: true });
 });
 
-test("an input restores the offline root's active branch, which answers and exits", async () => {
+test("an input starts the offline root in a host on its active branch, which answers", async () => {
 	const target = offlineRoot("offline-a", "reviewer");
 	const timestamp = new Date().toISOString();
 	appendFileSync(target.file, [
@@ -101,23 +103,26 @@ test("an input restores the offline root's active branch, which answers and exit
 	assert.equal(await sender.call({ action: "send", target: "reviewer", message: "hello" }), "Input accepted by reviewer (offline-).");
 	const answered = await until(() => entriesOf(target.file).find((entry) => entry.type === "message" && entry.message.role === "assistant"), "answer");
 	assert.match(textOf(answered.message.content), /^answer:<agent-message from="sender" id="\S+" note="Reply with send">\nhello\n<\/agent-message>$/);
-	// The Worker gives up the Session once it exits.
+	const [host] = (await listHosts(paths)).filter((entry) => entry.session?.id === target.id);
+	assert.equal(host.attached, false);
+	// The host gives up the Session once Pi exits.
+	process.kill(host.pid, "SIGTERM");
 	await until(() => {
 		try {
-			reserve(paths.ownership, target.file, target.id).release();
+			reserve(paths.locks, target.file, target.id).release();
 			return true;
 		} catch (error) {
 			if (error.code !== "SESSION_OCCUPIED") throw error;
 		}
-	}, "worker exit");
-	assert.equal(existsSync(paths.worker(target.id)), false);
+	}, "host exit");
+	assert.equal(existsSync(paths.session(target.id)), false);
 });
 
 test("a root whose Session another process holds without answering is busy", async () => {
 	const target = offlineRoot("held-d", "held");
-	const ownership = new URL("../src/roots/ownership.mjs", import.meta.url).href;
+	const locksModule = new URL("../src/roots/locks.mjs", import.meta.url).href;
 	const holder = spawn(process.execPath, ["--input-type=module", "-e",
-		`const { reserve } = await import(${JSON.stringify(ownership)}); reserve(${JSON.stringify(paths.ownership)}, ${JSON.stringify(target.file)}, "held-d"); console.log("held"); setInterval(() => {}, 1000);`,
+		`const { reserve } = await import(${JSON.stringify(locksModule)}); reserve(${JSON.stringify(paths.locks)}, ${JSON.stringify(target.file)}, "held-d"); console.log("held"); setInterval(() => {}, 1000);`,
 	], { stdio: ["ignore", "pipe", "inherit"] });
 	children.push(holder);
 	await new Promise((resolve) => holder.stdout.once("data", resolve));
@@ -130,8 +135,8 @@ test("a root whose Session another process holds without answering is busy", asy
 test("a write to an offline root is rejected and does not wake it", async () => {
 	const target = offlineRoot("offline-w", "dormant");
 	await assert.rejects(sender.call({ action: "send", target: "dormant", message: "note", deliverAs: "write" }), /dormant \(\S+\) is offline\./);
-	reserve(paths.ownership, target.file, target.id).release();
-	assert.equal(existsSync(paths.worker(target.id)), false);
+	reserve(paths.locks, target.file, target.id).release();
+	assert.equal(existsSync(paths.session(target.id)), false);
 	assert.equal(entriesOf(target.file).length, 3);
 });
 
@@ -139,7 +144,7 @@ test("a root in another process is listed with its state and cannot be opened tw
 	const target = offlineRoot("live-c", "live");
 	const first = runPi(["--session", target.file], target.cwd);
 	await until(async () => {
-		try { return (await request(paths.worker(target.id), { action: "status" }, { timeoutMs: 1000 })).ready; }
+		try { return (await request(paths.session(target.id), { action: "status" }, { timeoutMs: 1000 })).ready; }
 		catch (error) { if (!["ENOENT", "ECONNREFUSED"].includes(error.code)) throw error; }
 	}, "live root");
 	assert.match(await sender.call({ action: "list", query: "live" }), /live \(live-c\)\s+idle/);
@@ -150,7 +155,7 @@ test("a root in another process is listed with its state and cannot be opened tw
 	assert.equal(first.child.exitCode, null);
 
 	const handlers = new Map();
-	ownershipExtension({ on: (event, handler) => handlers.set(event, handler) });
+	lockExtension({ on: (event, handler) => handlers.set(event, handler) });
 	let dialog, dismiss;
 	let shutdown = false;
 	const opening = handlers.get("session_start")({ reason: "startup" }, {

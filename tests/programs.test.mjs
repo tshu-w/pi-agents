@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const agentDir = mkdtempSync(join(tmpdir(), "pi-agents-home-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
+process.on("exit", () => rmSync(agentDir, { recursive: true, force: true }));
 const { pi, ai, EXTENSION, textOf, gate, until, createSession } = await import("./pi.mjs");
 
 /** The text an Agent received from its owner, without the header and the schema instruction. */
@@ -22,7 +23,7 @@ const bodyOf = (text) => text.split("\n").slice(1, -1).join("\n").split("\n\nWhe
  * once `state.hold` opens, and `stuck` does so even after an abort; `call:<json>` and `program:<json>` call `agent` or `program` with those
  * arguments and answer with the result; `calls:<json>` makes `agent` calls with each arguments in turn.
  */
-async function startRoot(cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-")), sessionFile = undefined, limits = {}, settings = {}, extensions = []) {
+async function startRoot(cwd = mkdtempSync(join(agentDir, "cwd-")), sessionFile = undefined, limits = {}, settings = {}, extensions = []) {
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ...settings, "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
 	writeFileSync(join(cwd, "note.txt"), "note");
 	const messages = [];
@@ -336,7 +337,7 @@ test("codemode.mode decides whether program lists the direct tools or they keep 
 
 test("MCP activates program, and a Program waits for the MCP server its code names", async () => {
 	process.env.PI_AGENTS_TEST_MCP_DELAY = "300";
-	const cwd = mkdtempSync(join(tmpdir(), "pi-agents-cwd-"));
+	const cwd = mkdtempSync(join(agentDir, "cwd-"));
 	const route = (context) => context.messages.at(-1).role === "toolResult"
 		? ai.fauxAssistantMessage("done")
 		: ai.fauxAssistantMessage(ai.fauxToolCall("program", { action: "run", code: "return (await tools.mcp__echo__shout({ text: 'hi' })).content[0].text" }));

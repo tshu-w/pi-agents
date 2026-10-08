@@ -93,6 +93,21 @@ export function programsOf(node: AgentNode): AgentNode[] {
 		.sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
 }
 
+/** The node's running owned Agents and background Programs, with those under them. */
+export function liveWork(node: AgentNode): number {
+	let count = 0;
+	for (const entry of node.agents.owned()) {
+		if (entry.state !== "idle") count += 1;
+		const loaded = shared.nodes.get(entry.id);
+		if (loaded) count += liveWork(loaded);
+	}
+	for (const program of programsOf(node)) {
+		if (program.background) count += 1;
+		count += liveWork(program);
+	}
+	return count;
+}
+
 /** `Program <short ID>`, unique among its caller's running Programs. */
 export function programLabel(program: AgentNode): string {
 	const owner = program.ownerId === undefined ? undefined : shared.nodes.get(program.ownerId);

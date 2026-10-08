@@ -1,31 +1,11 @@
-import { canonicalPath, lockKeys, reserve, reserveKeys } from './ownership.mjs';
-import { rootPaths } from './paths.mjs';
-import { getBackgroundWorkerStatus, isBackgroundWorker, waitForWorkerExit } from './background.mjs';
-import { readSessionId, resolvePath } from './guard.mjs';
+import { canonicalPath, reserve } from './locks.mjs';
+import { resolvePath, statePaths } from './paths.mjs';
+import { readSessionId } from './guard.mjs';
 
-// Pi reloads extension modules but keeps the SessionManager. Retain its lease
-// across reload without allowing a different manager to borrow ownership.
-const leases = globalThis[Symbol.for('pi-agents.extension-ownership')] ??= new WeakMap();
-const pending = globalThis[Symbol.for('pi-agents.pending-ownership')] ??= new Map();
-
-async function waitAndReserve(paths, file, id, error, signal) {
-  if (!id || error.code !== 'SESSION_OCCUPIED' || !error.owner || error.sessionId.startsWith('admission:')) throw error;
-  const keys = lockKeys(file, id);
-  const admission = reserveKeys(paths.ownership, file, keys.map(key => `admission:${key}`));
-  try {
-    signal.throwIfAborted();
-    try {
-      await getBackgroundWorkerStatus(paths.worker(id), { sessionId: id, sessionFile: file, ownerPid: error.owner.pid, signal });
-    } catch (failure) {
-      if (!['ENOENT', 'ECONNREFUSED', 'CONNECTION_CLOSED'].includes(failure.code)) throw failure;
-      // A closing Worker has already removed its socket but still owns its file.
-      if (error.owner.background !== true) return reserveKeys(paths.ownership, file, keys);
-    }
-    await waitForWorkerExit(error.owner.pid, { signal });
-    signal.throwIfAborted();
-    return reserveKeys(paths.ownership, file, keys);
-  } finally { admission.release(); }
-}
+// Pi reloads extension modules but keeps the SessionManager. Retain its lock
+// across reload without allowing a different manager to borrow it.
+const locks = globalThis[Symbol.for('pi-agents.extension-locks')] ??= new WeakMap();
+const pending = globalThis[Symbol.for('pi-agents.pending-locks')] ??= new Map();
 
 const switchers = globalThis[Symbol.for('pi-agents.switch-session')] ??= { byManager: new WeakMap(), patched: false };
 
@@ -45,29 +25,28 @@ function captureSwitchSession(Runner) {
 }
 
 /**
- * Holds the current Session's ownership so one runtime uses a Session at a time.
- * An occupied Session is quarantined; /resume waits for a background Worker to exit.
+ * Holds the current Session's lock so one runtime uses a Session at a time.
+ * An occupied Session is quarantined.
  */
-export default function ownershipExtension(pi, runtime = {}) {
+export default function lockExtension(pi, runtime = {}) {
   if (runtime.runner) captureSwitchSession(runtime.runner);
-  const paths = rootPaths();
-  const stateDir = paths.ownership;
-  let blocked = 'Session ownership has not been acquired';
+  const paths = statePaths();
+  const stateDir = paths.locks;
+  let blocked = 'Session lock has not been acquired';
   let reopen;
   let replacing = false;
   let alive = true;
-  let waiting;
   const pendingKey = file => `${stateDir}\n${canonicalPath(file)}`;
-  function savePending(file, id, lease) {
+  function savePending(file, id, lock) {
     const key = pendingKey(file);
-    const value = { id, lease };
+    const value = { id, lock };
     pending.set(key, value);
     return value;
   }
   function discardPending(file, value) {
     if (pending.get(pendingKey(file)) !== value) return;
     pending.delete(pendingKey(file));
-    value.lease.release();
+    value.lock.release();
   }
 
   function notify(ctx, message) {
@@ -104,15 +83,15 @@ export default function ownershipExtension(pi, runtime = {}) {
     const manager = ctx.sessionManager;
     const file = manager.getSessionFile();
     try {
-      if (file && !leases.has(manager)) {
+      if (file && !locks.has(manager)) {
         const transfer = pending.get(pendingKey(file));
         if (event.reason === 'resume' && transfer?.id === manager.getSessionId()) {
           pending.delete(pendingKey(file));
-          leases.set(manager, transfer.lease);
+          locks.set(manager, transfer.lock);
         } else {
           // Target loading has already happened. A takeover here would leave
           // stale shutdown writers attached to the same Session file.
-          leases.set(manager, reserve(stateDir, file, manager.getSessionId(), isBackgroundWorker(ctx)));
+          locks.set(manager, reserve(stateDir, file, manager.getSessionId()));
         }
       }
       if (runtime.start) await runtime.start(ctx);
@@ -138,32 +117,21 @@ export default function ownershipExtension(pi, runtime = {}) {
       const transfer = pending.get(pendingKey(file));
       if (transfer) return;
       const id = readSessionId(file);
-      const acquired = lease => {
-        if (!alive || !lease) {
-          lease?.release();
+      const acquired = lock => {
+        if (!alive || !lock) {
+          lock?.release();
           return { cancel: true };
         }
-        const value = savePending(file, id, lease);
+        const value = savePending(file, id, lock);
         reopen = { file, value };
         blocked = 'Switching to the latest Session';
-        // Switch again later so a cancellation releases the lease.
+        // Switch again later so a cancellation releases the lock.
         scheduleReopen(ctx);
         return { cancel: true };
       };
-      try {
-        const lease = reserve(stateDir, file, id);
-        if (ctx.mode === 'tui' && id) return acquired(lease);
-        lease.release();
-      } catch (error) {
-        if (ctx.mode !== 'tui' || !runtime.waitForBackground) throw error;
-        const controller = new AbortController();
-        waiting = controller;
-        return runtime.waitForBackground(ctx, controller,
-          signal => waitAndReserve(paths, file, id, error, signal)).then(acquired, failure => {
-          if (alive && failure.name !== 'AbortError') notify(ctx, failure.message);
-          return { cancel: true };
-        }).finally(() => { if (waiting === controller) waiting = undefined; });
-      }
+      const lock = reserve(stateDir, file, id);
+      if (ctx.mode === 'tui' && id) return acquired(lock);
+      lock.release();
     } catch (error) {
       notify(ctx, error.message);
       return { cancel: true };
@@ -172,22 +140,19 @@ export default function ownershipExtension(pi, runtime = {}) {
 
   pi.on('session_shutdown', async (event, ctx) => {
     alive = false;
-    waiting?.abort();
     if (runtime.stop) await runtime.stop(ctx);
     if (event.reason === 'reload') {
-      // Cancel the old continuation and release its unclaimed target lease.
+      // Cancel the old continuation and release its unclaimed target lock.
       if (reopen) discardPending(reopen.file, reopen.value);
       reopen = undefined;
       return;
     }
-    // A background Worker keeps its lease until the process exits, after the last shutdown writes.
-    if (event.reason === 'quit' && isBackgroundWorker(ctx)) return;
     if (event.reason === 'quit' && reopen) {
       discardPending(reopen.file, reopen.value);
       reopen = undefined;
     }
-    leases.get(ctx.sessionManager)?.release();
-    leases.delete(ctx.sessionManager);
+    locks.get(ctx.sessionManager)?.release();
+    locks.delete(ctx.sessionManager);
   });
   pi.on('input', (_event, ctx) => {
     if (!blocked) return;
