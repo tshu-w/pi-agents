@@ -158,7 +158,7 @@ export function treeEntries(scopeId: string): Entry[] {
 		id: root.id,
 		name: root.name(),
 		cwd: root.cwd(),
-		state: root.busy() ? "running" : "idle",
+		state: root.busy() || !treeIdle(root.rootId) ? "running" : "idle",
 		sessionFile: root.sessionFile(),
 	}];
 	const visit = (node: AgentNode) => {

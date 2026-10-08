@@ -277,6 +277,20 @@ test("an owned Agent is waiting while its wait blocks on its own Agent, and the 
 	await root.close();
 });
 
+test("a root is running while an Agent in its tree has live work", async () => {
+	const root = await startRoot(undefined, undefined, {}, {}, [fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))]);
+	const { nodes, treeEntries } = globalThis.piAgentsTree;
+	const self = nodes.get(root.session.sessionManager.getSessionId());
+	const rootState = () => treeEntries(self.scopeId)[0].state;
+	await root.text({ action: "spawn", name: "inner", message: "hold" }, "agent");
+	assert.equal(self.busy(), false);
+	assert.equal(rootState(), "running");
+	root.state.hold.open();
+	await root.text({ action: "wait", target: "inner", timeout: 10 }, "agent");
+	await until(() => rootState() === "idle", "root idle");
+	await root.close();
+});
+
 test("an owned Agent gives up its slot while its foreground Program waits for an Agent under it", async () => {
 	const root = await startRoot(undefined, undefined, { maxConcurrent: 1, maxOutstanding: 2 });
 	const run = { action: "run", code: "return await agent().send('inner')" };
