@@ -103,6 +103,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		receivedIds: receivedMessageIds,
 	});
 	ownershipExtension(pi, { start: (current: ExtensionContext) => roots.start(current), stop: () => roots.stop(), waitForBackground, runner: ExtensionRunner });
+	// Event bus handlers run synchronously, so an extension that emits a query object reads the answer right after emit.
+	pi.events.on("busy:query", (query) => {
+		if (node && !treeIdle(node.rootId)) (query as { busy: boolean }).busy = true;
+	});
 
 	const requireNode = (current: ExtensionContext): AgentNode => {
 		if (!node) throw new Error("pi-agents is not initialized");

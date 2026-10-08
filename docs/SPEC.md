@@ -415,5 +415,8 @@ model and the current configuration, and exits once it has handled its
 inputs and is `idle` (§3).
 If a root process cannot finish cleanup within a grace period on exit, it is
 forcibly terminated.
+Before shutting down an idle Session, another extension can emit
+`busy:query` on `pi.events` with `{ busy: false }`; it is set to `true`
+while the tree has live work.
 One runtime uses a Session at a time. If a Session is occupied at interactive
 startup, its ownership error stays visible until the user dismisses it, then Pi exits.
