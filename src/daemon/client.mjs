@@ -42,13 +42,16 @@ export async function ensureDaemon(paths, { sessionDir, signal }) {
       if (code !== 0) launchError = new Error(`Daemon exited (${code}). See ${paths.daemonLog}`);
     });
     child.unref();
+    // The new daemon sets its socket's mode just after binding; a mode that stays wrong is an error.
+    let modeWait = 0;
     for (;;) {
       signal?.throwIfAborted();
       if (launchError) throw launchError;
       try {
         return await request(paths.daemon, { action: 'status' }, { signal, timeoutMs: 1000 });
       } catch (failure) {
-        if (!['ENOENT', 'ECONNREFUSED', ...RETRY].includes(failure.code)) throw failure;
+        if (failure.code === 'SOCKET_MODE' && ++modeWait > 20) throw failure;
+        if (!['ENOENT', 'ECONNREFUSED', 'SOCKET_MODE', ...RETRY].includes(failure.code)) throw failure;
         // Another daemon holds the lock; it answers once its socket is up.
         if (child.exitCode === 0) break;
       }

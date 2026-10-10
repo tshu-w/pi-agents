@@ -159,6 +159,9 @@ test('the daemon starts an offline recipient in a host, exits idle and restarts 
       // here, so the 5 s cap counts polls.
       for (let i = 0; i < 250 && existsSync(paths.daemon); i++) await delay(20);
       await assert.rejects(request(paths.daemon, { action: 'status' }), { code: 'ENOENT' });
+      // The recipient exits on its own; the second message must find it offline and wake it again.
+      for (let i = 0; i < 250 && existsSync(paths.session('recipient')); i++) await delay(20);
+      assert.equal(existsSync(paths.session('recipient')), false);
       const first = pid;
       assert.equal((await sendViaDaemon(paths, { ...message, id: 'second' }, options)).accepted, true);
       pid = (await request(paths.daemon, { action: 'status' })).pid;

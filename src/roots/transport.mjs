@@ -39,9 +39,9 @@ function safeDirectory(path, create = false) {
 function privateSocket(path) {
   safeDirectory(dirname(path));
   const info = lstatSync(path);
-  if (!info.isSocket() || info.uid !== process.getuid() || (info.mode & 0o777) !== 0o600) {
-    throw fault('UNSAFE_PATH', 'Socket must be owned by the current user with mode 0600');
-  }
+  if (!info.isSocket() || info.uid !== process.getuid()) throw fault('UNSAFE_PATH', 'Socket must be owned by the current user');
+  // A listener sets the mode just after it binds; a client waiting for a new listener may retry this.
+  if ((info.mode & 0o777) !== 0o600) throw fault('SOCKET_MODE', 'Socket must have mode 0600');
 }
 
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
