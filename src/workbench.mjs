@@ -112,6 +112,8 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
   let sessions = [], stream, connected = false, quitting = false;
   // `picked` is the Session last chosen with `@` and its mention; a message starting with the mention goes to it.
   let selectedKey, top = 0, notice, modal, pane, picked, lastCtrlC = 0, finish;
+  // Messages in flight by Session ID; each settles once the daemon has delivered it, waking the Session if needed.
+  const sending = new Map();
 
   /** How `@` refers to a Session: its name when that is one word, otherwise the shortest unique ID prefix. */
   function mention(session) {
@@ -361,11 +363,24 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     else say('');
   }
 
+  /** The host running a Session; a host whose Pi has not reported its Session yet may be starting it, so wait for that. */
+  async function findHost(id) {
+    const deadline = performance.now() + 10000;
+    for (;;) {
+      const hosts = await listHosts(paths);
+      const hosted = hosts.find(host => host.session?.id === id);
+      if (hosted || !hosts.some(host => !host.session) || performance.now() > deadline) return hosted;
+      await delay(100);
+    }
+  }
+
   /** Attaches to a Session, starting it in a host when it is not running. */
   async function openSession(session) {
     stream?.send({ type: 'show', id: session.id });
     try {
-      const hosted = (await listHosts(paths)).find(host => host.session?.id === session.id);
+      // A message just sent may be waking the Session in a host.
+      await sending.get(session.id);
+      const hosted = await findHost(session.id);
       if (hosted) return await attachTo(hosted.socket);
       if (session.running || session.status === 'unknown') {
         return say(`${named(session)} runs outside a host; attach it after it exits.`, 'warning');
@@ -528,8 +543,12 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
   async function send(session, body) {
     say(`Sending to ${named(session)}…`);
     const message = { id: randomUUID(), user: true, recipient: session.id, body };
+    const pending = sendViaDaemon(paths, message, { sessionDir, launch: { command: executable, args: [], env } });
+    const settled = pending.then(() => {}, () => {});
+    sending.set(session.id, settled);
+    void settled.then(() => { if (sending.get(session.id) === settled) sending.delete(session.id); });
     try {
-      const receipt = await sendViaDaemon(paths, message, { sessionDir, launch: { command: executable, args: [], env } });
+      const receipt = await pending;
       if (receipt?.accepted !== true || receipt.messageId !== message.id) throw new Error(`Invalid acknowledgement from ${named(session)}; it may have received the message.`);
       say(`Sent to ${named(session)}.`);
     } catch (error) { say(error.message, 'error'); }
