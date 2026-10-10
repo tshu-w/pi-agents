@@ -26,8 +26,8 @@ https://github.com/user-attachments/assets/c1d48bc4-3b36-438e-976b-f76ae586ffdd
 ## Install
 
 ```sh
-npm install -g github:tshu-w/pi-agents
-pi install "$(npm root -g)/pi-agents"
+npm install -g @tshu-w/pi-agents
+pi install "$(npm root -g)/@tshu-w/pi-agents"
 ```
 
 Requires Pi 1.0.0 or later. Start Pi with `pd` (or `pi-agents`) in place of `pi`, and enable `program` with `{ "defaultTools": ["+program"] }` in `settings.json`.
@@ -35,7 +35,7 @@ Requires Pi 1.0.0 or later. Start Pi with `pd` (or `pi-agents`) in place of `pi`
 To use only the extension, without the workbench:
 
 ```sh
-pi install git:github.com/tshu-w/pi-agents
+pi install npm:@tshu-w/pi-agents
 ```
 
 ## Usage
@@ -76,3 +76,7 @@ Concurrency limits per root, and extensions loaded by child Agents.
 ## Evaluation
 
 On [BrowseComp](https://arxiv.org/abs/2504.12516), async agents improved 7 of 8 models by up to 9 points; programmatic delegation kept accuracy with 20%+ fewer tokens.
+
+## License
+
+[AGPL-3.0](LICENSE)
