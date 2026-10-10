@@ -152,7 +152,7 @@ function openWorkbench(channel) {
   channel.onMessage(message => {
     if (typeof message?.id !== 'string') return;
     if (message.type === 'interrupt') channels.get(message.id)?.send({ type: 'interrupt', id: message.id });
-    else if (message.type === 'show' || message.type === 'hide') {
+    else if (message.type === 'show' || message.type === 'hide' || message.type === 'see') {
       sessions[message.type](message.id);
       changed();
     }

@@ -27,7 +27,7 @@ function hostStatus(path) {
   });
 }
 
-function alive(pid) {
+export function alive(pid) {
   try { process.kill(pid, 0); return true; }
   catch (error) { return error.code !== 'ESRCH'; }
 }

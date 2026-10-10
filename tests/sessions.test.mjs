@@ -39,5 +39,8 @@ test('a turn that ends while no terminal is attached needs attention until one a
   // Removing a Session from the list also clears its unseen turn.
   sessions.hide('c');
   assert.deepEqual(await attention(), { a: 'failed', b: undefined, d: 'done' });
+  // A previewed Session's turn is seen.
+  sessions.see('d');
+  assert.deepEqual(await attention(), { a: 'failed', b: undefined, d: undefined });
   await sessions.saved();
 });
