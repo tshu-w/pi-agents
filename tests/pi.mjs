@@ -12,8 +12,11 @@ if (!process.env.PI_AGENTS_STATE_DIR) {
 	process.on("exit", () => rmSync(state, { recursive: true, force: true }));
 }
 
-const prefix = dirname(dirname(realpathSync(execFileSync("which", ["pi"], { encoding: "utf8" }).trim())));
-export const PI_PACKAGE = join(prefix, "libexec/lib/node_modules/@earendil-works/pi-coding-agent");
+// npm links `pi` to the package's `dist/bundle/cli.js`; Homebrew wraps it in a script beside `libexec`.
+const bin = realpathSync(execFileSync("which", ["pi"], { encoding: "utf8" }).trim());
+export const PI_PACKAGE = bin.endsWith(join("dist", "bundle", "cli.js"))
+	? dirname(dirname(dirname(bin)))
+	: join(dirname(dirname(bin)), "libexec/lib/node_modules/@earendil-works/pi-coding-agent");
 export const EXTENSION = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 
 export const pi = await import(join(PI_PACKAGE, "dist/index.js"));
