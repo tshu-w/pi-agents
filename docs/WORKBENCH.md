@@ -106,7 +106,8 @@ still running (`●`) or has exited (`○`), and the color marks a finished (gre
 or failed (red) turn, or a dialog waiting for the user (yellow). The header
 shows Pi's logo, the size of each group, and key hints.
 
-A turn counts as seen once it has been shown in an attached terminal. Sessions
+A turn counts as seen once it has been shown in an attached terminal or a
+preview. Sessions
 from before the workbench start out seen. A Session that holds its lock but is
 not reporting to the daemon, as while its Pi exits, shows as unknown (`?`); the
 daemon checks it again every second until that changes.
@@ -127,7 +128,8 @@ Keys:
   - `Esc` clears a typed message; with none typed, it closes the preview.
 - `Ctrl+X` stops the current turn, as `app.interrupt` does.
 - `Ctrl+D` removes the selected Session from the list. Its file stays, and
-  `/resume` brings it back. A running Session must quit first.
+  `/resume` brings it back. An idle Session in a host that no terminal is
+  attached to quits first; any other running Session must quit itself.
 - `Ctrl+Z` (`pi-agents.detach`) exits the workbench, as detaching leaves a
   Session; every Session keeps running.
 

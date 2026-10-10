@@ -87,6 +87,13 @@ export async function createSessions(paths, sessionDir) {
       (marks[id] ??= {}).listed = true;
       save();
     },
+    /** Marks a Session's last turn seen, as when the user previews it. */
+    see(id) {
+      const mark = marks[id];
+      if (!mark?.last || (mark.seen ?? 0) >= mark.last.at) return;
+      mark.seen = mark.last.at;
+      save();
+    },
     /** Removes a Session from the workbench list and clears its unseen turn; its file stays. */
     hide(id) {
       const mark = marks[id];

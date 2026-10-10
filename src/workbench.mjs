@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { attach, listHosts, startHost } from './host/client.mjs';
+import { alive, attach, listHosts, startHost } from './host/client.mjs';
 import { detachKey, detachMatcher } from './host/keys.mjs';
 import { piPackage } from './pi.mjs';
 import { ensureDaemon, sendViaDaemon } from './daemon/client.mjs';
@@ -66,6 +66,8 @@ function age(ms) {
 
 const time = session => Math.max(session.finishedAt ?? 0, Date.parse(session.updatedAt ?? '') || 0);
 const label = session => session.name || session.title || session.id.slice(0, 8);
+// Notices quote the label, since a title can read as part of the notice.
+const named = session => `"${label(session)}"`;
 const COMMANDS = [
   { value: '/resume', label: 'resume', description: 'Open a past Session' },
   { value: '/quit', label: 'quit', description: 'Exit the workbench' },
@@ -283,7 +285,7 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
         return say('Press Ctrl+C again to quit');
       }
       if (T.matchesKey(data, 'ctrl+x')) return interrupt();
-      if (empty && keybindings.matches(data, 'app.session.delete')) return remove(selected()?.session);
+      if (empty && keybindings.matches(data, 'app.session.delete')) return void remove(selected()?.session);
       // The preview's mention stays: an edit that would remove or change it is undone.
       if (pane) {
         const before = editor.getText();
@@ -366,9 +368,9 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
       const hosted = (await listHosts(paths)).find(host => host.session?.id === session.id);
       if (hosted) return await attachTo(hosted.socket);
       if (session.running || session.status === 'unknown') {
-        return say(`${label(session)} runs outside a host; attach it after it exits.`, 'warning');
+        return say(`${named(session)} runs outside a host; attach it after it exits.`, 'warning');
       }
-      say(`Starting ${label(session)}…`);
+      say(`Starting ${named(session)}…`);
       const socket = await startHost(paths, {
         pi: executable, args: ['--session', session.sessionFile], cwd: session.cwd,
         cols: process.stdout.columns, rows: process.stdout.rows, waitForTerminal: true,
@@ -385,20 +387,32 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     const session = selected()?.session;
     if (!['working', 'blocked'].includes(session?.status) || !stream) return say('The selected Session is not working.', 'warning');
     stream.send({ type: 'interrupt', id: session.id });
-    say(`Stopping ${label(session)}…`);
+    say(`Stopping ${named(session)}…`);
   }
 
-  /** Removes a Session from the list; `/resume` brings it back. A running Session always stays listed. */
-  function remove(session) {
+  /**
+   * Removes a Session from the list; `/resume` brings it back. An idle Session in a host no terminal
+   * is attached to quits first, as Pi does on SIGTERM; any other running Session always stays listed.
+   */
+  async function remove(session) {
     if (!session || !stream) return;
-    if (session.running || session.status !== 'idle') return say(`Quit ${label(session)} before removing it.`, 'warning');
+    if (session.running) {
+      const host = session.status === 'idle' && (await listHosts(paths)).find(host => host.session?.id === session.id);
+      if (!host || host.attached) return say(`Quit ${named(session)} before removing it.`, 'warning');
+      say(`Quitting ${named(session)}…`);
+      process.kill(host.pid, 'SIGTERM');
+      for (let wait = 0; alive(host.pid); wait += 100) {
+        if (wait >= 5000) return say(`${named(session)} did not quit; attach it to see why.`, 'warning');
+        await delay(100);
+      }
+    } else if (session.status !== 'idle') return say(`Quit ${named(session)} before removing it.`, 'warning');
     stream.send({ type: 'hide', id: session.id });
     if (pane?.session.id === session.id) pane.close();
     const choices = selectable();
     const index = choices.findIndex(row => row.key === session.id);
     selectedKey = (choices[index + 1] ?? choices[index - 1])?.key;
     sessions = sessions.filter(other => other.id !== session.id);
-    say(`Removed ${label(session)}; /resume brings it back.`);
+    say(`Removed ${named(session)}; /resume brings it back.`);
   }
 
   async function preview(session) {
@@ -409,17 +423,22 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     let body = conversation(messages);
     const border = themes.getEditorTheme().borderColor;
     let scroll = 0, page = 1, timer;
+    // A turn the preview shows counts as seen.
+    const see = () => stream?.send({ type: 'see', id: session.id });
+    see();
     // Pi appends each finished message to the file, so the preview follows the Session as it works.
     const watcher = watch(session.sessionFile, () => {
       clearTimeout(timer);
       timer = setTimeout(async () => {
         try { body = conversation(await branchMessages(session.sessionFile)); }
         catch (error) { return say(error.message, 'error'); }
+        see();
         ui.requestRender();
       }, 100);
     });
     const close = () => {
       watcher.close();
+      see();
       clearTimeout(timer);
       // A draft stays, still addressed to the Session.
       if (editor.getText() === pane?.mention) editor.setText('');
@@ -507,12 +526,12 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
   }
 
   async function send(session, body) {
-    say(`Sending to ${label(session)}…`);
+    say(`Sending to ${named(session)}…`);
     const message = { id: randomUUID(), user: true, recipient: session.id, body };
     try {
       const receipt = await sendViaDaemon(paths, message, { sessionDir, launch: { command: executable, args: [], env } });
-      if (receipt?.accepted !== true || receipt.messageId !== message.id) throw new Error(`Invalid acknowledgement from ${label(session)}; it may have received the message.`);
-      say(`Sent to ${label(session)}.`);
+      if (receipt?.accepted !== true || receipt.messageId !== message.id) throw new Error(`Invalid acknowledgement from ${named(session)}; it may have received the message.`);
+      say(`Sent to ${named(session)}.`);
     } catch (error) { say(error.message, 'error'); }
   }
 
