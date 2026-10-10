@@ -1,15 +1,30 @@
 {
-  "name": "pi-agents",
+  "name": "@tshu-w/pi-agents",
   "version": "0.1.0",
-  "description": "Multi-agent runtime for Pi: async agents, programmatic delegation, and inter-agent messaging",
-  "private": true,
+  "description": "Multi-agent runtime for Pi: async agents, programmatic delegation, inter-agent messaging, and a workbench for your Sessions",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tshu-w/pi-agents.git"
+  },
+  "homepage": "https://github.com/tshu-w/pi-agents#readme",
   "type": "module",
   "bin": {
     "pd": "bin/pd.mjs",
     "pi-agents": "bin/pd.mjs"
   },
+  "files": [
+    "bin",
+    "src",
+    "docs"
+  ],
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "pi",
+    "multi-agent",
+    "rlm"
   ],
   "pi": {
     "extensions": [

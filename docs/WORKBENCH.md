@@ -33,8 +33,8 @@ Install with npm to get the `pd` command, also named `pi-agents`, then have Pi
 load the extension from the same copy, so the command and the extension are
 always the same version:
 
-    npm install -g github:tshu-w/pi-agents
-    pi install "$(npm root -g)/pi-agents"
+    npm install -g @tshu-w/pi-agents
+    pi install "$(npm root -g)/@tshu-w/pi-agents"
 
 `pd` runs whichever `pi` is on `PATH`. Sessions started with plain `pi` also
 load the extension, but run outside hosts and end with their terminal.
