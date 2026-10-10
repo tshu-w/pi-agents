@@ -2,7 +2,7 @@
 
 Multi-agent runtime for [Pi](https://pi.dev): hand work to other agents and keep going while they run.
 
-https://github.com/user-attachments/assets/c1d48bc4-3b36-438e-976b-f76ae586ffdd
+https://github.com/user-attachments/assets/52dd1de6-bf26-45ea-8775-2b1a1a187f4f
 
 <details>
 <summary>Play by play</summary>
@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/c1d48bc4-3b36-438e-976b-f76ae586ffdd
 </details>
 
 - **Async agents**: Agents run in parallel in the background and notify their parent when done.
-- **Programmatic delegation**: Split long-horizon tasks in code into [calls the model handles well](https://alexzhang13.github.io/blog/2026/harness/), as in [RLM](https://alexzhang13.github.io/blog/2025/rlm/).
+- **Dynamic workflows**: Recursively split long-horizon tasks in code into [calls the model handles well](https://alexzhang13.github.io/blog/2026/harness/), as in [RLM](https://alexzhang13.github.io/blog/2025/rlm/).
 - **Inter-agent messaging**: Agents message each other, even in other Pi instances.
 - **Workbench**: All your Sessions in one view; keep them running after the terminal closes.
 
@@ -56,11 +56,6 @@ Ask Pi in plain words; it starts Agents and Programs when the work calls for the
 | `pd agents` | Opens the workbench |
 | `pd attach <session>` | Attaches to a Session, starting it if needed |
 
-## Limitations
-
-- Each Agent is one Pi Session; branches are not separate Agents. Use fork/clone to create independent Agents.
-- A Session can be open in only one Pi instance at a time; quit the other or `pd attach` to it.
-
 ## Configuration
 
 ```json
@@ -73,15 +68,20 @@ Ask Pi in plain words; it starts Agents and Programs when the work calls for the
 
 Concurrency limits per root, and extensions loaded by child Agents.
 
+## Limitations
+
+- Each Agent is one Pi Session; branches are not separate Agents. Use fork/clone to create independent Agents.
+- A Session can be open in only one Pi instance at a time; quit the other or `pd attach` to it.
+
+## Evaluation
+
+On [BrowseComp](https://arxiv.org/abs/2504.12516), async agents improved 7 of 8 models by up to 9 points; dynamic workflows kept accuracy with 20%+ fewer tokens.
+
 ## Docs
 
 - [SPEC.md](docs/SPEC.md): Agents, messages, and limits
 - [PROGRAM.md](docs/PROGRAM.md): Programs and their API
 - [WORKBENCH.md](docs/WORKBENCH.md): the workbench, hosts, and the daemon
-
-## Evaluation
-
-On [BrowseComp](https://arxiv.org/abs/2504.12516), async agents improved 7 of 8 models by up to 9 points; programmatic delegation kept accuracy with 20%+ fewer tokens.
 
 ## License
 

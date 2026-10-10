@@ -1,7 +1,7 @@
 {
   "name": "@tshu-w/pi-agents",
   "version": "0.1.1",
-  "description": "Multi-agent runtime for Pi: async agents, programmatic delegation, inter-agent messaging, and a workbench for your Sessions",
+  "description": "Multi-agent runtime for Pi: async agents, dynamic workflows, inter-agent messaging, and a workbench for your Sessions",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
@@ -24,6 +24,7 @@
     "pi-coding-agent",
     "pi",
     "multi-agent",
+    "dynamic-workflows",
     "rlm"
   ],
   "pi": {
