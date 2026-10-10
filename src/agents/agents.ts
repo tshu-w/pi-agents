@@ -208,6 +208,8 @@ interface Turn {
 	started: boolean;
 	/** Whether the turn holds a scheduler slot. */
 	slot: boolean;
+	/** When the turn got its slot, in milliseconds. */
+	since?: number;
 	finished: boolean;
 	done: Deferred;
 }
@@ -287,11 +289,11 @@ export class Agents {
 		return [...this.agents.values()].some((agent) => agent.turn !== undefined || agent.queue.length > 0);
 	}
 
-	/** An owned Agent's state, and its inputs pending behind its current or next turn. */
-	counts(id: string): { state: AgentState; pending: number } | undefined {
+	/** An owned Agent's state, its inputs pending behind its current or next turn, and when its turn got a slot. */
+	counts(id: string): { state: AgentState; pending: number; since?: number } | undefined {
 		const agent = this.agents.get(id);
 		if (!agent) return undefined;
-		return { state: this.state(agent), pending: agent.queue.length };
+		return { state: this.state(agent), pending: agent.queue.length, since: agent.turn?.since };
 	}
 
 	private state(agent: Owned): AgentState {
@@ -616,6 +618,7 @@ export class Agents {
 		try {
 			await scheduler.acquireQueued(this.self.rootId, agent.record.id, this.limits.maxConcurrent, turn.abort.signal);
 			turn.slot = true;
+			turn.since = Date.now();
 			const session = await this.load(agent);
 			turn.abort.signal.throwIfAborted();
 			const before = session.getSessionStats().assistantMessages;
