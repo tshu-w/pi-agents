@@ -64,7 +64,7 @@ async function ready(root, model, signal) {
       }
     } catch (error) {
       signal.throwIfAborted();
-      if (!['ENOENT', 'ECONNREFUSED'].includes(error.code)) throw error;
+      if (!['ENOENT', 'ECONNREFUSED', 'SOCKET_MODE'].includes(error.code)) throw error;
     }
     await delay(50, undefined, { signal });
   }
