@@ -4,7 +4,7 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { startHost } from '../src/host/client.mjs';
+import { settledHosts, startHost } from '../src/host/client.mjs';
 import { acquireLock, pruneLocks, reserve } from '../src/roots/locks.mjs';
 import { prepareDirectory, statePaths } from '../src/roots/paths.mjs';
 import { findRoot } from '../src/roots/discovery.mjs';
@@ -25,6 +25,8 @@ pruneLocks(paths.locks);
 const IDLE_MS = 30000;
 const PUBLISH_MS = 250;
 const RECHECK_MS = 1000;
+const OCCUPIED_WAIT_MS = 5000;
+const HOST_WAIT_MS = 3000;
 const version = await codeVersion();
 let waking = 0, delivering = 0, lastActivity = Date.now(), retiring = false, closing = false;
 const stop = new AbortController();
@@ -49,22 +51,28 @@ async function savedModel(file, signal) {
   }
 }
 
+/** The status of the Session's Pi once it accepts messages, checking that it runs the Session expected. */
+async function accepting(root, signal) {
+  try {
+    const status = await request(paths.session(root.id), { action: 'status' }, { signal, timeoutMs: 1000 });
+    if (status.id !== root.id || status.cwd !== root.cwd) throw new Error('Awakened Agent identity or cwd does not match its Session');
+    if (status.availabilityError) throw new Error(status.availabilityError);
+    if (status.ready) return status;
+  } catch (error) {
+    signal.throwIfAborted();
+    if (!['ENOENT', 'ECONNREFUSED', 'SOCKET_MODE'].includes(error.code)) throw error;
+  }
+}
+
 /** Waits until the woken Session accepts messages with its saved model. */
 async function ready(root, model, signal) {
   for (;;) {
-    try {
-      const status = await request(paths.session(root.id), { action: 'status' }, { signal, timeoutMs: 1000 });
-      if (status.id !== root.id || status.cwd !== root.cwd) throw new Error('Awakened Agent identity or cwd does not match its Session');
-      if (status.availabilityError) throw new Error(status.availabilityError);
-      if (status.ready) {
-        if (model && (status.model?.provider !== model.provider || status.model?.modelId !== model.modelId)) {
-          throw new Error(`Saved model ${model.provider}/${model.modelId} was not restored; refusing model fallback.`);
-        }
-        return;
+    const status = await accepting(root, signal);
+    if (status) {
+      if (model && (status.model?.provider !== model.provider || status.model?.modelId !== model.modelId)) {
+        throw new Error(`Saved model ${model.provider}/${model.modelId} was not restored; refusing model fallback.`);
       }
-    } catch (error) {
-      signal.throwIfAborted();
-      if (!['ENOENT', 'ECONNREFUSED', 'SOCKET_MODE'].includes(error.code)) throw error;
+      return;
     }
     await delay(50, undefined, { signal });
   }
@@ -82,7 +90,17 @@ const router = createRouter({
       if (typeof root.cwd !== 'string' || !root.cwd.trim() || !isAbsolute(root.cwd)) {
         throw Object.assign(new Error(`Agent ${id} requires a nonempty absolute working directory; refusing cwd fallback.`), { code: 'INVALID_CWD' });
       }
-      reserve(paths.locks, root.sessionFile, id).release();
+      // A host still starting Pi in the Session's cwd, as when a terminal has just opened the Session, may be
+      // starting this Session. The wait leaves the rest of the wake time for starting the Session here.
+      await settledHosts(paths, host => host.session?.id === id,
+        { starting: host => !host.session && host.cwd === root.cwd, timeoutMs: HOST_WAIT_MS });
+      // Another Pi may hold the Session briefly: one exiting releases it, one starting accepts the message once ready.
+      for (const deadline = performance.now() + OCCUPIED_WAIT_MS; ;) {
+        try { reserve(paths.locks, root.sessionFile, id).release(); break; }
+        catch (error) { if (error.code !== 'SESSION_OCCUPIED' || performance.now() > deadline) throw error; }
+        if (await accepting(root, combined)) return;
+        await delay(100, undefined, { signal: combined });
+      }
       // Pi restores a Session's model before extensions register their providers; name it explicitly.
       const model = await savedModel(root.sessionFile, combined);
       const args = [...launch.args, '--session', root.sessionFile, ...(model ? ['--model', `${model.provider}/${model.modelId}`] : [])];

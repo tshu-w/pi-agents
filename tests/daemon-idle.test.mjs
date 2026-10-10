@@ -184,3 +184,73 @@ test('the daemon starts an offline recipient in a host, exits idle and restarts 
   const [code] = await once(child, 'exit');
   assert.equal(code, 0, output);
 });
+
+test('the daemon waits for another Pi holding an offline recipient\'s Session instead of failing', async t => {
+  const directory = await mkdtemp('/tmp/pa-idle-');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const url = relative => new URL(relative, import.meta.url).href;
+  const sessionFile = join(directory, 'sessions', 'root', 'recipient.jsonl');
+  const started = join(directory, 'started');
+  await mkdir(join(directory, 'sessions', 'root'), { recursive: true });
+  await writeFile(sessionFile, JSON.stringify({
+    type: 'session', version: 3, id: 'recipient', cwd: directory, timestamp: new Date().toISOString(),
+  }) + '\n');
+  const recipient = (marker = '') => `
+    const server = await listen(statePaths().session('recipient'), {
+      status: () => ({ id: 'recipient', cwd: ${JSON.stringify(directory)}, ready: true }),
+      accept: message => { ${marker} return { accepted: true, messageId: message.id }; },
+    });`;
+  await writeFile(join(directory, 'recipient.mjs'), `
+    import { writeFileSync } from 'node:fs';
+    import { statePaths } from '${url('../src/roots/paths.mjs')}';
+    import { listen } from '${url('../src/roots/transport.mjs')}';
+    writeFileSync(${JSON.stringify(started)}, '');
+    ${recipient()}
+    process.once('SIGTERM', async () => { await server.close(); process.exit(0); });
+  `);
+  await writeFile(join(directory, 'runner.mjs'), `
+    import assert from 'node:assert/strict';
+    import { existsSync } from 'node:fs';
+    import { statePaths } from '${url('../src/roots/paths.mjs')}';
+    import { listen, request } from '${url('../src/roots/transport.mjs')}';
+    import { reserve } from '${url('../src/roots/locks.mjs')}';
+    import { sendViaDaemon } from '${url('../src/daemon/client.mjs')}';
+    import { listHosts, startHost } from '${url('../src/host/client.mjs')}';
+    const paths = statePaths();
+    const options = {
+      sessionDir: ${JSON.stringify(join(directory, 'sessions'))},
+      launch: { command: process.execPath, args: [${JSON.stringify(join(directory, 'recipient.mjs'))}], env: process.env },
+    };
+    const message = ${JSON.stringify(message)};
+    // This process stands in for another Pi that holds the Session.
+    const lock = reserve(paths.locks, ${JSON.stringify(sessionFile)}, 'recipient');
+    let accepted = 0, other;
+    try {
+      // A Pi still starting takes the message once ready; no second Pi starts.
+      setTimeout(async () => { ${recipient('accepted++;')} other = server; }, 300);
+      assert.equal((await sendViaDaemon(paths, message, options)).accepted, true);
+      assert.equal(accepted, 1);
+      assert.equal(existsSync(${JSON.stringify(started)}), false);
+      // A Pi exiting releases the Session; then one starts for the message, despite a host in another cwd
+      // that never reports a Session.
+      await other.close();
+      await startHost(paths, { pi: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], cwd: ${JSON.stringify(join(directory, 'sessions'))} });
+      setTimeout(() => lock.release(), 300);
+      assert.equal((await sendViaDaemon(paths, { ...message, id: 'second' }, options)).accepted, true);
+      assert.equal(existsSync(${JSON.stringify(started)}), true);
+    } finally {
+      for (const host of await listHosts(paths)) process.kill(host.pid, 'SIGTERM');
+      try { process.kill((await request(paths.daemon, { action: 'status' })).pid, 'SIGTERM'); } catch {}
+      lock.release();
+    }
+  `);
+  const child = spawn(process.execPath, [join(directory, 'runner.mjs')], {
+    env: { ...process.env, PI_AGENTS_STATE_DIR: join(directory, 'state') },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', chunk => { output += chunk; });
+  child.stderr.on('data', chunk => { output += chunk; });
+  const [code] = await once(child, 'exit');
+  assert.equal(code, 0, output);
+});
