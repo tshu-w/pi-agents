@@ -245,7 +245,7 @@ test("a background Program keeps its caller's tree busy until it ends, and the u
 		while (true) await tools.read({ path: 'note.txt' });
 	` }));
 	await until(() => root.state.busy === 1, "inner Agent busy");
-	assert.deepEqual(panelLines(self).slice(1).map((line) => line.replace(/\(\S+\)/, "(id)")), [`  Program ${id}  running`, "    Agent inner (id)  running"]);
+	assert.deepEqual(panelLines(self).slice(1).map((line) => line.replace(/\(\S+\)/, "(id)").replace(/  \d+s$/, "  <time>")), [`  Program ${id}  running  <time>`, "    Agent inner (id)  running  <time>"]);
 	assert.deepEqual(ownedEntries(self).map((entry) => entry.name), ["inner"]);
 	// After its Agent answers, the Program only calls tools, and the tree stays busy.
 	root.state.hold.open();

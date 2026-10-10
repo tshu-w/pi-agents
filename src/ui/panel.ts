@@ -6,11 +6,19 @@ const WIDGET_KEY = "pi-agents";
 
 const MAX_LINES = 10;
 
+/** Time since `since` as Pi's bash tool shows durations, in whole seconds: `45s`, `1m 32s`, `1h 5m 3s`. */
+function elapsed(since: number, now: number): string {
+	const seconds = Math.max(0, Math.floor((now - since) / 1000));
+	const minutes = Math.floor(seconds / 60);
+	if (minutes === 0) return `${seconds}s`;
+	return minutes < 60 ? `${minutes}m ${seconds % 60}s` : `${Math.floor(minutes / 60)}h ${minutes % 60}m ${seconds % 60}s`;
+}
+
 /**
  * The task panel: the Agent's live owned Agents and running background Programs as a tree, in the
- * order they started, with their Programs' live Agents under them. Empty when none.
+ * order they started, with their Programs' live Agents under them, and how long each has run. Empty when none.
  */
-export function panelLines(self: AgentNode): string[] {
+export function panelLines(self: AgentNode, now = Date.now()): string[] {
 	const rows: Array<{ line: string; parent?: number; shown: boolean }> = [];
 	const ids = self.agents.ids();
 	let live = 0;
@@ -26,7 +34,8 @@ export function panelLines(self: AgentNode): string[] {
 		for (const child of children) {
 			const index = rows.length;
 			if ("program" in child) {
-				rows.push({ line: `${"  ".repeat(level)}${programLabel(child.program)}  running`, parent, shown: false });
+				const since = Date.parse(child.program.createdAt ?? "");
+				rows.push({ line: `${"  ".repeat(level)}${[programLabel(child.program), "running", ...(since ? [elapsed(since, now)] : [])].join("  ")}`, parent, shown: false });
 				live += 1;
 				show(index);
 				visit(child.program, level + 1, index);
@@ -35,7 +44,8 @@ export function panelLines(self: AgentNode): string[] {
 			const { entry } = child;
 			const own = node.agents.counts(entry.id);
 			const pending = own?.pending ? [`${own.pending} pending`] : [];
-			rows.push({ line: `${"  ".repeat(level)}Agent ${[label(entry, ids), entry.state, ...pending].join("  ")}`, parent, shown: false });
+			const time = own?.since ? [elapsed(own.since, now)] : [];
+			rows.push({ line: `${"  ".repeat(level)}Agent ${[label(entry, ids), entry.state, ...time, ...pending].join("  ")}`, parent, shown: false });
 			if (entry.state !== "idle") {
 				live += 1;
 				show(index);
@@ -51,18 +61,27 @@ export function panelLines(self: AgentNode): string[] {
 	return [`Tasks (${live} live, /tasks to hide)`, ...lines.map((line) => `  ${line}`)];
 }
 
-/** Keeps the task panel above the editor current while the Session is loaded; `toggle` hides or shows it. */
+/**
+ * Keeps the task panel above the editor current while the Session is loaded, and its times each second
+ * while it shows; `toggle` hides or shows it.
+ */
 export function createPanel(getNode: () => AgentNode | undefined) {
 	let ctx: ExtensionContext | undefined;
 	let hidden = false;
 	let scheduled = false;
 	let unsubscribe: (() => void) | undefined;
+	let ticker: ReturnType<typeof setInterval> | undefined;
 
 	const render = () => {
 		scheduled = false;
 		const node = getNode();
 		if (!ctx?.hasUI || !node) return;
 		const lines = hidden ? [] : panelLines(node);
+		if (lines.length > 0) ticker ??= setInterval(render, 1000);
+		else {
+			clearInterval(ticker);
+			ticker = undefined;
+		}
 		ctx.ui.setWidget(WIDGET_KEY, lines.length === 0 ? undefined : (_tui, theme) => {
 			const panel = new Container();
 			lines.forEach((line, index) => panel.addChild(new TruncatedText(theme.fg(index === 0 ? "accent" : "muted", line), 0, 0)));
@@ -87,6 +106,8 @@ export function createPanel(getNode: () => AgentNode | undefined) {
 			render();
 		},
 		stop() {
+			clearInterval(ticker);
+			ticker = undefined;
 			unsubscribe?.();
 			unsubscribe = undefined;
 			if (ctx?.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
