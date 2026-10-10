@@ -6,7 +6,7 @@ import { accessSync, constants } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { attach, listHosts, startHost } from '../src/host/client.mjs';
+import { attach, settledHosts, startHost } from '../src/host/client.mjs';
 import { detachKey, detachMatcher } from '../src/host/keys.mjs';
 import { discoverRoots, findRoot } from '../src/roots/discovery.mjs';
 import { agentDir, configuredSessionDir, defaultSessionDir, resolvePath, sessionDir, statePaths } from '../src/roots/paths.mjs';
@@ -63,16 +63,17 @@ async function attachAndReport(socket) {
 }
 
 /** The running host already holding the Session that `--session` or `-c` would open. */
-async function runningTarget(hosts) {
+async function runningTarget() {
+  let running;
   const session = option('--session');
   if (session) {
     const file = resolve(session);
-    return hosts.find(host => host.session && (host.session.id.startsWith(session) || host.session.file === file));
-  }
-  if (args.includes('-c') || args.includes('--continue')) {
+    running = host => host.session && (host.session.id.startsWith(session) || host.session.file === file);
+  } else if (args.includes('-c') || args.includes('--continue')) {
     const file = await recentSession();
-    return file && hosts.find(host => host.session?.file === file);
+    if (file) running = host => host.session?.file === file;
   }
+  return running && (await settledHosts(paths, running)).find(running);
 }
 
 /** The Session `-c` continues, chosen by Pi's own `continueRecent` rules. */
@@ -91,8 +92,8 @@ async function attachCommand(query) {
     process.stderr.write('Usage: pd attach <session>\n');
     process.exit(2);
   }
-  const hosts = await listHosts(paths);
-  const hosted = hosts.filter(host => host.session && (host.session.id.startsWith(query) || host.session.name === query));
+  const wanted = host => host.session && (host.session.id.startsWith(query) || host.session.name === query);
+  const hosted = (await settledHosts(paths, wanted)).filter(wanted);
   if (hosted.length === 1) return attachAndReport(hosted[0].socket);
   let roots = [];
   if (!hosted.length) {
@@ -125,7 +126,7 @@ else if (args[0] === 'agents' && interactive) {
 }
 else if (!interactive || COMMANDS.has(args[0]) || args.some(arg => DIRECT_FLAGS.has(arg.split('=')[0]))) runDirectly();
 else {
-  const running = await runningTarget(await listHosts(paths));
+  const running = await runningTarget();
   if (running) {
     // Pi already runs this Session, so options that would start it differently do not apply.
     const ignored = args.filter((arg, i) => !['--session', '--session-dir', '-c', '--continue'].includes(arg)

@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { alive, attach, listHosts, startHost } from './host/client.mjs';
+import { alive, attach, listHosts, settledHosts, startHost } from './host/client.mjs';
 import { detachKey, detachMatcher } from './host/keys.mjs';
 import { piPackage } from './pi.mjs';
 import { ensureDaemon, sendViaDaemon } from './daemon/client.mjs';
@@ -363,24 +363,14 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     else say('');
   }
 
-  /** The host running a Session; a host whose Pi has not reported its Session yet may be starting it, so wait for that. */
-  async function findHost(id) {
-    const deadline = performance.now() + 10000;
-    for (;;) {
-      const hosts = await listHosts(paths);
-      const hosted = hosts.find(host => host.session?.id === id);
-      if (hosted || !hosts.some(host => !host.session) || performance.now() > deadline) return hosted;
-      await delay(100);
-    }
-  }
-
   /** Attaches to a Session, starting it in a host when it is not running. */
   async function openSession(session) {
     stream?.send({ type: 'show', id: session.id });
     try {
       // A message just sent may be waking the Session in a host.
       await sending.get(session.id);
-      const hosted = await findHost(session.id);
+      const running = host => host.session?.id === session.id;
+      const hosted = (await settledHosts(paths, running)).find(running);
       if (hosted) return await attachTo(hosted.socket);
       if (session.running || session.status === 'unknown') {
         return say(`${named(session)} runs outside a host; attach it after it exits.`, 'warning');

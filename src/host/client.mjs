@@ -51,6 +51,19 @@ export async function listHosts(paths) {
 }
 
 /**
+ * Running hosts once `found` matches one or no host `starting` remains, waiting at most `timeoutMs`:
+ * a host whose Pi has not reported its Session yet may be starting the Session a caller looks for.
+ */
+export async function settledHosts(paths, found, { starting = host => !host.session, timeoutMs = START_TIMEOUT_MS } = {}) {
+  const deadline = performance.now() + timeoutMs;
+  for (;;) {
+    const hosts = await listHosts(paths);
+    if (hosts.some(found) || !hosts.some(starting) || performance.now() > deadline) return hosts;
+    await delay(100);
+  }
+}
+
+/**
  * Starts a detached host running `pi args` in `cwd` and resolves to its socket once it accepts connections.
  * With `waitForTerminal`, Pi starts when the first terminal attaches.
  */
