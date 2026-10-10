@@ -40,10 +40,16 @@ pi install npm:@tshu-w/pi-agents
 
 ## Usage
 
+Ask Pi in plain words; it starts Agents and Programs when the work calls for them.
+
+| Term | Meaning |
+|---|---|
+| Agent | A Pi Session another Session started with the `agent` tool; it works in the background and reports back when its turn ends |
+| Program | JavaScript the model runs with the `program` tool to call tools and Agents in loops or in parallel; only its result returns |
+| Workbench | `pd agents`: every Session, running or not, grouped by what it needs from you |
+
 | Command | Does |
 |---|---|
-| `agent` tool | Starts, messages, and waits for Agents |
-| `program` tool | Runs JavaScript that calls tools and Agents |
 | `/agents` | Opens an Agent in the tree to watch and talk to it |
 | `/tasks` | Hides or shows the task panel |
 | `Ctrl+Z`, `/detach` | Leaves a Session running and returns to the shell |
