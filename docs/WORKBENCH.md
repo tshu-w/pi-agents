@@ -15,13 +15,12 @@ Three kinds of process take part:
 - **Workbench**: the daemon's terminal view, opened with `pd agents`.
 
 Every running root Session reports its state to the daemon. The daemon starts
-when a Session or the workbench first needs it, and exits 30 seconds after its
-last connection closes.
+when a Session or the workbench first needs it, and exits soon after its last
+connection closes.
 
 Files live in `${XDG_STATE_HOME:-~/.local/state}/pi/agents/`:
 
-- `workbench.json`: seen marks and which Sessions are listed. The file is
-  versioned.
+- `workbench.json`: seen marks and which Sessions are listed.
 - `host.log`, `daemon.log`: logs.
 
 Sockets and Session locks go in `$XDG_RUNTIME_DIR/pi-agents/`. macOS has no
@@ -61,23 +60,16 @@ attached only after it exits.
 Only one terminal is attached at a time. A new terminal takes over, and the
 previous one is told how to reattach.
 
-On attach, the host restores the screen and the terminal modes Pi has set
-(keyboard protocols, bracketed paste, mouse, title, program status). Images
-come back when the host then has Pi redraw.
-
-A host started from a terminal waits for that terminal to attach before it
-starts Pi, so Pi detects the terminal's colors and keyboard protocol just as it
-would without a host. A host started in the background passes the queries Pi
-sent at startup to the first terminal that attaches, and Pi finishes detecting
-then.
+On attach, the host restores Pi's screen and the terminal modes Pi has set.
+Pi detects the colors and keyboard protocol of the first terminal that
+attaches, as it would without a host.
 
 Closing the window, pressing `Ctrl+Z` (the `pi-agents.detach` keybinding), or
 running `/detach` detaches. The Session keeps running, and the terminal prints:
 
     Pi keeps running. To reattach: pd attach <session>
 
-A host disables suspend, since a suspended Pi would stay stopped; `Ctrl+Z`
-detaches in its place.
+A host disables Pi's suspend.
 
 A detached Session exits once its tree has had no live work for 5 minutes. A
 message to a Session that is not running starts it in a host, detached.
@@ -109,8 +101,7 @@ shows Pi's logo, the size of each group, and key hints.
 A turn counts as seen once it has been shown in an attached terminal or a
 preview. Sessions
 from before the workbench start out seen. A Session that holds its lock but is
-not reporting to the daemon, as while its Pi exits, shows as unknown (`?`); the
-daemon checks it again every second until that changes.
+not reporting to the daemon, as while its Pi exits, shows as unknown (`?`).
 
 Keys:
 
@@ -154,9 +145,7 @@ Sessions reconnect to the new daemon.
 
 ## 7. Platform
 
-macOS and Linux. Every dependency is pure JavaScript or prebuilt: hosts use
-`@lydell/node-pty`, and a Session lock is a file that records the process
-holding it.
+macOS and Linux.
 
 ## Not in this version
 

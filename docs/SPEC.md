@@ -4,7 +4,7 @@ Pi Agents lets Agents in Pi discover, message, and wait for each other.
 Programs built on these operations are specified in PROGRAM.md.
 
 Terms follow Pi's
-[Pico5 specification](https://github.com/earendil-works/pi/blob/main/packages/durable/docs/pico-v5.md).
+[Pi Durable specification](https://github.com/earendil-works/pi/blob/main/packages/durable/docs/spec.md).
 
 ## 1. Semantic model
 
@@ -101,7 +101,7 @@ continuing, ahead of inputs that have not started.
 
 An input is outstanding from acceptance until its turn ends or it is
 withdrawn. `maxOutstanding` (default 8) limits outstanding inputs; an input
-beyond it is rejected. `maxConcurrent` cannot exceed `maxOutstanding`.
+beyond it is rejected.
 
 ## 5. Results and notifications
 
@@ -387,8 +387,8 @@ in Pi's editor.
 ### Workbench
 
 `pd agents` opens the workbench, which lists every root Session on this
-machine and lets the user open and message them. Interactive Sessions keep
-running after their terminal closes. See [WORKBENCH.md](WORKBENCH.md).
+machine and lets the user open and message them. Sessions started with `pd`
+keep running after their terminal closes. See [WORKBENCH.md](WORKBENCH.md).
 
 ## 8. Configuration
 
@@ -425,5 +425,5 @@ forcibly terminated.
 Before shutting down an idle Session, another extension can emit
 `busy:query` on `pi.events` with `{ busy: false }`; it is set to `true`
 while the tree has live work.
-One runtime uses a Session at a time. If a Session is occupied at interactive
-startup, its lock error stays visible until the user dismisses it, then Pi exits.
+One runtime uses a Session at a time. If a Session is occupied at startup, Pi
+reports it and exits.

@@ -54,32 +54,10 @@ can use is checked at each call. If a Program fails or is stopped, the
 error or stop reason follows its output. Its `store()` writes are kept
 only if it completes.
 
-A Program also creates Agents with `agent()`:
-
-```ts
-agent(options?: {
-  name?: string;
-  cwd?: string;
-  context?: "fresh" | "fork";
-  model?: string;
-  thinkingLevel?: string;
-}): AgentHandle
-
-interface AgentHandle {
-  readonly id: string;
-  readonly name: string;
-  send(message: string, options?: {
-    deliverAs?: "followUp" | "steer" | "write";
-    schema?: JsonSchema;
-  }): Promise<unknown>;
-  abort(): Promise<void>;
-}
-```
-
-`agent()` creates an idle Agent. Options work like `agent` `spawn`; an
-omitted name is generated, unique within the Program. `send()` sends a
-message and returns its result. `abort()` works like `agent` `abort`.
-It gets its tools as if the caller had spawned it.
+A Program also creates idle Agents with `agent()`, typed in the Agent API
+(§6). Options work like `agent` `spawn`; an omitted name is generated,
+unique within the Program. `send()` sends a message and returns its result.
+`abort()` works like `agent` `abort`. The Agent gets its tools as if the caller had spawned it.
 
 A result is the Agent's answer. If the input fails or is aborted, the
 result throws an Error. A write returns `undefined` once accepted.
@@ -95,7 +73,6 @@ Agents' unfinished inputs, and waits for its Agents to go offline. It
 returns its result after cleanup. Work not stopped within the cleanup
 timeout is abandoned and may keep running; the Program's result and `stop`
 report it as an error.
-Stopping a Program does not undo completed tool calls.
 
 When the caller goes offline, its running Programs stop. Their results
 remain available when the caller is loaded again.
