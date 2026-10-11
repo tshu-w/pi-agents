@@ -122,9 +122,10 @@ Keys:
   previewed Session. In the preview:
   - `Enter` sends a typed message; with none typed, it attaches.
   - `Ctrl+O` (`app.tools.expand`) attaches.
-  - The page keys of fullscreen mode (`tui.altScreen.pageUp`/`pageDown`)
-    scroll; with no message typed, `↑`/`↓` scroll too.
+  - It scrolls as fullscreen mode does; with no message typed, `↑`/`↓`
+    scroll too.
   - `Esc` clears a typed message; with none typed, it closes the preview.
+  - `Ctrl+Z` closes the preview.
 - `Ctrl+X` stops the current turn, as `app.interrupt` does.
 - `Ctrl+D` removes the selected Session from the list. Its file stays, and
   `/resume` brings it back. An idle Session in a host that no terminal is

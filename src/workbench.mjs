@@ -204,8 +204,9 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     // While the preview is open, the keys are its own: Enter may send a message, so `app.tools.expand` attaches.
     const keys = pane ? [
       hints.keyHint('app.tools.expand', 'attach'),
-      hints.rawKeyHint(`${hints.keyText('tui.altScreen.pageUp')}/${hints.keyText('tui.altScreen.pageDown')}`, 'scroll'),
-      hints.rawKeyHint('esc', 'close'),
+      hints.rawKeyHint(['lineUp', 'halfPageUp', 'pageUp', 'lineDown', 'halfPageDown', 'pageDown']
+        .map(name => hints.keyText(`tui.altScreen.${name}`)).filter(Boolean).join('/'), 'scroll'),
+      hints.rawKeyHint(`${detach}/esc`, 'close'),
     ].join(theme.fg('muted', ' · ')) : [
       hints.rawKeyHint('enter', 'attach'),
       hints.rawKeyHint(detach, 'quit'),
@@ -278,8 +279,8 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     handleInput(data) {
       // Holding only the preview's mention, the input counts as empty.
       const empty = ['', pane?.mention].includes(editor.getText());
-      // As in a Session, the detach key leaves and everything keeps running.
-      if (isDetach(data)) return void quit();
+      // As in a Session, the detach key leaves and everything keeps running; in the preview, it returns to the list.
+      if (isDetach(data)) return void (pane ? pane.close() : quit());
       if (pane?.handleInput(data, empty)) return;
       if (T.matchesKey(data, 'ctrl+c')) {
         if (!empty) return editor.setText(pane?.mention ?? '');
@@ -428,7 +429,7 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     catch (error) { return say(error.message, 'error'); }
     let body = conversation(messages);
     const border = themes.getEditorTheme().borderColor;
-    let scroll = 0, page = 1, timer;
+    let scroll = 0, page = 1, timer, scrolled, hideBar;
     // A turn the preview shows counts as seen.
     const see = () => stream?.send({ type: 'see', id: session.id });
     see();
@@ -446,6 +447,7 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
       watcher.close();
       see();
       clearTimeout(timer);
+      clearTimeout(hideBar);
       // A draft stays, still addressed to the Session.
       if (editor.getText() === pane?.mention) editor.setText('');
       pane = undefined;
@@ -460,14 +462,23 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
       invalidate() { body.invalidate(); },
       /** A short conversation takes only its own height; a longer one takes `max` lines and scrolls. */
       render(width, max) {
-        const current = sessions.find(other => other.id === session.id) ?? session;
-        const live = ['working', 'blocked', 'unknown'].includes(current.status) ? `  ${icon(current)} ${activity(current)}` : '';
-        const head = truncate(` ${theme.bold(label(session))}  ${theme.fg('dim', session.cwd ?? '')}${live}`, width);
-        const lines = body.render(width);
+        // The selected row and the input's mention name the Session, so the preview needs no title. A blank line
+        // sets it apart from the list.
+        const top = ['', border('─'.repeat(width))];
+        const bar = width > 1 ? settings.getFullscreenScrollbar() : 'hidden';
+        // The conversation starts right below the border.
+        const lines = body.render(bar === 'always' ? width - 1 : width);
+        while (lines.length && !T.stripTerminalSequences(lines[0]).trim()) lines.shift();
         page = Math.max(1, max - 2);
         scroll = Math.min(scroll, Math.max(0, lines.length - page));
-        const end = lines.length - scroll;
-        return [border('─'.repeat(width)), head, ...lines.slice(Math.max(0, end - page), end)];
+        const end = lines.length - scroll, start = Math.max(0, end - page);
+        const shown = lines.slice(start, end);
+        if (bar !== 'always' && !(bar === 'auto' && scrolled && lines.length > page)) return [...top, ...shown];
+        // The scrollbar of Pi's fullscreen transcript, in the last column.
+        const track = shown.length, size = Math.max(Math.min(2, track), Math.min(track, Math.round(track * track / lines.length)));
+        const offset = lines.length === track ? 0 : Math.round(start / (lines.length - track) * (track - size));
+        const cell = row => row >= offset && row < offset + size ? theme.fg('scrollbarThumb', '┃') : theme.fg('scrollbarTrack', '│');
+        return [...top, ...shown.map((line, row) => `${T.truncateToWidth(line, width - 1, '', true)}${cell(row)}`)];
       },
       /** Enter, `↑`/`↓`, and Space act on the preview only while no message is typed. */
       handleInput(data, empty) {
@@ -484,10 +495,17 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
           close();
           return true;
         }
-        const step = empty && T.matchesKey(data, 'up') ? 1 : empty && T.matchesKey(data, 'down') ? -1
-          : keybindings.matches(data, 'tui.altScreen.pageUp') ? page - 1 : keybindings.matches(data, 'tui.altScreen.pageDown') ? 1 - page : 0;
+        // The scroll keys of Pi's fullscreen mode; a step counts lines up from the end.
+        const half = Math.max(1, Math.floor(page / 2));
+        const steps = { lineUp: 1, lineDown: -1, halfPageUp: half, halfPageDown: -half, pageUp: page - 1, pageDown: 1 - page, top: Infinity, bottom: -Infinity };
+        const action = Object.keys(steps).find(name => keybindings.matches(data, `tui.altScreen.${name}`));
+        const step = empty && T.matchesKey(data, 'up') ? 1 : empty && T.matchesKey(data, 'down') ? -1 : action ? steps[action] : 0;
         if (!step) return false;
         scroll = Math.max(0, scroll + step);
+        // As in Pi's `auto` mode, the scrollbar shows while scrolling and for a second after.
+        scrolled = true;
+        clearTimeout(hideBar);
+        hideBar = setTimeout(() => { scrolled = false; ui.requestRender(); }, 1000);
         ui.requestRender();
         return true;
       },
