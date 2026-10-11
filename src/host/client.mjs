@@ -126,7 +126,8 @@ export function attach(socketPath, { isDetach, stdin = process.stdin, stdout = p
         stdin.pause();
         // An exiting Pi restores the terminal itself.
         // Leaving the alternate screen returns the cursor to the line below the command; otherwise it ends a line.
-        if (result?.reason !== 'exited') stdout.write(altScreen ? `\x1b[?1049l${RESET}` : `${RESET}\r\n`);
+        // Terminals keep a keyboard mode stack per screen, so the reset comes before leaving it.
+        if (result?.reason !== 'exited') stdout.write(altScreen ? `${RESET}\x1b[?1049l` : `${RESET}\r\n`);
       }
       resolve(result ?? { reason: 'closed' });
     }
