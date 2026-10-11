@@ -19,11 +19,12 @@
     "docs"
   ],
   "keywords": [
-    "pi-package",
-    "pi-extension",
-    "pi-coding-agent",
     "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package",
     "multi-agent",
+    "async-agents",
     "dynamic-workflows",
     "rlm"
   ],
