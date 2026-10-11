@@ -36,9 +36,11 @@ import { installGuard } from "./roots/guard.mjs";
 import lockExtension from "./roots/lock-extension.mjs";
 import { statePaths } from "./roots/paths.mjs";
 import { createReporter } from "./roots/report.ts";
-import { installRpcPatches } from "./roots/rpc.ts";
+import { installQueuePatches } from "./roots/queue.ts";
+import { agentSession, installRpcPatches } from "./roots/rpc.ts";
 import { createRootRuntime } from "./roots/runtime.ts";
 import { createPanel } from "./ui/panel.ts";
+import { showQueue } from "./ui/queue.ts";
 import { openAgentViewer } from "./ui/viewer.ts";
 
 const DEFAULT_LIMITS: Limits = { maxConcurrent: 3, maxOutstanding: 8 };
@@ -95,6 +97,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
 	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: statePaths().locks });
 	installHostPatches(AgentSession, ExtensionRunner, piCodemode.codemodeSchema);
+	installQueuePatches(AgentSession);
 	const roots = createRootRuntime(pi, {
 		receive: async (message) => {
 			const delivery = message.deliverAs ?? "followUp";
@@ -138,6 +141,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		const agents = new Agents(pi, self, agentDir, settings, settings.extensions);
 		agents.setContext(current);
 		agents.restore(current);
+		const manager = current.sessionManager;
+		const queue = showQueue(current, () => agentSession(manager));
 		node = {
 			...self,
 			agents,
@@ -148,6 +153,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 				pi.sendMessage(customMessage(text, delivery, messageId), delivery === "write"
 					? { deliverAs: "steer" }
 					: { deliverAs: delivery, triggerTurn: true });
+				queue.update();
 			},
 		};
 		nodes.set(id, node);

@@ -100,6 +100,11 @@ function sharedUI(ui: Patchable, manager: object): Patchable {
 	};
 }
 
+/** The `AgentSession` of the Session `manager` holds. */
+export function agentSession(manager: object): AgentSession | undefined {
+	return shared.sessions.get(manager);
+}
+
 /** Keeps each Session's `AgentSession`, and shares the terminal's UI with RPC clients. */
 export function installRpcPatches(Session: typeof AgentSession, Runner: typeof ExtensionRunner, host: DialogHost | undefined): void {
 	shared.host = host;

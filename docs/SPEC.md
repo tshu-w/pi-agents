@@ -45,6 +45,10 @@ An input to an Agent with a turn in progress is either answered by the current t
 A write is added at the recipient's next tool boundary, or at once if it is
 idle. A write can go to several Agents at once.
 
+When the user of a root Agent clears its queued messages, messages from other
+Agents stay queued; when the user stops its turn, they are added to its
+conversation without starting a turn.
+
 ### 2.3 wait
 
 `wait` returns results of inputs sent to owned Agents. It can target
@@ -367,6 +371,15 @@ how long the Agent's current turn or the Program has run.
 The panel updates as states change, and its times each second. It is shown
 while it has a row.
 `/tasks` hides or shows it.
+
+### Queued messages
+
+Messages from other Agents that wait in the Session's queue, as during a turn,
+are listed above the editor, below the user's queued messages, until the
+Session takes them in:
+
+    Steering: [<sender>] <body>
+    Follow-up: [<sender>] <body>
 
 ### Agent viewer
 

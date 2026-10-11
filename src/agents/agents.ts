@@ -121,8 +121,8 @@ function lastAnswer(session: AgentSession, before: number): { outcome: Outcome; 
 	return { outcome: "completed", result: text };
 }
 
-/** Takes this extension's messages left in the agent queues after a run settles. */
-function takeQueued(agent: AgentSession["agent"]) {
+/** Takes this extension's messages out of the agent queues. */
+export function takeQueued(agent: AgentSession["agent"]) {
 	// peekQueuedMessages returns one message in one-at-a-time mode; read the queues whole.
 	const queues = agent as unknown as Record<"steeringQueue" | "followUpQueue", { messages: QueuedMessage[] }>;
 	const steering = queues.steeringQueue.messages.slice();

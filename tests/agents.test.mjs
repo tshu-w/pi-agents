@@ -211,3 +211,54 @@ test("a turn that does not stop within the abort timeout is abandoned, and the t
 	await root.close();
 });
 
+
+test("an Agent message queued in a busy root is listed until taken in, and survives clearing the queue and stopping the turn", async () => {
+	const cwd = mkdtempSync(join(agentDir, "cwd-"));
+	let hold = gate();
+	let turns = 0;
+	const route = async (context, options) => {
+		turns += 1;
+		if (textOf(context.messages.at(-1).content) !== "hold") return ai.fauxAssistantMessage("ok");
+		await Promise.race([hold.promise, new Promise((resolve) => options?.signal?.addEventListener("abort", resolve, { once: true }))]);
+		return ai.fauxAssistantMessage("", { stopReason: options?.signal?.aborted ? "aborted" : "stop" });
+	};
+	const sessionManager = pi.SessionManager.create(cwd, join(cwd, "sessions"));
+	const session = await createSession({ cwd, route, extensions: [EXTENSION, fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))], sessionManager, tools: ["agent"] });
+	const widgets = new Map();
+	const noop = () => {};
+	const uiContext = { notify: noop, setStatus: noop, setWidget: (key, content) => widgets.set(key, content), setFooter: noop, setTitle: noop, setWorkingMessage: noop, select: noop, confirm: noop, input: noop, editor: noop, custom: noop, onTerminalInput: () => noop };
+	await session.bindExtensions({ mode: "interactive", uiContext });
+	const lines = () => widgets.get("pi-agents-queue")({ requestRender: noop }, { fg: (_color, text) => text }).render(80).map((line) => line.trim());
+	const node = globalThis.piAgentsTree.nodes.get(sessionManager.getSessionId());
+	const message = '<agent-message from="peer" id="ab" note="Reply with send">\nhello\nthere\n</agent-message>';
+
+	const last = () => session.messages.at(-1);
+
+	// Clearing the queue, as Pi's dequeue does, leaves it queued; stopping the turn adds it without a turn.
+	let turn = session.prompt("hold");
+	await until(() => session.isStreaming, "turn started");
+	node.receive(message, "followUp");
+	assert.deepEqual(lines(), ["Follow-up: [peer] hello there"]);
+	session.clearQueue();
+	assert.deepEqual(lines(), ["Follow-up: [peer] hello there"]);
+	await session.abort();
+	await turn;
+	assert.deepEqual(lines(), []);
+	assert.equal(last().role, "custom");
+	assert.equal(last().content, message);
+	assert.equal(turns, 1);
+
+	// A turn takes it in.
+	hold = gate();
+	turn = session.prompt("hold");
+	await until(() => session.isStreaming, "second turn started");
+	node.receive(message, "followUp");
+	hold.open();
+	await turn;
+	await session.waitForIdle();
+	assert.deepEqual(lines(), []);
+	assert.equal(turns, 3);
+	assert.equal(session.messages.at(-2).content, message);
+	await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+	session.dispose();
+});
