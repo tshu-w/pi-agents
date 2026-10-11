@@ -1,9 +1,10 @@
 import net from 'node:net';
-import { StringDecoder } from 'node:string_decoder';
 import { chmodSync, lstatSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 const MAX_BYTES = 1024 * 1024;
+// Pi's events on an rpc stream carry whole messages, images included.
+const RPC_MAX_BYTES = 256 * 1024 * 1024;
 const MAX_SOCKET_PATH_BYTES = 103;
 const MAX_PENDING = 64;
 // Each running Pi keeps a stream open to the daemon.
@@ -51,7 +52,7 @@ function validate(value) {
   if (!record(value)) throw fault('INVALID_REQUEST', 'Expected a request object');
   if (value.action === 'status') return { action: 'status' };
   if (value.action === 'stream') {
-    if (value.role !== 'session' && value.role !== 'workbench') throw fault('INVALID_REQUEST', 'stream role must be session or workbench');
+    if (!['session', 'workbench', 'rpc'].includes(value.role)) throw fault('INVALID_REQUEST', 'stream role must be session, workbench or rpc');
     return { action: 'stream', role: value.role };
   }
   const m = value.message, l = value.launch;
@@ -75,11 +76,13 @@ function validate(value) {
   }, ...(l === undefined ? {} : { launch: { command: l.command, args: [...l.args], env: { ...l.env } } }) };
 }
 
-function encode(value) {
+function encode(value, limit = MAX_BYTES) {
   const bytes = Buffer.from(`${JSON.stringify(value)}\n`);
-  if (bytes.length > MAX_BYTES) throw fault('FRAME_TOO_LARGE', 'JSONL frame exceeds 1 MiB');
+  if (bytes.length > limit) throw fault('FRAME_TOO_LARGE', `JSONL frame exceeds ${limit / 1024 / 1024} MiB`);
   return bytes;
 }
+
+const streamLimit = role => role === 'rpc' ? RPC_MAX_BYTES : MAX_BYTES;
 
 // Consume exactly one bounded JSONL frame; never dispatch additional requests.
 function readFrame(socket, done) {
@@ -108,28 +111,33 @@ function readFrame(socket, done) {
 }
 
 // JSONL messages after a stream's opening frame.
-function readLines(socket, onLine, onInvalid) {
-  const decoder = new StringDecoder('utf8');
-  let buffer = '';
+function readLines(socket, onLine, onInvalid, limit) {
+  // An unfinished line is kept as chunks, so each byte is scanned once.
+  let pending = [], size = 0;
   socket.on('data', chunk => {
-    buffer += decoder.write(chunk);
-    for (let newline; (newline = buffer.indexOf('\n')) >= 0;) {
-      const line = buffer.slice(0, newline);
-      buffer = buffer.slice(newline + 1);
+    let start = 0;
+    for (let newline; (newline = chunk.indexOf(10, start)) >= 0; start = newline + 1) {
+      const line = Buffer.concat([...pending, chunk.subarray(start, newline)]).toString('utf8');
+      pending = [];
+      size = 0;
       let value;
       try { value = JSON.parse(line); } catch { return onInvalid(); }
       onLine(value);
     }
-    if (Buffer.byteLength(buffer) > MAX_BYTES) onInvalid();
+    if (start < chunk.length) {
+      pending.push(chunk.subarray(start));
+      size += chunk.length - start;
+    }
+    if (size > limit) onInvalid();
   });
 }
 
-function channel(socket, signal) {
+function channel(socket, signal, limit) {
   const listeners = [];
-  readLines(socket, value => { for (const listener of listeners) listener(value); }, () => socket.destroy());
+  readLines(socket, value => { for (const listener of listeners) listener(value); }, () => socket.destroy(), limit);
   return {
     signal,
-    send(value) { if (!socket.destroyed && !socket.writableEnded) socket.write(encode(value)); },
+    send(value) { if (!socket.destroyed && !socket.writableEnded) socket.write(encode(value, limit)); },
     onMessage(listener) { listeners.push(listener); },
     close() { socket.destroy(); },
   };
@@ -145,7 +153,8 @@ function errorFrame(error) {
 
 /**
  * FIFO by default. Handlers receive a connection-lifetime signal, not an acceptance rollback.
- * `stream` takes over the connections that open a stream; they keep the server from being idle.
+ * `stream` takes over the connections that open a stream; they keep the server from being idle. It may
+ * refuse a stream by throwing; its result joins the acceptance, which reaches the client before anything it sends.
  * @param {string} socketPath
  * @param {{ status: Function, accept: Function, stream?: Function, serialize?: boolean }} handlers
  */
@@ -189,8 +198,17 @@ export async function listen(socketPath, { status, accept, stream, serialize = t
       if (input.action === 'stream') {
         if (!stream) return respond(fault('INVALID_REQUEST', 'Streams are not supported here'));
         clearTimeout(timer);
-        socket.write(encode({ ok: true, result: { pid: process.pid } }));
-        return stream(input, channel(socket, signal));
+        const opened = channel(socket, signal, streamLimit(input.role));
+        const send = opened.send;
+        const early = [];
+        opened.send = value => early.push(value);
+        let result;
+        try { result = stream(input, opened); }
+        catch (failure) { return respond(failure); }
+        socket.write(encode({ ok: true, result: { pid: process.pid, ...result } }));
+        opened.send = send;
+        for (const value of early) send(value);
+        return;
       }
       if (pending >= MAX_PENDING) return respond(fault('SERVER_BUSY', 'Request queue is full'));
       pending++;
@@ -332,10 +350,10 @@ export function openStream(socketPath, input, { onMessage, onClose }) {
       opened = true;
       resolvePromise({
         result: response.result,
-        send(message) { if (!socket.destroyed && !socket.writableEnded) socket.write(encode(message)); },
+        send(message) { if (!socket.destroyed && !socket.writableEnded) socket.write(encode(message, streamLimit(value.role))); },
         close() { socket.destroy(); },
         unref() { socket.unref(); },
       });
-    }, () => socket.destroy());
+    }, () => socket.destroy(), streamLimit(value.role));
   });
 }

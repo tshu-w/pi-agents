@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// The `pd` command: runs interactive Pi in a host and attaches this terminal; everything else
-// runs Pi directly.
+// The `pd` command: runs Pi in a host, attaching this terminal to interactive Pi and connecting
+// non-interactive Pi to the hosted Session; `--no-session` and package commands run Pi directly.
 import { spawn } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -25,7 +25,7 @@ const args = process.argv.slice(2);
 const paths = statePaths();
 
 const COMMANDS = new Set(['install', 'remove', 'uninstall', 'update', 'list', 'config', 'auth', 'mcp']);
-const DIRECT_FLAGS = new Set(['-p', '--print', '--mode', '-h', '--help', '-v', '--version', '--export', '--list-models', '--no-session']);
+const DIRECT_FLAGS = new Set(['-h', '--help', '-v', '--version', '--export', '--list-models', '--no-session']);
 
 function runDirectly() {
   const child = spawn(real, args, { stdio: 'inherit' });
@@ -122,6 +122,20 @@ async function attachCommand(query) {
   return attachAndReport(socket);
 }
 
+/** Warns about the options a running Session does not apply. */
+function warnIgnored(options) {
+  const ignored = options.filter((arg, i) => !['--session', '--session-dir', '-c', '--continue'].includes(arg)
+    && !arg.startsWith('--session=') && !['--session', '--session-dir'].includes(options[i - 1]));
+  if (ignored.length) process.stderr.write(`${styleText('yellow', `The Session is already running; using it without applying: ${ignored.join(' ')}`, { stream: process.stderr })}\n`);
+}
+
+/** Pi's mode for `args` when it is not interactive: 'text', 'json', or 'rpc'. */
+function headlessMode() {
+  const mode = option('--mode');
+  if (mode === 'json' || mode === 'rpc') return mode;
+  if (!interactive || args.includes('-p') || args.includes('--print')) return 'text';
+}
+
 const interactive = process.stdin.isTTY && process.stdout.isTTY;
 if (args[0] === 'attach' && interactive) await attachCommand(args[1]);
 else if (args[0] === 'agents' && interactive) {
@@ -129,15 +143,15 @@ else if (args[0] === 'agents' && interactive) {
   await workbench({ pi: real, paths, sessionDir: sessionDir() });
   process.exit(0);
 }
-else if (!interactive || COMMANDS.has(args[0]) || args.some(arg => DIRECT_FLAGS.has(arg.split('=')[0]))) runDirectly();
+else if (COMMANDS.has(args[0]) || args.some(arg => DIRECT_FLAGS.has(arg.split('=')[0]))) runDirectly();
+else if (headlessMode()) {
+  const { runHeadless } = await import('../src/host/rpc-client.mjs');
+  await runHeadless({ pi: real, paths, args, mode: headlessMode(), findRunning: runningTarget, warnIgnored });
+}
 else {
   const running = await runningTarget();
-  if (running) {
-    // Pi already runs this Session, so options that would start it differently do not apply.
-    const ignored = args.filter((arg, i) => !['--session', '--session-dir', '-c', '--continue'].includes(arg)
-      && !arg.startsWith('--session=') && !['--session', '--session-dir'].includes(args[i - 1]));
-    if (ignored.length) process.stderr.write(`${styleText('yellow', `The Session is already running; attaching without applying: ${ignored.join(' ')}`, { stream: process.stderr })}\n`);
-  }
+  // Pi already runs this Session, so options that would start it differently do not apply.
+  if (running) warnIgnored(args);
   const socket = running?.socket ?? await startHost(paths, {
     pi: real, args, cwd: process.cwd(), cols: process.stdout.columns, rows: process.stdout.rows, waitForTerminal: true,
   });

@@ -12,20 +12,21 @@ const hostSocket = process.env.PI_AGENTS_HOST && process.env.PI_AGENTS_HOST_PID 
 export interface Host {
 	socket: string;
 	attached(): boolean;
-	onChange(listener: () => void): void;
+	onChange(listener: () => void): () => void;
 }
 
 /**
  * Connects Pi to the host it runs in: reports the current Session, detaches on request,
- * disables suspend, and exits after the tree has been idle and detached for a while.
+ * disables suspend, and exits after the tree has been idle and detached, with no RPC client, for a while.
  * Returns the host, if Pi runs in one.
  */
-export function hostExtension(pi: ExtensionAPI, { treeIdle }: { treeIdle: () => boolean }): Host | undefined {
+export function hostExtension(pi: ExtensionAPI, { treeIdle, rpcClients }: { treeIdle: () => boolean; rpcClients: () => number }): Host | undefined {
 	if (!hostSocket) return;
 	const listeners: Array<() => void> = [];
 
 	let ctx: ExtensionContext | undefined;
-	let attached = true;
+	// Whether a terminal was attached when Pi started, until the host reports a change.
+	let attached = process.env.PI_AGENTS_HOST_ATTACHED !== "0";
 	let idleSince: number | undefined;
 	let socket: net.Socket | undefined;
 	const connect = (path: string): net.Socket => {
@@ -50,7 +51,7 @@ export function hostExtension(pi: ExtensionAPI, { treeIdle }: { treeIdle: () => 
 	process.on("SIGTSTP", () => process.kill(process.pid, "SIGCONT"));
 
 	const timer = setInterval(() => {
-		if (!ctx || attached || !ctx.isIdle() || ctx.hasPendingMessages() || !treeIdle()) {
+		if (!ctx || attached || !ctx.isIdle() || ctx.hasPendingMessages() || !treeIdle() || rpcClients() > 0) {
 			idleSince = undefined;
 			return;
 		}
@@ -70,5 +71,15 @@ export function hostExtension(pi: ExtensionAPI, { treeIdle }: { treeIdle: () => 
 	pi.on("session_shutdown", () => { ctx = undefined; });
 
 	pi.registerCommand("detach", { description: "Detach this terminal; Pi keeps running", handler: async () => send({ type: "detach" }) });
-	return { socket: hostSocket, attached: () => attached, onChange: (listener) => { listeners.push(listener); } };
+	return {
+		socket: hostSocket,
+		attached: () => attached,
+		onChange: (listener) => {
+			listeners.push(listener);
+			return () => {
+				const at = listeners.indexOf(listener);
+				if (at >= 0) listeners.splice(at, 1);
+			};
+		},
+	};
 }

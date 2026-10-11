@@ -64,7 +64,9 @@ mirror.loadAddon(serializer);
 
 function start({ cols, rows }) {
   mirror.resize(cols, rows);
-  child = pty.spawn(config.pi, config.args, { name: env.TERM || 'xterm-256color', cols, rows, cwd: config.cwd, env });
+  // Pi learns of later attaches from the host, once it connects.
+  const attached = terminal ? '1' : '0';
+  child = pty.spawn(config.pi, config.args, { name: env.TERM || 'xterm-256color', cols, rows, cwd: config.cwd, env: { ...env, PI_AGENTS_HOST_ATTACHED: attached } });
   child.onData(data => {
     const text = completed(data);
     trackModes(text);
@@ -73,6 +75,12 @@ function start({ cols, rows }) {
     terminal?.socket.write(frame(FRAME.data, data));
   });
   child.onExit(({ exitCode }) => {
+    // No terminal saw why Pi failed, so its last screen goes to the log.
+    if (!attachedOnce && exitCode !== 0) {
+      const buffer = mirror.buffer.active;
+      const lines = Array.from({ length: buffer.length }, (_, i) => buffer.getLine(i)?.translateToString(true) ?? '');
+      console.error(`[pi-agents] Pi exited (${exitCode}) in ${config.cwd}:\n${lines.join('\n').trim()}`);
+    }
     server.close();
     rmSync(socketPath, { force: true });
     // Pi's last output can arrive after its exit; let it through before the final frame.

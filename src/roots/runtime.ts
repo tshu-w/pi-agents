@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { trackTreeWork, treeMetadata } from "../agents/registry.ts";
 import { sendViaDaemon } from "../daemon/client.mjs";
 import { prepareDirectory, statePaths, sessionDir as resolveSessionDir } from "./paths.mjs";
+import { createRpc } from "./rpc.ts";
 import { rootSnapshot } from "./snapshot.mjs";
 import { recoverSocket } from "./socket-recovery.mjs";
 import { listen, request } from "./transport.mjs";
@@ -46,7 +47,7 @@ function piCli(): string {
 
 /**
  * Makes this root Agent reachable from other processes: it answers status requests,
- * and accepts messages from other roots.
+ * accepts messages from other roots, and serves RPC clients.
  */
 export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 	const paths = statePaths();
@@ -55,6 +56,7 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 	let server: Awaited<ReturnType<typeof listen>> | undefined;
 	let ready = false;
 	let seen = new Set<string>();
+	const rpc = createRpc();
 
 	function availabilityError(): string | undefined {
 		const ctx = active!;
@@ -159,11 +161,24 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 			await prepareDirectory(paths.runtime);
 			const socket = paths.session(ctx.sessionManager.getSessionId());
 			await recoverSocket(socket);
-			server = await listen(socket, { status: current, accept });
+			await rpc.prepare();
+			server = await listen(socket, {
+				status: current,
+				accept,
+				stream: (input: { role: string }, channel: Parameters<typeof rpc.open>[1]) => {
+					if (input.role !== "rpc") throw new Error("Unsupported stream role.");
+					if (!ready || !active) throw Object.assign(new Error("The Session is not ready for RPC clients."), { code: "NOT_READY" });
+					return rpc.open(active.sessionManager, channel);
+				},
+			});
 		},
+
+		/** How many RPC clients are connected. */
+		rpcClients: () => rpc.clients(),
 
 		async stop(): Promise<void> {
 			ready = false;
+			rpc.close();
 			await server?.close();
 			server = undefined;
 			active = undefined;

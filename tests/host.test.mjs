@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -16,7 +17,8 @@ const agentDir = join(home, "agent");
 mkdirSync(agentDir);
 const model = fileURLToPath(new URL("./fixtures/model.ts", import.meta.url));
 const extension = fileURLToPath(new URL("../src/index.ts", import.meta.url));
-writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: [model, extension], defaultProvider: "agents-test", defaultModel: "fake", quietStartup: true }));
+const dialog = fileURLToPath(new URL("./fixtures/dialog-extension.mjs", import.meta.url));
+writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: [model, extension, dialog], defaultProvider: "agents-test", defaultModel: "fake", quietStartup: true }));
 // Pi in the host runs 100 times faster, so its 5 minute idle limit takes 3 seconds.
 const clock = join(home, "clock.mjs");
 writeFileSync(clock, `if (process.env.PI_AGENTS_HOST) {
@@ -112,4 +114,110 @@ test("a terminal attaching to a background host gets Pi's startup queries and st
 	assert.ok(!output.includes("state=working"));
 	connection.destroy();
 	process.kill(Number(/h-(\d+)\.sock$/.exec(socket)[1]), "SIGTERM");
+});
+
+/** Runs `pd args` with `input` piped to it. */
+function run(args, input = "") {
+	const child = spawn(process.execPath, [client, ...args], { cwd: home, env: process.env });
+	let stdout = "", stderr = "";
+	child.stdout.on("data", (data) => { stdout += data; });
+	child.stderr.on("data", (data) => { stderr += data; });
+	child.stdin.end(input);
+	return new Promise((resolve) => child.on("exit", (code) => resolve({ code, stdout, stderr })));
+}
+
+/** Runs `pd --mode rpc args`. */
+function rpc(args) {
+	const child = spawn(process.execPath, [client, "--mode", "rpc", ...args], { cwd: home, env: process.env, stdio: ["pipe", "pipe", "inherit"] });
+	const records = [];
+	let buffer = "";
+	child.stdout.on("data", (data) => {
+		buffer += data;
+		for (let at; (at = buffer.indexOf("\n")) >= 0; buffer = buffer.slice(at + 1)) records.push(JSON.parse(buffer.slice(0, at)));
+	});
+	let id = 0;
+	return {
+		records,
+		find: (check, label) => until(() => records.find(check), label),
+		async call(command) {
+			const request = { id: `r${++id}`, ...command };
+			child.stdin.write(`${JSON.stringify(request)}\n`);
+			return until(() => records.find((record) => record.type === "response" && record.id === request.id), command.type);
+		},
+		end() {
+			child.stdin.end();
+			return new Promise((resolve) => child.on("exit", resolve));
+		},
+	};
+}
+
+const answered = (records, text) => records.some((record) => record.type === "message_end" && record.message.content[0]?.text === text);
+const notified = (message) => (record) => record.type === "extension_ui_request" && record.message === message;
+
+test("-p and --mode json run on the Session in a host, beside the attached terminal", async () => {
+	const printed = await run(["-p", "hello"]);
+	assert.deepEqual(printed, { code: 0, stdout: "answer:hello\n", stderr: "" });
+	const host = (await listHosts(paths)).find((entry) => entry.session);
+	assert.equal(host.attached, false);
+
+	const screen = terminal(["attach", host.session.id]);
+	await until(() => screen.text().includes("answer:hello"), "attached");
+	const json = await run(["--mode", "json", "-c"], "again\n");
+	assert.equal(json.code, 0);
+	const records = json.stdout.trim().split("\n").map((line) => JSON.parse(line));
+	assert.equal(records[0].type, "session");
+	assert.equal(records[0].id, host.session.id);
+	assert.ok(answered(records, "answer:again"));
+	await until(() => screen.text().includes("answer:again"), "the terminal shows the prompt");
+
+	screen.child.write("\x1a");
+	assert.equal((await screen.exited).exitCode, 0);
+	process.kill(host.pid, "SIGTERM");
+	await until(async () => (await listHosts(paths)).length === 0, "host exit");
+});
+
+test("RPC clients share a Session, dialogs wait only for an attached terminal, and fork moves only its caller", async () => {
+	const first = rpc([]);
+	const { sessionId, sessionFile } = (await first.call({ type: "get_state" })).data;
+	const second = rpc(["--session", sessionFile]);
+	assert.equal((await second.call({ type: "get_state" })).data.sessionId, sessionId);
+	await first.call({ type: "prompt", message: "one" });
+	await second.find((record) => answered([record], "answer:one"), "the other client sees the answer");
+
+	// Without a terminal a dialog is cancelled at once; with one it waits, until the terminal detaches.
+	await first.call({ type: "prompt", message: "/ask" });
+	await second.find(notified("edited:undefined"), "cancelled dialog");
+	const screen = terminal(["attach", sessionId]);
+	await until(() => screen.text().includes("answer:one"), "attached");
+	const asking = first.call({ type: "prompt", message: "/ask" });
+	await until(() => screen.text().includes("Proceed?"), "dialog");
+	assert.equal(second.records.filter(notified("edited:undefined")).length, 1);
+	screen.child.write("\x1a");
+	await screen.exited;
+	await until(() => second.records.filter(notified("edited:undefined")).length === 2, "dialog cancelled on detach");
+	await asking;
+
+	// A host with an RPC client outlives the idle limit.
+	const [host] = await listHosts(paths);
+	await delay(4000);
+	assert.deepEqual((await listHosts(paths)).map((entry) => entry.pid), [host.pid]);
+
+	const { messages } = (await first.call({ type: "get_fork_messages" })).data;
+	const fork = await first.call({ type: "fork", entryId: messages[0].entryId });
+	assert.deepEqual(fork.data, { text: "one", cancelled: false });
+	const forked = (await first.call({ type: "get_state" })).data;
+	assert.notEqual(forked.sessionId, sessionId);
+	assert.equal((await second.call({ type: "get_state" })).data.sessionId, sessionId);
+
+	// A client whose host stops opens its Session again; a command sent as it stops fails instead of hanging.
+	process.kill(host.pid, "SIGTERM");
+	let state;
+	do state = await second.call({ type: "get_state" }); while (!state.success && state.error === "The Session stopped.");
+	const reopened = state.data;
+	assert.equal(reopened.sessionId, sessionId);
+	assert.ok(reopened.messageCount > 0);
+
+	assert.equal(await first.end(), 0);
+	assert.equal(await second.end(), 0);
+	await until(async () => (await listHosts(paths)).length === 0, "idle exit without clients", 15000);
 });

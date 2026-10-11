@@ -16,7 +16,7 @@ const ALT_SCREEN = /\x1b\[\?1049([hl])/g;
 // Splits terminal input into key sequences: CSI and SS3 sequences, Alt+key, or a single character.
 const KEYS = /\x1b\[[0-?]*[ -/]*[@-~]|\x1bO[\s\S]|\x1b?[\s\S]/g;
 
-function hostStatus(path) {
+export function hostStatus(path) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(path);
     socket.setTimeout(1000, () => socket.destroy(Object.assign(new Error('Host status timed out'), { code: 'ETIMEDOUT' })));

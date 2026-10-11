@@ -45,7 +45,7 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 	let stream: { send(message: object): void; close(): void } | undefined;
 	let generation = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
-	let dialogs = 0;
+	let dialog = false;
 	let tools = new Map<string, string>();
 	let turn: { at: number; failed: boolean } | undefined;
 	let reply: string | undefined;
@@ -67,8 +67,8 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 			title,
 			host: hooks.host?.socket,
 			attached: hooks.host ? hooks.host.attached() : true,
-			working: !current.isIdle() || current.hasPendingMessages() || !hooks.treeIdle() || dialogs > 0,
-			blocked: dialogs > 0,
+			working: !current.isIdle() || current.hasPendingMessages() || !hooks.treeIdle(),
+			blocked: dialog,
 			tool: [...tools.values()].at(-1),
 			reply,
 			agents: hooks.liveWork(),
@@ -127,7 +127,7 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 		ctx = undefined;
 		unsubscribe?.();
 		unsubscribe = undefined;
-		dialogs = 0;
+		dialog = false;
 		tools = new Map();
 		turn = reply = title = undefined;
 	});
@@ -141,8 +141,8 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 	pi.on("tool_execution_end", (event) => {
 		if (tools.delete(event.toolCallId)) changed();
 	});
-	pi.on("ui_prompt_start", () => { dialogs += 1; changed(); });
-	pi.on("ui_prompt_end", () => { dialogs = Math.max(0, dialogs - 1); changed(); });
+	pi.on("ui_prompt_start", () => { dialog = true; changed(); });
+	pi.on("ui_prompt_end", () => { dialog = false; changed(); });
 	pi.on("agent_settled", (event) => {
 		if (!ctx) return;
 		const last = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "assistant");

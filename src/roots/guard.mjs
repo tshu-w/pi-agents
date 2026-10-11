@@ -3,8 +3,14 @@ import { closeSync, openSync, readFileSync, readSync, writeFileSync } from 'node
 import { acquireLock, canonicalPath, SessionOccupiedError } from './locks.mjs';
 import { resolvePath } from './paths.mjs';
 
-/** The ID in a Session file's header, its first parseable entry. Reads only up to that entry. */
+/** The ID in a Session file's header. */
 export function readSessionId(path) {
+  const header = readSessionHeader(path);
+  return typeof header?.id === 'string' ? header.id : undefined;
+}
+
+/** A Session file's header, its first parseable entry. Reads only up to that entry. */
+export function readSessionHeader(path) {
   let fd;
   try { fd = openSync(path, 'r'); }
   catch (error) { if (error.code === 'ENOENT') return; throw error; }
@@ -19,7 +25,7 @@ export function readSessionId(path) {
       for (const line of data.subarray(0, end).toString('utf8').split('\n')) {
         let entry;
         try { entry = JSON.parse(line); } catch { continue; }
-        if (entry) return entry.type === 'session' && typeof entry.id === 'string' ? entry.id : undefined;
+        if (entry) return entry.type === 'session' ? entry : undefined;
       }
       if (!bytes) return;
       rest = data.subarray(end);

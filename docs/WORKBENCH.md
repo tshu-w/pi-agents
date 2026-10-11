@@ -46,8 +46,15 @@ load the extension, but run outside hosts and end with their terminal.
 - `pd agents` opens the workbench.
 - `pd attach <session>` attaches to a Session, starting it first if it is not
   running.
-- Non-interactive starts (`-p`, `--mode`, piped stdin) and package commands
-  (`pd install`, `pd update`, ...) run Pi directly.
+- Non-interactive starts (`-p`, `--mode json`, `--mode rpc`, piped stdin) work
+  as in Pi, on the Session in a host, so several of them and an attached
+  terminal can use one Session at once. Unlike Pi:
+  - Dialogs are not sent to them. A dialog waits while a terminal is attached
+    and is cancelled otherwise.
+  - `new_session`, `switch_session`, `fork`, and `clone` move only the caller
+    to the other Session.
+- `--no-session` starts and package commands (`pd install`, `pd update`, ...)
+  run Pi directly.
 
 A host inherits the environment of the process that asked for it, because Pi
 reads terminal features from the environment once, at startup.
@@ -71,8 +78,9 @@ running `/detach` detaches. The Session keeps running, and the terminal prints:
 
 A host disables Pi's suspend.
 
-A detached Session exits once its tree has had no live work for 5 minutes. A
-message to a Session that is not running starts it in a host, detached.
+A detached Session exits after 5 minutes with no live work in its tree and no
+`pd --mode rpc` connected. A message to a Session that is not running starts it
+in a host, detached.
 
 ## 5. Workbench
 

@@ -36,6 +36,7 @@ import { installGuard } from "./roots/guard.mjs";
 import lockExtension from "./roots/lock-extension.mjs";
 import { statePaths } from "./roots/paths.mjs";
 import { createReporter } from "./roots/report.ts";
+import { installRpcPatches } from "./roots/rpc.ts";
 import { createRootRuntime } from "./roots/runtime.ts";
 import { createPanel } from "./ui/panel.ts";
 import { openAgentViewer } from "./ui/viewer.ts";
@@ -108,7 +109,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	});
 	lockExtension(pi, { start: (current: ExtensionContext) => roots.start(current), stop: () => roots.stop(), runner: ExtensionRunner });
 	const idle = () => node === undefined || treeIdle(node.rootId);
-	const host = hostExtension(pi, { treeIdle: idle });
+	const host = hostExtension(pi, { treeIdle: idle, rpcClients: () => roots.rpcClients() });
+	installRpcPatches(AgentSession, ExtensionRunner, host);
 	createReporter(pi, { treeIdle: idle, liveWork: () => node ? liveWork(node) : 0, host });
 	// Event bus handlers run synchronously, so an extension that emits a query object reads the answer right after emit.
 	pi.events.on("busy:query", (query) => {
