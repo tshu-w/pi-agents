@@ -19,9 +19,9 @@ https://github.com/user-attachments/assets/52dd1de6-bf26-45ea-8775-2b1a1a187f4f
 </details>
 
 - **Async agents**: Agents run in parallel in the background and notify their parent when done.
-- **Dynamic workflows**: Recursively split long-horizon tasks in code into [calls the model handles well](https://alexzhang13.github.io/blog/2026/harness/), as in [RLM](https://alexzhang13.github.io/blog/2025/rlm/).
+- **Dynamic workflows**: Extends Pi's [codemode](https://pi.dev/docs/latest/codemode) to recursively split long-horizon tasks into calls the model handles well, as in [RLM](https://alexzhang13.github.io/blog/2026/harness/).
 - **Inter-agent messaging**: Agents message each other, even in other Pi instances.
-- **Workbench**: All your Sessions in one view; keep them running after the terminal closes.
+- **Persistent agents**: Agents keep running after the terminal closes, with a workbench to manage them.
 
 ## Install
 
@@ -30,7 +30,7 @@ npm install -g @tshu-w/pi-agents
 pi install "$(npm root -g)/@tshu-w/pi-agents"
 ```
 
-Requires Pi 1.0.0 or later. Start Pi with `pd` (or `pi-agents`) in place of `pi`, and enable `program` with `{ "defaultTools": ["+program"] }` in `settings.json`.
+Requires Pi 1.0.0 or later. Start Pi with `pd` (or `pi-agents`) in place of `pi`, and enable `program`, which replaces Pi's `codemode`, with `{ "defaultTools": ["+program"] }` in `settings.json`.
 
 To use only the extension, without the workbench:
 
@@ -44,9 +44,9 @@ Ask Pi in plain words; it starts Agents and Programs when the work calls for the
 
 | Term | Meaning |
 |---|---|
-| Agent | A Pi Session another Session started with the `agent` tool; it works in the background and reports back when its turn ends |
-| Program | JavaScript the model runs with the `program` tool to call tools and Agents in loops or in parallel; only its result returns |
-| Workbench | `pd agents`: every Session, running or not, grouped by what it needs from you |
+| Agent | A Pi conversation: yours, or one started with the `agent` tool |
+| Program | JavaScript the model runs with the `program` tool to call tools and Agents |
+| Workbench | `pd agents`: your recent Sessions, running or not, grouped by what they need from you |
 
 | Command | Does |
 |---|---|
@@ -66,11 +66,11 @@ Ask Pi in plain words; it starts Agents and Programs when the work calls for the
 }
 ```
 
-Concurrency limits per root, and extensions loaded by child Agents.
+Each tree runs at most `maxConcurrent` child Agents at once and accepts at most `maxOutstanding` unfinished inputs. `extensions` lists extensions loaded by child Agents.
 
 ## Limitations
 
-- Each Agent is one Pi Session; branches are not separate Agents. Use fork/clone to create independent Agents.
+- Each Agent is one Pi Session, so branches within it are not separate Agents; use `/fork` or `/clone` to make one.
 - A Session can be open in only one Pi instance at a time; quit the other or `pd attach` to it.
 
 ## Evaluation
