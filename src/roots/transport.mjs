@@ -52,7 +52,7 @@ function validate(value) {
   if (!record(value)) throw fault('INVALID_REQUEST', 'Expected a request object');
   if (value.action === 'status') return { action: 'status' };
   if (value.action === 'stream') {
-    if (!['session', 'workbench', 'rpc'].includes(value.role)) throw fault('INVALID_REQUEST', 'stream role must be session, workbench or rpc');
+    if (!['session', 'workbench', 'rpc', 'print'].includes(value.role)) throw fault('INVALID_REQUEST', 'stream role must be session, workbench, rpc or print');
     return { action: 'stream', role: value.role };
   }
   const m = value.message, l = value.launch;
@@ -82,7 +82,7 @@ function encode(value, limit = MAX_BYTES) {
   return bytes;
 }
 
-const streamLimit = role => role === 'rpc' ? RPC_MAX_BYTES : MAX_BYTES;
+const streamLimit = role => role === 'rpc' || role === 'print' ? RPC_MAX_BYTES : MAX_BYTES;
 
 // Consume exactly one bounded JSONL frame; never dispatch additional requests.
 function readFrame(socket, done) {

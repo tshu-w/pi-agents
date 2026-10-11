@@ -4,7 +4,7 @@
  * `AgentSession` and `ExtensionRunner`; check them when Pi is updated.
  */
 import { ExtensionEditorComponent, getPackageDir, SessionManager, type AgentSession, type ExtensionRunner, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -24,13 +24,47 @@ export interface DialogHost {
 	onChange(listener: () => void): () => void;
 }
 
+/** A `-p` or `--mode json` client's prompts, which run back to back once the Session is idle. */
+interface Job {
+	channel: RpcChannel;
+	prompts: { message: string; images?: unknown[] }[];
+	stopped: boolean;
+	/** The job's prompts being admitted. */
+	admitting: number;
+	/** Resolves once the job's turns end. */
+	ended: Promise<void>;
+	end(): void;
+}
+
+/** How one Session admits prompts. */
+interface Lane {
+	/** Prompts being admitted, until each starts, queues, or fails. */
+	admitting: number;
+	changed: Set<() => void>;
+	/** The job whose turns are running; until they end, no other prompt starts a turn. */
+	holder?: Job;
+	/** Runs that wait for the holder to end. */
+	deferred: number;
+	waiting: Job[];
+	draining: boolean;
+}
+
 // Shared across extension reloads: the prototypes are patched once.
 const shared: {
 	patched: boolean;
 	sessions: WeakMap<object, AgentSession>;
 	forwards: WeakMap<object, (record: object) => void>;
+	lanes: WeakMap<object, Lane>;
 	host?: DialogHost;
-} = (globalThis as Patchable)[Symbol.for("pi-agents.rpc")] ??= { patched: false, sessions: new WeakMap(), forwards: new WeakMap() };
+	/** Admits a prompt of `job`'s; prompts made while it runs, as by extensions, are part of the job. */
+	admit?: (session: AgentSession, job: Job, text: string, options: Patchable) => Promise<void>;
+} = (globalThis as Patchable)[Symbol.for("pi-agents.rpc")] ??= { patched: false, sessions: new WeakMap(), forwards: new WeakMap(), lanes: new WeakMap() };
+
+function lane(session: object): Lane {
+	let current = shared.lanes.get(session);
+	if (!current) shared.lanes.set(session, current = { admitting: 0, changed: new Set(), deferred: 0, waiting: [], draining: false });
+	return current;
+}
 
 /**
  * Dialogs wait for an attached terminal: without one they are cancelled at once, and an open one is
@@ -112,8 +146,21 @@ export function installRpcPatches(Session: typeof AgentSession, Runner: typeof E
 	shared.patched = true;
 	const session = Session.prototype as Patchable;
 	const bind = session.bindExtensions;
-	session.bindExtensions = function (this: AgentSession, ...args: unknown[]) {
-		shared.sessions.set(this.sessionManager, this);
+	session.bindExtensions = function (this: Patchable, ...args: unknown[]) {
+		shared.sessions.set(this.sessionManager, this as AgentSession);
+		// Pi runs what it defers until a run settles one at a time, in that run's context; each keeps the context it
+		// was deferred in. One that is not part of the job holding the Session waits for it apart, so that the job's
+		// own run next does not wait for the job to end.
+		const deferred: Patchable = this._deferredSettledActions;
+		deferred.push = (...actions: (() => Promise<unknown>)[]) => Array.prototype.push.apply(deferred, actions.map((action) => {
+			const store = admitting.getStore();
+			const bound = AsyncResource.bind(action);
+			return () => {
+				const holder = lane(this).holder;
+				if (!holder || (store?.session === this && store.job === holder)) return bound();
+				bound().catch((e: unknown) => this.extensionRunner.emitError({ extensionPath: "<runtime>", event: "agent_settled", error: e instanceof Error ? e.message : String(e) }));
+			};
+		}));
 		return bind.apply(this, args);
 	};
 	// Prompts from the terminal and RPC clients are admitted one at a time, until each starts, queues, or
@@ -121,27 +168,75 @@ export function installRpcPatches(Session: typeof AgentSession, Runner: typeof E
 	// admitted, as by its extension command, is part of it.
 	const prompt = session.prompt;
 	const admissions = new WeakMap<object, Promise<void>>();
-	const admitting = new AsyncLocalStorage<{ session: object; active: boolean }>();
-	session.prompt = function (this: AgentSession, text: string, options?: Patchable) {
-		const store = admitting.getStore();
-		if (store?.session === this && store.active) return prompt.call(this, text, options);
-		const admission = { session: this, active: true };
-		let admitted!: () => void;
-		const turn = new Promise<void>((resolve) => {
-			admitted = () => {
-				admission.active = false;
-				resolve();
-			};
-		});
-		const previous = admissions.get(this) ?? Promise.resolve();
-		admissions.set(this, previous.then(() => turn));
-		return previous.then(() => admitting.run(admission, () => prompt.call(this, text, {
+	const admitting = new AsyncLocalStorage<{ session: object; active: boolean; job?: Job }>();
+	const admit = (self: AgentSession, store: { session: object; active: boolean; job?: Job }, text: string, options?: Patchable) => {
+		const current = lane(self);
+		current.admitting++;
+		if (store.job) store.job.admitting++;
+		const admitted = () => {
+			if (!store.active) return;
+			store.active = false;
+			current.admitting--;
+			if (store.job) store.job.admitting--;
+			for (const listener of current.changed) listener();
+		};
+		return admitting.run(store, () => prompt.call(self, text, {
 			...options,
 			preflightResult: (disposition: string) => {
 				admitted();
 				options?.preflightResult?.(disposition);
 			},
-		}))).finally(admitted);
+		})).finally(admitted);
+	};
+	shared.admit = (self, job, text, options) => admit(self, { session: self, active: true, job }, text, options);
+	session.prompt = async function (this: AgentSession, text: string, options?: Patchable) {
+		const store = admitting.getStore();
+		if (store?.session === this && store.active) return admit(this, { session: this, active: true, job: store.job }, text, options);
+		const current = lane(this);
+		if (store?.session === this && store.job && store.job === current.holder) return shared.admit!(this, store.job, text, options ?? {});
+		// Between a job's turns, a prompt that would start a turn waits until they end, letting later prompts in.
+		const blocked = () => current.holder && !this.isStreaming;
+		for (;;) {
+			while (blocked()) await current.holder!.ended;
+			let admitted!: () => void;
+			const turn = new Promise<void>((resolve) => { admitted = resolve; });
+			const previous = admissions.get(this) ?? Promise.resolve();
+			admissions.set(this, previous.then(() => turn));
+			await previous;
+			if (blocked()) {
+				admitted();
+				continue;
+			}
+			try {
+				return await admit(this, { session: this, active: true }, text, {
+					...options,
+					preflightResult: (disposition: string) => {
+						admitted();
+						options?.preflightResult?.(disposition);
+					},
+				});
+			} finally {
+				admitted();
+			}
+		}
+	};
+	// While a job holds the Session, a run that is not part of it, as one an input hook delayed past the job's turn
+	// or an Agent's message started, waits until the job ends; a run started by then takes its messages as follow-ups.
+	const runAgentPrompt = session._runAgentPrompt;
+	session._runAgentPrompt = async function (this: Patchable, messages: unknown) {
+		const current = lane(this);
+		const store = admitting.getStore();
+		if (current.holder && (store?.session !== this || store.job !== current.holder)) {
+			current.deferred++;
+			try {
+				while (current.holder) await current.holder.ended;
+			} finally {
+				current.deferred--;
+			}
+			if (this._isEmittingAgentSettled) return void this._deferredSettledActions.push(() => this._runAgentPrompt(messages));
+			if (this.isStreaming) return void [messages].flat().forEach((message) => this.agent.followUp(message));
+		}
+		return runAgentPrompt.call(this, messages);
 	};
 	const runner = Runner.prototype as Patchable;
 	const setUIContext = runner.setUIContext;
@@ -170,9 +265,92 @@ function branch(manager: SessionManager, leafId: string | null, parentSession: s
 
 let toJsonEvent: ((event: unknown) => object) | undefined;
 
+/**
+ * Resolves once `session` has no turn or compaction, and no prompt of `job`'s being admitted. Without `job`, no
+ * prompt may be admitted, nor a run wait for the previous job to end; `claim` runs at that moment.
+ */
+function whenSettled(session: Patchable, job: Job | undefined, claim?: () => void): Promise<void> {
+	const current = lane(session);
+	const settled = () => session.isIdle && !session._isEmittingAgentSettled && (job ? job.admitting === 0 : current.admitting === 0 && current.deferred === 0);
+	return new Promise((resolve) => {
+		let done = false;
+		// The Session's state changes after its events and admissions, so it is checked once they finish.
+		const check = () => setImmediate(() => {
+			if (done || !settled()) return;
+			done = true;
+			unsubscribe();
+			current.changed.delete(check);
+			clearInterval(timer);
+			claim?.();
+			resolve();
+		});
+		const unsubscribe = session.subscribe(check);
+		current.changed.add(check);
+		const timer = setInterval(check, 100);
+		check();
+	});
+}
+
+/** Runs the waiting jobs of `session` one at a time, each once the Session is settled. */
+async function drain(session: Patchable, current: Lane): Promise<void> {
+	if (current.draining) return;
+	current.draining = true;
+	try {
+		while (current.waiting.length > 0) {
+			let job: Job | undefined;
+			await whenSettled(session, undefined, () => { job = current.holder = current.waiting.shift(); });
+			if (job) await run(session, job);
+		}
+	} finally {
+		current.draining = false;
+	}
+}
+
+/** Stops the run or compaction in progress; each run of a stopped job is aborted once it starts. */
+function stopTurn(session: Patchable): void {
+	if (session.isStreaming ? !session._agentRunAbortRequested : session.isCompacting) void session.abort().catch(() => undefined);
+}
+
+/** Runs `job`'s prompts back to back, sending it the Session's events until they end. */
+async function run(session: Patchable, job: Job): Promise<void> {
+	let error: string | undefined;
+	const unsubscribe = session.subscribe((event: unknown) => {
+		job.channel.send({ event: toJsonEvent!(event) });
+		if (job.stopped) stopTurn(session);
+	});
+	try {
+		job.channel.send({ start: true });
+		for (const { message, images } of job.prompts) {
+			if (job.stopped || job.channel.signal.aborted) break;
+			for (;;) {
+				try {
+					// A turn started meanwhile, as by an Agent's message, takes the prompt as a follow-up.
+					await new Promise<void>((resolve, reject) => {
+						shared.admit!(session as AgentSession, job, message, { images, source: "rpc", streamingBehavior: "followUp", preflightResult: () => resolve() }).then(resolve, reject);
+					});
+					break;
+				} catch (e) {
+					// Another client may have started a compaction before the prompt reached Pi.
+					if (!session.isCompacting || job.stopped) throw e;
+					await whenSettled(session, job);
+				}
+			}
+			await whenSettled(session, job);
+		}
+	} catch (e) {
+		error = e instanceof Error ? e.message : String(e);
+	} finally {
+		unsubscribe();
+		lane(session).holder = undefined;
+		job.end();
+		job.channel.send(error === undefined ? { end: true } : { end: true, error });
+	}
+}
+
 /** The RPC clients of one root Session. */
 export function createRpc() {
 	const clients = new Set<RpcChannel>();
+	const printers = new Set<RpcChannel>();
 	let session: Patchable | undefined;
 	let unsubscribe: (() => void) | undefined;
 
@@ -364,7 +542,44 @@ export function createRpc() {
 			return { header: manager.getHeader() };
 		},
 
-		clients: () => clients.size,
+		/**
+		 * Connects a `-p` or `--mode json` client to the Session `manager` holds; resolves to the Session's header.
+		 * Its `run` command queues its prompts, and `stop` withdraws them or stops their turn.
+		 */
+		print(manager: ExtensionContext["sessionManager"], channel: RpcChannel): { header: unknown } {
+			const current = shared.sessions.get(manager) as Patchable | undefined;
+			if (!current || !toJsonEvent) throw new Error("The Session is not ready.");
+			const queue = lane(current);
+			let job: Job | undefined;
+			const withdraw = () => {
+				const at = job ? queue.waiting.indexOf(job) : -1;
+				if (at < 0) return false;
+				queue.waiting.splice(at, 1);
+				return true;
+			};
+			printers.add(channel);
+			// A client that is gone withdraws its prompts that have not started; its running turn goes on.
+			channel.signal.addEventListener("abort", () => {
+				printers.delete(channel);
+				withdraw();
+			}, { once: true });
+			channel.onMessage((command) => {
+				if (command?.type === "run" && !job) {
+					let end!: () => void;
+					const ended = new Promise<void>((resolve) => { end = resolve; });
+					job = { channel, prompts: command.prompts, stopped: false, admitting: 0, ended, end };
+					queue.waiting.push(job);
+					void drain(current, queue);
+				} else if (command?.type === "stop" && job && !job.stopped) {
+					job.stopped = true;
+					if (withdraw()) channel.send({ end: true });
+					else if (queue.holder === job) stopTurn(current);
+				}
+			});
+			return { header: manager.getHeader() };
+		},
+
+		clients: () => clients.size + printers.size,
 
 		close(): void {
 			unsubscribe?.();

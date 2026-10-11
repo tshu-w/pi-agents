@@ -55,6 +55,14 @@ load the extension, but run outside hosts and end with their terminal.
     and is cancelled otherwise.
   - `new_session`, `switch_session`, `fork`, and `clone` move only the caller
     to the other Session.
+  - `-p` and `--mode json` wait until the Session is idle, then run their
+    messages back to back. Their output covers their own turns, including
+    input other clients add to them.
+  - `SIGINT`, `SIGTERM`, or `SIGHUP` (as from Ctrl+C, `kill`, or a closed
+    terminal) makes `-p` and `--mode json` withdraw their prompts that have
+    not started and stop their running turn, including input other clients
+    added to it. Killed with `SIGKILL`, they leave their turn running.
+  - An RPC client that ends leaves its turn running.
 - `--no-session` starts and package commands (`pd install`, `pd update`, ...)
   run Pi directly.
 

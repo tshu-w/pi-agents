@@ -166,9 +166,9 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 				status: current,
 				accept,
 				stream: (input: { role: string }, channel: Parameters<typeof rpc.open>[1]) => {
-					if (input.role !== "rpc") throw new Error("Unsupported stream role.");
+					if (input.role !== "rpc" && input.role !== "print") throw new Error("Unsupported stream role.");
 					if (!ready || !active) throw Object.assign(new Error("The Session is not ready for RPC clients."), { code: "NOT_READY" });
-					return rpc.open(active.sessionManager, channel);
+					return input.role === "rpc" ? rpc.open(active.sessionManager, channel) : rpc.print(active.sessionManager, channel);
 				},
 			});
 		},

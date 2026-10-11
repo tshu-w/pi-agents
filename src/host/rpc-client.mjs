@@ -66,8 +66,8 @@ export async function runHeadless({ pi, paths, args, mode, findRunning, warnIgno
     }
   }
 
-  /** Opens an RPC stream to Session `id` once its Pi is ready, while `live()` holds. */
-  async function connect(id, handlers, live) {
+  /** Opens a `role` stream to Session `id` once its Pi is ready, while `live()` holds. */
+  async function connect(id, handlers, live, role = 'rpc') {
     const socket = paths.session(id);
     const deadline = performance.now() + TIMEOUT_MS;
     for (;;) {
@@ -75,7 +75,7 @@ export async function runHeadless({ pi, paths, args, mode, findRunning, warnIgno
         const status = await request(socket, { action: 'status' });
         if (status.ready) {
           if (status.availabilityError) throw new Error(status.availabilityError);
-          return { status, stream: await openStream(socket, { action: 'stream', role: 'rpc' }, handlers) };
+          return { status, stream: await openStream(socket, { action: 'stream', role }, handlers) };
         }
       } catch (error) { if (!NOT_READY.includes(error.code)) throw error; }
       if (!live()) throw stopped();
@@ -106,8 +106,8 @@ export async function runHeadless({ pi, paths, args, mode, findRunning, warnIgno
     }
   }
 
-  /** Connects to the Session `args` choose. */
-  async function start(handlers) {
+  /** Opens a `role` stream to the Session `args` choose. */
+  async function start(handlers, role) {
     let running = await findRunning(), status;
     if (!running) {
       try { status = await host(hostArgs, process.cwd()); }
@@ -116,9 +116,9 @@ export async function runHeadless({ pi, paths, args, mode, findRunning, warnIgno
         if (error.code !== 'HOST_STOPPED' || !(running = await findRunning())) throw error;
       }
     }
-    if (!running) return connect(status.session.id, handlers, () => alive(status.pid));
+    if (!running) return connect(status.session.id, handlers, () => alive(status.pid), role);
     warnIgnored(hostArgs);
-    return connect(running.session.id, handlers, () => alive(running.pid));
+    return connect(running.session.id, handlers, () => alive(running.pid), role);
   }
 
   try {
@@ -147,56 +147,47 @@ async function print({ start, parsed, mode, dist }) {
   }
   const { initialMessage, initialImages } = buildInitialMessage({ parsed, stdinContent, ...files });
 
-  // Records in arrival order, for the prompts to wait on; records before the header wait for it.
-  const inbox = [], early = [];
-  let done = false, opened = false, wake;
-  const receive = value => {
-    if (value.type === 'extension_ui_request') return;
-    if (mode === 'json' && value.type !== 'response') write(value);
-    inbox.push(value);
-    wake?.();
-  };
+  const prompts = [...(initialMessage ? [{ message: initialMessage, images: initialImages }] : []), ...parsed.messages.map(message => ({ message }))];
+
+  // The host runs the prompts once the Session is idle, and sends the events of their turns.
+  let header, last, stopping, done = false, finish;
+  const finished = new Promise(resolve => { finish = resolve; });
   const { stream } = await start({
-    onMessage: value => opened ? receive(value) : early.push(value),
+    onMessage(value) {
+      if (value.start && mode === 'json' && header) write(header);
+      if (value.event) {
+        if (mode === 'json') write(value.event);
+        if (value.event.type === 'message_end') last = value.event.message;
+      }
+      if (value.end) finish(value);
+    },
     onClose() {
       if (done) return;
+      if (stopping !== undefined) process.exit(stopping);
       process.stderr.write('The Session stopped.\n');
       process.exit(1);
     },
-  });
-  if (mode === 'json' && stream.result.header) write(stream.result.header);
-  opened = true;
-  early.forEach(receive);
-  const next = async () => {
-    while (!inbox.length) await new Promise(resolve => { wake = resolve; });
-    return inbox.shift();
-  };
+  }, 'print');
+  header = stream.result.header;
 
-  const prompts = [...(initialMessage ? [{ message: initialMessage, images: initialImages }] : []), ...parsed.messages.map(message => ({ message }))];
-  let last;
-  for (const [i, prompt] of prompts.entries()) {
-    let response;
-    for (;;) {
-      stream.send({ id: `pd-${i}`, type: 'prompt', ...prompt });
-      do response = await next(); while (response.type !== 'response' || response.id !== `pd-${i}`);
-      if (response.success || !response.error.startsWith('Agent is already processing')) break;
-      // The Session works for another client; the prompt starts a turn of its own once that work is done.
-      while ((await next()).type !== 'agent_settled');
-    }
-    if (!response.success) throw new Error(response.error);
-    last = undefined;
-    if (response.data.disposition === 'handled') continue;
-    // The answer is the turn's last reply before another client's message, if one joins the turn.
-    let users = 0;
-    for (let value; (value = await next()).type !== 'agent_settled';) {
-      if (value.type !== 'message_end') continue;
-      if (value.message.role === 'user') users++;
-      else if (value.message.role === 'assistant' && users === 1) last = value.message;
-    }
+  // A signal withdraws the prompts or stops their turn, and exits with Pi's code; a second one exits at once.
+  for (const [signal, code] of Object.entries({ SIGINT: 130, SIGTERM: 143, SIGHUP: 129 })) {
+    process.on(signal, () => {
+      if (stopping !== undefined) process.exit(stopping);
+      stopping = code;
+      stream.send({ type: 'stop' });
+    });
   }
+  stream.send({ type: 'run', prompts });
+  const end = await finished;
   done = true;
   stream.close();
-  if (mode === 'text' && last) {
+  if (stopping !== undefined) {
+    process.exitCode = stopping;
+    return;
+  }
+  if (end.error) throw new Error(end.error);
+  if (mode === 'text' && last?.role === 'assistant') {
     if (last.stopReason === 'error' || last.stopReason === 'aborted') {
       process.stderr.write(`${last.errorMessage || `Request ${last.stopReason}`}\n`);
       process.exitCode = 1;
