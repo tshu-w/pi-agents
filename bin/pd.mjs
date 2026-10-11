@@ -6,6 +6,7 @@ import { accessSync, constants } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { styleText } from 'node:util';
 import { attach, settledHosts, startHost } from '../src/host/client.mjs';
 import { detachKey, detachMatcher } from '../src/host/keys.mjs';
 import { discoverRoots, findRoot } from '../src/roots/discovery.mjs';
@@ -17,7 +18,7 @@ const real = process.env.PATH.split(':').map(dir => join(dir, 'pi')).find(file =
   try { accessSync(file, constants.X_OK); return true; } catch { return false; }
 });
 if (!real) {
-  process.stderr.write('pd needs Pi: install it so that pi is on PATH.\n');
+  process.stderr.write(`${error('pd needs Pi: install it so that pi is on PATH.')}\n`);
   process.exit(1);
 }
 const args = process.argv.slice(2);
@@ -39,6 +40,10 @@ function runDirectly() {
   });
 }
 
+function error(text) {
+  return styleText('red', text, { stream: process.stderr });
+}
+
 function option(name, alias) {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--') return;
@@ -54,11 +59,11 @@ async function attachAndReport(socket) {
   const id = result.session?.id;
   if (result.reason === 'exited') process.exit(result.exitCode ?? 0);
   if (result.reason === 'closed') {
-    process.stderr.write(`The host stopped unexpectedly. See ${paths.hostLog}\n`);
+    process.stderr.write(`${error(`The host stopped unexpectedly. See ${paths.hostLog}`)}\n`);
     process.exit(1);
   }
   if (result.reason === 'takeover') process.stdout.write('Attached in another terminal.\n');
-  process.stdout.write(`Pi keeps running. To reattach, run pd attach ${id ?? '<session>'}\n`);
+  process.stdout.write(`${styleText('dim', 'Pi keeps running. To reattach:')} pd attach ${id ?? '<session>'}\n`);
   process.exit(0);
 }
 
@@ -89,7 +94,7 @@ async function recentSession() {
 
 async function attachCommand(query) {
   if (!query) {
-    process.stderr.write('Usage: pd attach <session>\n');
+    process.stderr.write(`${error('Usage: pd attach <session>')}\n`);
     process.exit(2);
   }
   const wanted = host => host.session && (host.session.id.startsWith(query) || host.session.name === query);
@@ -105,8 +110,8 @@ async function attachCommand(query) {
   const matches = hosted.length ? hosted.map(host => host.session) : roots;
   if (matches.length !== 1) {
     process.stderr.write(matches.length
-      ? `"${query}" matches several Sessions:\n${matches.map(match => `  ${match.id}  ${match.name ?? ''}`).join('\n')}\n`
-      : `No Session matches "${query}".\n`);
+      ? `${error(`"${query}" matches several Sessions:`)}\n${matches.map(match => `  ${match.id}  ${match.name ?? ''}`).join('\n')}\n`
+      : `${error(`No Session matches "${query}".`)}\n`);
     process.exit(1);
   }
   const [root] = roots;
@@ -131,7 +136,7 @@ else {
     // Pi already runs this Session, so options that would start it differently do not apply.
     const ignored = args.filter((arg, i) => !['--session', '--session-dir', '-c', '--continue'].includes(arg)
       && !arg.startsWith('--session=') && !['--session', '--session-dir'].includes(args[i - 1]));
-    if (ignored.length) process.stderr.write(`The Session is already running; attaching without applying: ${ignored.join(' ')}\n`);
+    if (ignored.length) process.stderr.write(`${styleText('yellow', `The Session is already running; attaching without applying: ${ignored.join(' ')}`, { stream: process.stderr })}\n`);
   }
   const socket = running?.socket ?? await startHost(paths, {
     pi: real, args, cwd: process.cwd(), cols: process.stdout.columns, rows: process.stdout.rows, waitForTerminal: true,

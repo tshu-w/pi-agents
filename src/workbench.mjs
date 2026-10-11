@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { styleText } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { alive, attach, listHosts, settledHosts, startHost } from './host/client.mjs';
 import { detachKey, detachMatcher } from './host/keys.mjs';
@@ -596,7 +597,7 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     themeSync.disableAutoSync();
     await terminal.drainInput(1000);
     ui.stop();
-    process.stdout.write(`${MAIN_SCREEN}Sessions keep running. To reopen, run pd agents\n`);
+    process.stdout.write(`${MAIN_SCREEN}${styleText('dim', 'Sessions keep running. To reopen:')} pd agents\n`);
     finish();
   }
 

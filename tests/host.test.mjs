@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 
 const require = createRequire(import.meta.url);
 const pty = require("@lydell/node-pty");
@@ -74,7 +75,7 @@ test("Pi keeps running in its host when another terminal takes over or the termi
 
 	const second = terminal(["attach", host.session.id.slice(0, 8)]);
 	assert.equal((await first.exited).exitCode, 0);
-	assert.match(first.output(), /Attached in another terminal\.\r?\nPi keeps running\. To reattach, run pd attach \S+/);
+	assert.match(stripVTControlCharacters(first.output()), /Attached in another terminal\.\r?\nPi keeps running\. To reattach: pd attach \S+/);
 	await until(() => second.text().includes("answer:hello"), "restored screen");
 
 	// An attached host outlives the idle limit.
@@ -86,7 +87,7 @@ test("Pi keeps running in its host when another terminal takes over or the termi
 	await until(() => second.text().includes("Auto-compact"), "settings dialog");
 	second.child.write("\x1a");
 	assert.equal((await second.exited).exitCode, 0);
-	assert.match(second.output(), /Pi keeps running\. To reattach, run pd attach \S+/);
+	assert.match(stripVTControlCharacters(second.output()), /Pi keeps running\. To reattach: pd attach \S+/);
 	await until(async () => (await listHosts(paths)).length === 0, "idle exit", 15000);
 });
 

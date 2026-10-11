@@ -74,7 +74,7 @@ then.
 Closing the window, pressing `Ctrl+Z` (the `pi-agents.detach` keybinding), or
 running `/detach` detaches. The Session keeps running, and the terminal prints:
 
-    Pi keeps running. To reattach, run pd attach <session>
+    Pi keeps running. To reattach: pd attach <session>
 
 A host disables suspend, since a suspended Pi would stay stopped; `Ctrl+Z`
 detaches in its place.
