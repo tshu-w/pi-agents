@@ -1,10 +1,12 @@
-# Pi Agents Workbench
+# Hosted Sessions
 
 ## 1. Overview
 
-The workbench shows the user's root Sessions in one terminal view. From it the
-user opens a Session, reads its latest result, or sends it a message. Sessions
-started with `pd` keep running after their terminal closes.
+`pd` runs each Pi Session in a host of its own, so the Session keeps running
+after its terminal closes, and terminals, scripts, and other programs can use
+it at once. The workbench, opened with `pd agents`, shows the user's root
+Sessions in one terminal view: from it the user opens a Session, reads its
+latest result, or sends it a message.
 
 Three kinds of process take part:
 

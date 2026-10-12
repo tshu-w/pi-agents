@@ -401,7 +401,7 @@ in Pi's editor.
 
 `pd agents` opens the workbench, which lists every root Session on this
 machine and lets the user open and message them. Sessions started with `pd`
-keep running after their terminal closes. See [WORKBENCH.md](WORKBENCH.md).
+keep running after their terminal closes. See [HOSTS.md](HOSTS.md).
 
 ## 8. Configuration
 
@@ -432,7 +432,7 @@ in its owner's process.
 
 A delivered message enters the recipient's current branch. An offline root
 Agent is started in a host, detached, with its saved working directory and
-model and the current configuration (WORKBENCH §4).
+model and the current configuration (HOSTS §4).
 If a root process cannot finish cleanup within a grace period on exit, it is
 forcibly terminated.
 Before shutting down an idle Session, another extension can emit

@@ -81,7 +81,7 @@ On [BrowseComp](https://arxiv.org/abs/2504.12516), async agents improved 7 of 8 
 
 - [SPEC.md](docs/SPEC.md): Agents, messages, and limits
 - [PROGRAM.md](docs/PROGRAM.md): Programs and their API
-- [WORKBENCH.md](docs/WORKBENCH.md): the workbench, hosts, and the daemon
+- [HOSTS.md](docs/HOSTS.md): hosted Sessions, the daemon, and the workbench
 
 ## License
 
