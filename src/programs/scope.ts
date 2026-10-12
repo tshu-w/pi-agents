@@ -32,6 +32,7 @@ export function programScope(
 		program: true,
 		background: options.background,
 		createdAt: new Date().toISOString(),
+		spent: { cost: 0, tokens: 0, unpriced: false },
 		agents,
 		cwd: () => ctx.cwd,
 		busy: () => true,

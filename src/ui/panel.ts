@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, TruncatedText } from "@earendil-works/pi-tui";
-import { label, nodes, onTreeChange, programLabel, programsOf, type AgentNode } from "../agents/registry.ts";
+import { label, nodes, onTreeChange, programLabel, programsOf, type AgentNode, type Spend } from "../agents/registry.ts";
 
 const WIDGET_KEY = "pi-agents";
 
@@ -14,9 +14,19 @@ function elapsed(since: number, now: number): string {
 	return minutes < 60 ? `${minutes}m ${seconds % 60}s` : `${Math.floor(minutes / 60)}h ${minutes % 60}m ${seconds % 60}s`;
 }
 
+/** `$2.10`, or the input and output tokens as Pi's footer shows them, `7.3M tok`, when a reply had no price. */
+function cost({ cost, tokens, unpriced }: Spend): string {
+	if (!unpriced) return `$${cost.toFixed(2)}`;
+	if (tokens < 1000) return `${tokens} tok`;
+	if (tokens < 10_000) return `${(tokens / 1000).toFixed(1)}k tok`;
+	if (tokens < 1_000_000) return `${Math.round(tokens / 1000)}k tok`;
+	return tokens < 10_000_000 ? `${(tokens / 1_000_000).toFixed(1)}M tok` : `${Math.round(tokens / 1_000_000)}M tok`;
+}
+
 /**
  * The task panel: the Agent's live owned Agents and running background Programs as a tree, in the
- * order they started, with their Programs' live Agents under them, and how long each has run. Empty when none.
+ * order they started, with their Programs' live Agents under them, and how long each has run and what
+ * it has cost. Empty when none.
  */
 export function panelLines(self: AgentNode, now = Date.now()): string[] {
 	const rows: Array<{ line: string; parent?: number; shown: boolean }> = [];
@@ -35,7 +45,8 @@ export function panelLines(self: AgentNode, now = Date.now()): string[] {
 			const index = rows.length;
 			if ("program" in child) {
 				const since = Date.parse(child.program.createdAt ?? "");
-				rows.push({ line: `${"  ".repeat(level)}${[programLabel(child.program), "running", ...(since ? [elapsed(since, now)] : [])].join("  ")}`, parent, shown: false });
+				const time = since ? [elapsed(since, now), ...(child.program.spent ? [cost(child.program.spent)] : [])] : [];
+				rows.push({ line: `${"  ".repeat(level)}${[programLabel(child.program), "running", ...time].join("  ")}`, parent, shown: false });
 				live += 1;
 				show(index);
 				visit(child.program, level + 1, index);
@@ -44,7 +55,7 @@ export function panelLines(self: AgentNode, now = Date.now()): string[] {
 			const { entry } = child;
 			const own = node.agents.counts(entry.id);
 			const pending = own?.pending ? [`${own.pending} pending`] : [];
-			const time = own?.since ? [elapsed(own.since, now)] : [];
+			const time = own?.since ? [elapsed(own.since, now), ...(own.spent ? [cost(own.spent)] : [])] : [];
 			rows.push({ line: `${"  ".repeat(level)}Agent ${[label(entry, ids), entry.state, ...time, ...pending].join("  ")}`, parent, shown: false });
 			if (entry.state !== "idle") {
 				live += 1;

@@ -355,10 +355,10 @@ asking for a reply:
 A panel above the editor shows the current Agent's live work:
 
     Tasks (<N> live, /tasks to hide)
-      Agent <name> (<id>)  <state>  <time>  <N> pending
-        Agent <name> (<id>)  <state>  <time>
-      Program <id>  running  <time>
-        Agent <name> (<id>)  <state>  <time>
+      Agent <name> (<id>)  <state>  <time>  <cost>  <N> pending
+        Agent <name> (<id>)  <state>  <time>  <cost>
+      Program <id>  running  <time>  <cost>
+        Agent <name> (<id>)  <state>  <time>  <cost>
       +<N> more
 
 The live work is the owned Agents that are not `idle`, and the running
@@ -366,7 +366,10 @@ background Programs with their Agents that are not `idle`. The rows list
 them as a tree in the order they started, each
 under its owner and each Program under its caller, with the owners needed to
 keep the tree. Rows that do not fit are counted in the last row. The time is
-how long the Agent's current turn or the Program has run.
+how long the Agent's current turn or the Program has run, and the cost what the
+replies in that turn have cost, or for a Program, those of all the Agents under
+it. When a reply has no price, the cost is the input and output tokens instead,
+like `7.3M tok`.
 
 The panel updates as states change, and its times each second. It is shown
 while it has a row.

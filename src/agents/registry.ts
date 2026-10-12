@@ -1,4 +1,5 @@
 /** The Agents loaded in this process, shared across trees: who sees whom, how targets resolve, and how messages are addressed. */
+import type { Usage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Agents } from "./agents.ts";
 import { TreeScheduler } from "./scheduler.ts";
@@ -22,6 +23,8 @@ export interface AgentNode {
 	background?: boolean;
 	/** When a Program started. */
 	createdAt?: string;
+	/** What the replies of a Program's Agents and the Agents under them have cost since it started. */
+	spent?: Spend;
 	name(): string | undefined;
 	cwd(): string;
 	busy(): boolean;
@@ -84,6 +87,26 @@ export function trackTreeWork(rootId: string): () => void {
 	return () => {
 		if (work.delete(token)) treeChanged();
 	};
+}
+
+/** What replies cost: dollars, input and output tokens, and whether a reply had no price. */
+export interface Spend {
+	cost: number;
+	tokens: number;
+	unpriced: boolean;
+}
+
+export function addSpend(spend: Spend, usage: Usage): void {
+	spend.cost += usage.cost.total;
+	spend.tokens += usage.input + usage.output;
+	if (usage.cost.total === 0 && usage.input + usage.output + usage.cacheRead + usage.cacheWrite > 0) spend.unpriced = true;
+}
+
+/** Adds a reply of an Agent owned by `ownerId` to the Programs above it. */
+export function addProgramSpend(ownerId: string, usage: Usage): void {
+	for (let node = shared.nodes.get(ownerId); node; node = node.ownerId === undefined ? undefined : shared.nodes.get(node.ownerId)) {
+		if (node.spent) addSpend(node.spent, usage);
+	}
 }
 
 /** The Programs a node runs, oldest first. */

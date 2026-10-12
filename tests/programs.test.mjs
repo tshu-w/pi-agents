@@ -236,7 +236,7 @@ test("a Program whose Agent does not stop reports the abandoned work as an error
 	await root.close();
 });
 
-test("a background Program keeps its caller's tree busy until it ends, and the user sees its Agents under it", async () => {
+test("a background Program keeps its caller's tree busy until it ends, and the user sees its Agents under it and what they cost", async () => {
 	const root = await startRoot(undefined, undefined, {}, {}, [fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))]);
 	const { nodes, treeIdle, panelLines, ownedEntries } = globalThis.piAgentsTree;
 	const self = nodes.get(root.session.sessionManager.getSessionId());
@@ -245,11 +245,13 @@ test("a background Program keeps its caller's tree busy until it ends, and the u
 		while (true) await tools.read({ path: 'note.txt' });
 	` }));
 	await until(() => root.state.busy === 1, "inner Agent busy");
-	assert.deepEqual(panelLines(self).slice(1).map((line) => line.replace(/\(\S+\)/, "(id)").replace(/  \d+s$/, "  <time>")), [`  Program ${id}  running  <time>`, "    Agent inner (id)  running  <time>"]);
+	assert.deepEqual(panelLines(self).slice(1).map((line) => line.replace(/\(\S+\)/, "(id)").replace(/  \d+s  /, "  <time>  ")), [`  Program ${id}  running  <time>  $0.00`, "    Agent inner (id)  running  <time>  $0.00"]);
 	assert.deepEqual(ownedEntries(self).map((entry) => entry.name), ["inner"]);
 	// After its Agent answers, the Program only calls tools, and the tree stays busy.
 	root.state.hold.open();
 	await until(() => panelLines(self).length === 2, "inner Agent idle");
+	// The faux model has no price; the ended turn's reply still counts toward the Program.
+	assert.match(panelLines(self)[1], /  [1-9][\d.]*k? tok$/);
 	assert.equal(treeIdle(self.rootId), false);
 	await root.text({ action: "stop", target: id });
 	await root.session.waitForIdle();

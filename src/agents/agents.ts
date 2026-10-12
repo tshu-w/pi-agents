@@ -18,6 +18,8 @@ import { fileURLToPath } from "node:url";
 import {
 	customMessage,
 	deliver,
+	addProgramSpend,
+	addSpend,
 	label,
 	messageText,
 	MESSAGE_TYPE,
@@ -32,6 +34,7 @@ import {
 	type AgentState,
 	type Delivery,
 	type Entry,
+	type Spend,
 	type TreeMetadata,
 } from "./registry.ts";
 
@@ -210,6 +213,8 @@ interface Turn {
 	slot: boolean;
 	/** When the turn got its slot, in milliseconds. */
 	since?: number;
+	/** What the turn's replies have cost. */
+	spent: Spend;
 	finished: boolean;
 	done: Deferred;
 }
@@ -289,11 +294,11 @@ export class Agents {
 		return [...this.agents.values()].some((agent) => agent.turn !== undefined || agent.queue.length > 0);
 	}
 
-	/** An owned Agent's state, its inputs pending behind its current or next turn, and when its turn got a slot. */
-	counts(id: string): { state: AgentState; pending: number; since?: number } | undefined {
+	/** An owned Agent's state, its inputs pending behind its current or next turn, when its turn got a slot, and what the turn has cost. */
+	counts(id: string): { state: AgentState; pending: number; since?: number; spent?: Spend } | undefined {
 		const agent = this.agents.get(id);
 		if (!agent) return undefined;
-		return { state: this.state(agent), pending: agent.queue.length, since: agent.turn?.since };
+		return { state: this.state(agent), pending: agent.queue.length, since: agent.turn?.since, spent: agent.turn?.spent };
 	}
 
 	private state(agent: Owned): AgentState {
@@ -608,7 +613,7 @@ export class Agents {
 		if (agent.turn || this.closing) return;
 		const head = agent.queue.shift();
 		if (!head) return;
-		const turn: Turn = { inputs: [head], pending: [], abort: new AbortController(), started: false, slot: false, finished: false, done: deferred() };
+		const turn: Turn = { inputs: [head], pending: [], abort: new AbortController(), started: false, slot: false, spent: { cost: 0, tokens: 0, unpriced: false }, finished: false, done: deferred() };
 		agent.turn = turn;
 		void this.runTurn(agent, turn);
 	}
@@ -880,6 +885,11 @@ export class Agents {
 			finally { session.dispose(); }
 			throw error;
 		}
+		session.subscribe((event) => {
+			if (event.type !== "message_end" || event.message.role !== "assistant") return;
+			if (agent.turn) addSpend(agent.turn.spent, event.message.usage);
+			addProgramSpend(this.self.id, event.message.usage);
+		});
 		return session;
 	}
 }
