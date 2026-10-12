@@ -13,6 +13,8 @@ export interface ReportHooks {
 	treeIdle(): boolean;
 	/** The tree's running owned Agents and background Programs. */
 	liveWork(): number;
+	/** Whether `/agents` is open, whose list and viewer Pi counts as prompts though they ask nothing. */
+	browsing(): boolean;
 	/** The host this Pi runs in, if any. */
 	host?: { socket: string; attached(): boolean; onChange(listener: () => void): void };
 }
@@ -141,7 +143,11 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 	pi.on("tool_execution_end", (event) => {
 		if (tools.delete(event.toolCallId)) changed();
 	});
-	pi.on("ui_prompt_start", () => { dialog = true; changed(); });
+	pi.on("ui_prompt_start", () => {
+		if (hooks.browsing()) return;
+		dialog = true;
+		changed();
+	});
 	pi.on("ui_prompt_end", () => { dialog = false; changed(); });
 	pi.on("agent_settled", (event) => {
 		if (!ctx) return;

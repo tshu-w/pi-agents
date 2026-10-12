@@ -114,7 +114,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	const idle = () => node === undefined || treeIdle(node.rootId);
 	const host = hostExtension(pi, { treeIdle: idle, rpcClients: () => roots.rpcClients() });
 	installRpcPatches(AgentSession, ExtensionRunner, host);
-	createReporter(pi, { treeIdle: idle, liveWork: () => node ? liveWork(node) : 0, host });
+	let browsing = false;
+	createReporter(pi, { treeIdle: idle, liveWork: () => node ? liveWork(node) : 0, browsing: () => browsing, host });
 	// Event bus handlers run synchronously, so an extension that emits a query object reads the answer right after emit.
 	pi.events.on("busy:query", (query) => {
 		if (node && !treeIdle(node.rootId)) (query as { busy: boolean }).busy = true;
@@ -210,7 +211,13 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	pi.registerCommand("agents", {
 		description: "Open an owned Agent to watch and talk to it",
 		handler: async (_args, current) => {
-			if (node) await openAgentViewer(current, requireNode(current), pi.getSettings().editorPaddingX ?? 0);
+			if (!node) return;
+			browsing = true;
+			try {
+				await openAgentViewer(current, requireNode(current), pi.getSettings().editorPaddingX ?? 0);
+			} finally {
+				browsing = false;
+			}
 		},
 	});
 }
