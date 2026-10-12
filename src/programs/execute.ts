@@ -37,11 +37,12 @@ export interface ProgramRunOptions {
 	prepare?: (code: string) => string;
 	onUpdate?: AgentToolUpdateCallback<unknown>;
 	/**
-	 * Whether the Program runs after its tool call returns. Its calls then get their own IDs,
-	 * since Pi records nested calls only until the calling tool call returns.
+	 * Whether the Program runs outside a tool call: after its tool call returns, or from `/program`.
+	 * Its calls then get their own IDs, since Pi records nested calls only until the calling tool
+	 * call returns.
 	 */
-	background?: boolean;
-	/** Stops a background Program; `ctx.abort()` of its calls' hooks and tools calls it. */
+	detached?: boolean;
+	/** Stops a detached Program; `ctx.abort()` of its calls' hooks and tools calls it. */
 	abort?: () => void;
 	appendEntry(customType: string, data: unknown): void;
 	getToolNamespace(name: string): { name: string } | undefined;
@@ -106,7 +107,7 @@ export async function executeProgram(
 		tools: { get: () => ctx.tools.filter((tool) => tool.name !== PROGRAM_TOOL_NAME) },
 		executeTool: {
 			value: (name: string, args: unknown, callOptions: { signal?: AbortSignal } = {}) => {
-				if (!options.background) return ctx.executeTool(name, args, callOptions);
+				if (!options.detached) return ctx.executeTool(name, args, callOptions);
 				addFile(name, args);
 				const detachedOptions = { ...callOptions, detachedCallerId: `${toolCallId}:${++detachedCalls}`, detachedAbort: () => options.abort?.() } satisfies DetachedCallOptions;
 				return ctx.executeTool(name, args, detachedOptions as never);

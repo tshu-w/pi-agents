@@ -107,6 +107,17 @@ test("a foreground Program calls the caller's tools except program and keeps sto
 	await root.close();
 });
 
+test("/program runs a saved script before the Session has a reply, and adds the run to the context without a turn", async () => {
+	const root = await startRoot();
+	writeFileSync(join(root.cwd, "run.js"), "return [await tools.read({ path: 'note.txt' }), args, await agent().send('hi')]");
+	await root.session.prompt("/program run.js hello  world");
+	const message = root.session.messages.at(-1);
+	assert.equal(message.customType, "pi-agents-program-run");
+	assert.match(textOf(message.content), /^Ran `\/program run.js hello  world`\n+Script completed\n[\s\S]*\["note","hello  world","answer:hi"\]$/);
+	assert.equal(root.session.messages.some((entry) => entry.role === "assistant"), false);
+	await root.close();
+});
+
 test("a background Program runs on after run returns, notifies its caller, and wait returns its result once", async () => {
 	const root = await startRoot();
 	const id = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' }); return 'done'" }));

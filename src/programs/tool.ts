@@ -1,12 +1,17 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
+import { Box } from "@earendil-works/pi-tui";
+import { writeSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import * as path from "node:path";
 import { Type } from "typebox";
 import { SUBMIT_RESULT_TOOL_NAME, type Limits } from "../agents/agents.ts";
-import { nodes, type AgentNode } from "../agents/registry.ts";
+import { nodes, trackTreeWork, type AgentNode } from "../agents/registry.ts";
 import { rejectFields } from "../params.ts";
 import { programScope } from "./scope.ts";
 import type { PiCodemode } from "./codemode.ts";
 import { executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./execute.ts";
+import { commandSession, runDetached } from "./host-patches.ts";
 import { programDescription, programLoadout, programRenderers } from "./loadout.ts";
 import { randomUUID } from "node:crypto";
 import { CLEANUP_ERROR, programListLine, Programs, renderProgramWait } from "./programs.ts";
@@ -17,6 +22,21 @@ const PROGRAM_DESCRIPTION = `Run JavaScript that composes tool calls and Agents;
 Program code is the body of an async function. It calls the caller's tools through \`tools.*\`, which excludes \`program\`, and creates Agents through \`agent()\`. These Agents belong to the Program, are isolated from other Agents, and go offline when it ends.
 
 \`program\` replaces the \`codemode\` tool; wherever \`codemode\` is mentioned, use \`program\`.`;
+
+const PROGRAM_MESSAGE = "pi-agents-program-run";
+const SCRIPT_HEADER = /^Script (completed|failed)\nWall time [\d.]+ seconds\nOutput:\n$/;
+
+interface ProgramCall {
+	path: string;
+	args?: string;
+	code: string;
+}
+
+interface ProgramMessageDetails {
+	call: ProgramCall;
+	calls?: unknown[];
+	isError: boolean;
+}
 
 const AGENT_API = `Agent API:
 \`\`\`ts
@@ -63,6 +83,8 @@ export function registerProgramTools(
 		programs: () => Programs | undefined;
 	},
 ): void {
+	const renderers = programRenderers(piCodemode);
+
 	/** Runs a Program whose Agents go offline when it ends. */
 	const runProgram = async (
 		id: string,
@@ -71,15 +93,16 @@ export function registerProgramTools(
 		code: string,
 		signal: AbortSignal,
 		current: Parameters<typeof executeProgram>[3],
-		options: Pick<ProgramRunOptions, "timeout" | "onUpdate" | "background" | "abort">,
+		{ background, args, ...options }: Pick<ProgramRunOptions, "timeout" | "onUpdate" | "detached" | "abort"> & { background?: boolean; args?: string },
 	) => {
-		const scope = programScope(id, caller, pi, current, { agentDir, limits: settings, extensions: settings.extensions, background: options.background === true });
+		const scope = programScope(id, caller, pi, current, { agentDir, limits: settings, extensions: settings.extensions, background: background === true });
 		let run: Awaited<ReturnType<typeof executeProgram>> | undefined;
 		try {
 			run = await executeProgram(toolCallId, code, signal, current, {
 				...options,
 				globals: agentGlobals(scope.host),
-				prepare: withAgentPrefix,
+				// On the first line, so line numbers in errors match the script as written.
+				prepare: (source) => withAgentPrefix(args === undefined ? source : `const args = ${JSON.stringify(args)};${source}`),
 				appendEntry: (customType, data) => pi.appendEntry(customType, data),
 				getToolNamespace: (name) => pi.getAllTools().find((tool) => tool.name === name)?.namespace,
 			});
@@ -121,7 +144,7 @@ export function registerProgramTools(
 		exposure: "model-only",
 		defaultActive: false,
 		prepareLoadout: programLoadout(pi, piCodemode, PROGRAM_DESCRIPTION, AGENT_API),
-		...programRenderers(piCodemode),
+		...renderers,
 		description: programDescription(piCodemode, PROGRAM_DESCRIPTION, AGENT_API),
 		promptSnippet: "Run JavaScript that composes tool calls and Agents",
 		promptGuidelines: [
@@ -149,7 +172,7 @@ export function registerProgramTools(
 					if (!params.code?.trim()) throw new Error("run requires code");
 					const code = params.code;
 					if (params.background) {
-						const record = programs.start((id, programSignal, abort) => runProgram(id, self, toolCallId, code, programSignal, current, { timeout: params.timeout, background: true, abort }));
+						const record = programs.start((id, programSignal, abort) => runProgram(id, self, toolCallId, code, programSignal, current, { timeout: params.timeout, background: true, detached: true, abort }));
 						return { content: [{ type: "text", text: `Program ${programs.label(record)} started.` }], details: { id: record.id } };
 					}
 					const { result } = await self.agents.whileSuspended(() => runProgram(randomUUID(), self, toolCallId, code, signal ?? new AbortController().signal, current, {
@@ -195,4 +218,126 @@ export function registerProgramTools(
 			}
 		},
 	});
+
+	/** A run as Pi shows a `run` call: the script, then its calls and output. */
+	const renderRun = (call: ProgramCall, result: { content: unknown[]; details?: unknown }, isPartial: boolean, isError: boolean, expanded: boolean, outputPad: number, theme: Theme) => {
+		const component = new Box(outputPad, 1, (text) => theme.bg(isPartial ? "toolPendingBg" : isError ? "toolErrorBg" : "toolSuccessBg", text));
+		const context = { args: call, state: {}, executionStarted: true, expanded, isError, showImages: false, isPartial } as never;
+		component.addChild(renderers.renderCall!(call, theme, context));
+		component.addChild(renderers.renderResult!(result as never, { expanded, isPartial }, theme, context));
+		return component;
+	};
+
+	/** Runs `/program <path> [args]` in the foreground: shown above the editor while it runs, and added to the context like a `!` command. */
+	const runCommand = async (text: string, current: ExtensionCommandContext) => {
+		const self = requireNode(current);
+		const session = commandSession()!;
+		const [, file, args = ""] = /^(\S+)\s*([\s\S]*)$/.exec(text.trim()) ?? [];
+		if (!file) throw new Error("Usage: /program <path> [args]");
+		const code = await readFile(path.resolve(current.cwd, file), "utf8");
+		const toolCallId = `program-command-${randomUUID()}`;
+		const call: ProgramCall = { path: file, ...(args ? { args } : {}), code };
+		const controller = new AbortController();
+		// Pi's Esc cancels running `!` commands while no reply is streaming; it stops the Program likewise.
+		const stop = { abort: () => controller.abort(new Error("Program stopped")) };
+		session._bashAbortControllers.add(stop);
+		const release = trackTreeWork(self.rootId);
+		const widget = `${PROGRAM_MESSAGE}:${toolCallId}`;
+		const shown = current.mode === "tui";
+		let partial: { content: unknown[]; details?: unknown; isError?: boolean } = { content: [] };
+		let ended = false;
+		let tui: { requestRender(): void } | undefined;
+		if (shown) {
+			current.ui.setWidget(widget, (ui, theme) => {
+				tui = ui;
+				const outputPad = pi.getSettings().outputPad === 0 ? 0 : 1;
+				return { render: (width: number) => renderRun(call, partial, !ended, partial.isError === true, current.ui.getToolsExpanded(), outputPad, theme).render(width), invalidate() {} };
+			});
+		}
+		let run: Awaited<ReturnType<typeof runProgram>>;
+		try {
+			// Hooks see the run as a `run` call, so MCP waits for the servers the script names.
+			const blocked = await runDetached<{ block?: boolean; reason?: string } | undefined>(session, controller.signal, stop.abort, () => session._beforeToolCall({ toolCall: { name: PROGRAM_TOOL_NAME, id: toolCallId }, args: { action: "run", code } }));
+			if (blocked?.block) throw new Error(blocked.reason || "Tool execution was blocked");
+			const ctx = session._extensionRunner.createToolContext(toolCallId, controller.signal);
+			run = await runProgram(randomUUID(), self, toolCallId, code, controller.signal, ctx, {
+				detached: true,
+				abort: stop.abort,
+				args,
+				onUpdate: (partialResult) => {
+					partial = partialResult;
+					tui?.requestRender();
+				},
+			});
+		} catch (error) {
+			if (shown) current.ui.setWidget(widget, undefined);
+			throw error;
+		} finally {
+			session._bashAbortControllers.delete(stop);
+			release();
+		}
+		const { result } = run;
+		const details: ProgramMessageDetails = { call, calls: (result.details as { calls?: unknown[] } | undefined)?.calls, isError: result.isError === true };
+		if (shown) {
+			// During a reply, the message comes after the reply; until then the widget shows the result.
+			partial = result;
+			ended = true;
+			tui?.requestRender();
+			const unsubscribe = session.subscribe((event: { type: string; message?: { details?: unknown } }) => {
+				if (event.type !== "message_start" || event.message?.details !== details) return;
+				unsubscribe();
+				current.ui.setWidget(widget, undefined);
+			});
+		}
+		const send = () => pi.sendMessage({ customType: PROGRAM_MESSAGE, content: [{ type: "text", text: `Ran \`/program ${text.trim()}\`\n` }, ...result.content], display: true, details }, { triggerTurn: false });
+		// Like a `!` command that ends during a reply, the run joins the context once the reply has ended.
+		if (session.isStreaming) {
+			const unsubscribe = session.subscribe((event: { type: string }) => {
+				if (event.type !== "agent_settled") return;
+				unsubscribe();
+				send();
+			});
+		} else send();
+		if (current.mode !== "print") return;
+		const [first, ...rest] = result.content;
+		const output = first?.type === "text" && SCRIPT_HEADER.test(first.text) ? rest : result.content;
+		const body = output.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+		if (result.isError) {
+			process.stderr.write(`${body}\n`);
+			process.exitCode = 1;
+		} else await writeStdout(`${body}\n`);
+	};
+
+	pi.registerCommand(PROGRAM_TOOL_NAME, {
+		description: "Run the Program script in a file, with the text after the path as `args`",
+		handler: async (text, current) => {
+			try {
+				await runCommand(text, current);
+			} catch (error) {
+				// Pi reports the error; `pi -p` also exits with status 1.
+				if (current.mode === "print") process.exitCode = 1;
+				throw error;
+			}
+		},
+	});
+
+	pi.registerMessageRenderer<ProgramMessageDetails>(PROGRAM_MESSAGE, (message, { expanded, outputPad }, theme) => {
+		const { details } = message;
+		if (!details) return undefined;
+		const content = (message.content as unknown[]).slice(1);
+		return renderRun(details.call, { content, details: { calls: details.calls } }, false, details.isError, expanded, outputPad, theme);
+	});
+}
+
+/** Writes all of `text` to stdout, which print mode sends to stderr and Pi makes non-blocking. */
+async function writeStdout(text: string): Promise<void> {
+	let rest = Buffer.from(text);
+	while (rest.length > 0) {
+		try {
+			rest = rest.subarray(writeSync(1, rest));
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EAGAIN") throw error;
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+	}
 }

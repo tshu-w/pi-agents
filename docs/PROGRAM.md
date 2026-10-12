@@ -278,9 +278,15 @@ Program <id> <outcome>.
 
 The task panel (SPEC §7) lists running background Programs.
 
+`/program <path> [args]` runs the script in a file as a foreground Program of
+the current Agent, with the text after the path as the global `args`. Esc
+stops it. Like a `!` command, it and its result join the context without
+starting a turn. With `pi -p`, the result is printed, and Pi exits with
+status 1 if the run fails.
+
 ## 8. Configuration
 
-`program` is inactive by default, like `codemode`; enable it with `"defaultTools": ["+program"]` or `--tools`.
+`program` is inactive by default, like `codemode`; enable it with `"defaultTools": ["+program"]` or `--tools`. `/program` does not need it.
 MCP treats `program` as `codemode`: it activates `program` when its servers need a script tool and neither is active, unless `autoEnableCodemode` is false, and a Program waits for the MCP servers its code names.
 When both `program` and `codemode` are active, Pi warns once per Session, since they do a similar job.
 `codemode.mode` decides how the tool list is presented, as for `codemode`.

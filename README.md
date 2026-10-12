@@ -51,6 +51,7 @@ Ask Pi in plain words; it starts Agents and Programs when the work calls for the
 | Command | Does |
 |---|---|
 | `/agents` | Opens an Agent in the tree to watch and talk to it |
+| `/program <path> [args]` | Runs a saved Program script, with `args` as its input |
 | `/tasks` | Hides or shows the task panel |
 | `Ctrl+Z`, `/detach` | Leaves a Session running and returns to the shell |
 | `pd agents` | Opens the workbench |
