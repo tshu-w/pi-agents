@@ -56,8 +56,8 @@ load the extension, but run outside hosts and end with their terminal.
 - `--no-session` starts and package commands (`pd install`, `pd update`, ...)
   run Pi directly.
 
-A host inherits the environment of the process that asked for it, because Pi
-reads terminal features from the environment once, at startup.
+A host keeps the options and environment of the process that started it, as
+Pi reads them only at startup.
 
 A Session running outside a host still appears in the workbench, but can be
 attached only after it exits.
