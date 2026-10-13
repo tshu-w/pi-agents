@@ -19,7 +19,7 @@ const model = fileURLToPath(new URL("./fixtures/model.ts", import.meta.url));
 const extension = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 const dialog = fileURLToPath(new URL("./fixtures/dialog-extension.mjs", import.meta.url));
 writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: [model, extension, dialog], defaultProvider: "agents-test", defaultModel: "fake", quietStartup: true }));
-// Pi in the host runs 100 times faster, so its 5 minute idle limit takes 3 seconds.
+// Pi in the host runs 100 times faster, so its 10 minute idle limit takes 6 seconds.
 const clock = join(home, "clock.mjs");
 writeFileSync(clock, `if (process.env.PI_AGENTS_HOST) {
   const now = Date.now, start = now();
@@ -82,7 +82,7 @@ test("Pi keeps running in its host when another terminal takes over or the termi
 	await until(() => second.text().includes("answer:hello"), "restored screen");
 
 	// An attached host outlives the idle limit.
-	await delay(4000);
+	await delay(7000);
 	assert.deepEqual((await listHosts(paths)).map((entry) => entry.pid), [host.pid]);
 
 	// The detach key works while a dialog has the keyboard.
@@ -311,7 +311,7 @@ test("RPC clients share a Session, dialogs wait only for an attached terminal, a
 
 	// A host with an RPC client outlives the idle limit.
 	const [host] = await listHosts(paths);
-	await delay(4000);
+	await delay(7000);
 	assert.deepEqual((await listHosts(paths)).map((entry) => entry.pid), [host.pid]);
 
 	const { messages } = (await first.call({ type: "get_fork_messages" })).data;

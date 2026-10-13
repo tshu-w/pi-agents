@@ -3,7 +3,7 @@ import net from "node:net";
 import { treeMetadata } from "../agents/registry.ts";
 import { FRAME, frame, json, readFrames } from "./frames.mjs";
 
-const IDLE_EXIT_MS = 5 * 60_000;
+const IDLE_EXIT_MS = 10 * 60_000;
 
 // Only the host's own child runs in it; children of Pi inherit the variables but have another parent.
 // They stay in the environment so a Pi that replaces itself with execve finds its host again.

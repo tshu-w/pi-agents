@@ -88,7 +88,7 @@ running `/detach` detaches. The Session keeps running, and the terminal prints:
 
 A host disables Pi's suspend.
 
-A detached Session exits after 5 minutes with no live work in its tree and no
+A detached Session exits after 10 minutes with no live work in its tree and no
 `pd --mode rpc` connected. A message to a Session that is not running starts it
 in a host, detached.
 
