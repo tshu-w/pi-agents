@@ -382,6 +382,7 @@ are listed above the editor, below the user's queued messages, until the
 Session takes them in:
 
     Steering: [<sender>] <body>
+    Write: [<sender>] <body>
     Follow-up: [<sender>] <body>
 
 ### Agent viewer

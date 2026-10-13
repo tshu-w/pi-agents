@@ -4,7 +4,7 @@ import { MESSAGE_TAG, MESSAGE_TYPE } from "../agents/registry.ts";
 
 const WIDGET_KEY = "pi-agents-queue";
 
-type Queued = { role: string; customType?: string; content?: unknown };
+type Queued = { role: string; customType?: string; content?: unknown; details?: { delivery?: string } };
 
 /** One line for an Agent message: its sender and body. */
 function summary(content: unknown): string {
@@ -18,7 +18,8 @@ export function queuedLines(agent: AgentSession["agent"]): string[] {
 	const queues = agent as unknown as Record<"steeringQueue" | "followUpQueue", { messages: Queued[] }>;
 	const lines = (label: string, messages: Queued[]) => messages
 		.filter((message) => message.role === "custom" && message.customType === MESSAGE_TYPE)
-		.map((message) => `${label}: ${summary(message.content)}`);
+		// A write waits in the steering queue but asks for nothing, so it is labeled apart from a steer.
+		.map((message) => `${message.details?.delivery === "write" ? "Write" : label}: ${summary(message.content)}`);
 	return [...lines("Steering", queues.steeringQueue.messages), ...lines("Follow-up", queues.followUpQueue.messages)];
 }
 
