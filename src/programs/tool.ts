@@ -5,9 +5,10 @@ import { writeSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import { Type } from "typebox";
-import { SUBMIT_RESULT_TOOL_NAME, type Limits } from "../agents/agents.ts";
+import { steerQueued, SUBMIT_RESULT_TOOL_NAME, type Limits } from "../agents/agents.ts";
 import { nodes, trackTreeWork, type AgentNode } from "../agents/registry.ts";
 import { rejectFields } from "../params.ts";
+import { agentSession } from "../roots/rpc.ts";
 import { programScope } from "./scope.ts";
 import type { PiCodemode } from "./codemode.ts";
 import { executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./execute.ts";
@@ -191,11 +192,12 @@ export function registerProgramTools(
 					if (timeout < 10 || timeout > 3600) throw new Error("wait timeout must be between 10 and 3600 seconds");
 					const selected = programs.select(targets);
 					onUpdate?.({ content: [], details: undefined });
-					const waitFor = () => programs!.wait(selected, timeout, signal);
+					const session = agentSession(current.sessionManager);
+					const waitFor = () => programs!.wait(selected, timeout, signal, () => steerQueued(session?.agent));
 					const outcome = programs.running(selected) ? await self.agents.whileSuspended(waitFor, signal, true) : await waitFor();
 					const rendered = renderProgramWait(outcome, programs.ids());
 					programs.markReturned(rendered.returned);
-					return { content: rendered.content, details: { running: outcome.running.map((record) => record.id) } };
+					return { content: rendered.content, details: { running: outcome.running.map((record) => record.id), ...(outcome.interrupted && { interrupted: true }) } };
 				}
 				case "list": {
 					rejectFields(params, "list", ["code", "background", "timeout", "target"]);

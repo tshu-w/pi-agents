@@ -45,7 +45,8 @@ A Program is `running` until it ends in one of three ways:
 - `stop` stops a running Program.
 
 When a background Program ends and its caller is not waiting for it, the
-caller gets a notification, as in SPEC §5.
+caller gets a notification, as in SPEC §5. A steer input ends `wait` early,
+as in SPEC §5.
 
 ## 3. Program API
 
@@ -196,6 +197,8 @@ timeout:
 
 Still running: <id>, ...
 ```
+
+When a steer input ended the wait, the line of SPEC §6 follows.
 
 A single completed result, with nothing running, is returned alone. When
 there are no results or running Programs:

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { deferred, settlesBy, waitForChange, type Deferred } from "../agents/agents.ts";
+import { deferred, settlesBy, STEER_POLL_MS, WAIT_INTERRUPTED, waitForChange, type Deferred } from "../agents/agents.ts";
 import { shortId, trackTreeWork } from "../agents/registry.ts";
 import { boundBlocks, boundText } from "../output.ts";
 import type { ProgramFiles, ProgramOutcome, ProgramRunResult } from "./execute.ts";
@@ -41,6 +41,8 @@ interface Running {
 export interface ProgramWaitOutcome {
 	results: ProgramRecord[];
 	running: ProgramRecord[];
+	/** A steer ended the wait. */
+	interrupted?: boolean;
 }
 
 function ended(record: ProgramRecord): boolean {
@@ -157,22 +159,28 @@ export class Programs {
 		return programs.some(({ record }) => !ended(record));
 	}
 
-	async wait(unique: Running[], timeoutSeconds: number, signal?: AbortSignal): Promise<ProgramWaitOutcome> {
+	async wait(unique: Running[], timeoutSeconds: number, signal?: AbortSignal, steered?: () => boolean): Promise<ProgramWaitOutcome> {
 		for (const program of unique) program.waiters += 1;
 		let returned = false;
+		let interrupted = false;
 		try {
 			const deadline = Date.now() + timeoutSeconds * 1000;
 			while (unique.some(({ record }) => !ended(record))) {
 				const remaining = deadline - Date.now();
 				if (remaining <= 0) break;
+				if (steered?.()) {
+					interrupted = true;
+					break;
+				}
 				signal?.throwIfAborted();
-				await waitForChange(this.change.promise, remaining, signal);
+				await waitForChange(this.change.promise, steered ? Math.min(remaining, STEER_POLL_MS) : remaining, signal);
 			}
 			signal?.throwIfAborted();
 			returned = true;
 			return {
 				results: unique.filter(({ record }) => ended(record)).map(({ record }) => record),
 				running: unique.filter(({ record }) => !ended(record)).map(({ record }) => record),
+				...(interrupted && { interrupted }),
 			};
 		} finally {
 			for (const program of unique) {
@@ -261,8 +269,8 @@ function resultBlock(record: ProgramRecord, ids: string[]): string {
 }
 
 /** Renders wait results; returns the content and the results the caller has now received. */
-export function renderProgramWait({ results, running }: ProgramWaitOutcome, ids: string[]): { content: Item[]; returned: ProgramRecord[]; isError?: boolean } {
-	const runningLine = running.length > 0 ? `Still running: ${running.map((record) => shortId(record.id, ids)).join(", ")}` : "";
+export function renderProgramWait({ results, running, interrupted }: ProgramWaitOutcome, ids: string[]): { content: Item[]; returned: ProgramRecord[]; isError?: boolean } {
+	const runningLine = running.length > 0 ? `Still running: ${running.map((record) => shortId(record.id, ids)).join(", ")}${interrupted ? `\n${WAIT_INTERRUPTED}` : ""}` : "";
 	if (results.length === 0) return { content: [{ type: "text", text: runningLine || "No results." }], returned: [] };
 	const images = (shown: ProgramRecord[]) => shown.flatMap((record) => (record.content ?? []).filter((item) => item.type === "image"));
 	const only = results[0]!;

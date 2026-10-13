@@ -138,6 +138,19 @@ export function takeQueued(agent: AgentSession["agent"]) {
 	return [...steering, ...followUps].filter(ours);
 }
 
+/** Whether a steer, which this turn must take in before its next model call, waits in the agent's queue; a write does not count. */
+export function steerQueued(agent: AgentSession["agent"] | undefined): boolean {
+	if (!agent) return false;
+	const queue = (agent as unknown as { steeringQueue: { messages: QueuedMessage[] } }).steeringQueue.messages;
+	return queue.some((message) => !(message.role === "custom" && message.customType === MESSAGE_TYPE
+		&& (message as { details?: { delivery?: string } }).details?.delivery === "write"));
+}
+
+// Pi does not report steers queued by extensions, so a wait checks the queue this often.
+export const STEER_POLL_MS = 250;
+
+export const WAIT_INTERRUPTED = "Stopped waiting for a new message. Wait again to keep waiting.";
+
 export interface Deferred {
 	promise: Promise<void>;
 	resolve(): void;
@@ -253,6 +266,8 @@ export interface WaitResult {
 export interface WaitOutcome {
 	results: WaitResult[];
 	pending: AgentRecord[];
+	/** A steer ended the wait. */
+	interrupted?: boolean;
 }
 
 /** The Agents owned by one loaded Agent. */
@@ -433,7 +448,7 @@ export class Agents {
 		return { queued: this.add(agent, input, delivery) };
 	}
 
-	async wait(targets: Owned[] | undefined, history: number, timeoutSeconds: number, signal?: AbortSignal): Promise<WaitOutcome> {
+	async wait(targets: Owned[] | undefined, history: number, timeoutSeconds: number, signal?: AbortSignal, steered?: () => boolean): Promise<WaitOutcome> {
 		const selected = targets ?? [...this.agents.values()].filter((agent) =>
 			this.pending(agent) || agent.record.inputs.some((input) => ended(input) && !input.read));
 		const unique = [...new Set(selected)];
@@ -445,13 +460,18 @@ export class Agents {
 		const suspended = blocking && this.self.ownerId !== undefined && scheduler.suspend(this.self.rootId, this.self.id);
 		if (blocking) this.markWaiting(1);
 		let returned = false;
+		let interrupted = false;
 		try {
 			const deadline = Date.now() + timeoutSeconds * 1000;
 			while (unique.some((agent) => this.pending(agent))) {
 				const remaining = deadline - Date.now();
 				if (remaining <= 0) break;
+				if (steered?.()) {
+					interrupted = true;
+					break;
+				}
 				signal?.throwIfAborted();
-				await waitForChange(this.change.promise, remaining, signal);
+				await waitForChange(this.change.promise, steered ? Math.min(remaining, STEER_POLL_MS) : remaining, signal);
 			}
 			signal?.throwIfAborted();
 			const results: WaitResult[] = [];
@@ -462,7 +482,7 @@ export class Agents {
 				}
 			}
 			returned = true;
-			return { results, pending: unique.filter((agent) => this.pending(agent)).map((agent) => agent.record) };
+			return { results, pending: unique.filter((agent) => this.pending(agent)).map((agent) => agent.record), ...(interrupted && { interrupted }) };
 		} finally {
 			if (blocking) this.markWaiting(-1);
 			if (suspended) await scheduler.resume(this.self.rootId, this.self.id, this.limits.maxConcurrent, signal);

@@ -4,9 +4,12 @@ import { Type } from "typebox";
 import { boundBlocks, boundText } from "../output.ts";
 import { rejectFields } from "../params.ts";
 import { renderTextResult, renderToolCall, startDuration, type DurationState } from "../render-call.ts";
+import { agentSession } from "../roots/rpc.ts";
 import type { RootRuntime } from "../roots/runtime.ts";
 import {
+	steerQueued,
 	THINKING_LEVELS,
+	WAIT_INTERRUPTED,
 	type Limits,
 	type WaitOutcome,
 	type WaitResult,
@@ -34,9 +37,10 @@ function resultDetails({ agent, input, history }: WaitResult, result?: string) {
 
 /** Renders wait results; returns the text and the results the caller has now read. */
 function renderWait(outcome: WaitOutcome, ids: string[]): { text: string; read: WaitResult[]; details: Record<string, unknown> } {
-	const { results, pending } = outcome;
-	const pendingLine = pending.length > 0 ? `Still pending: ${pending.map((agent) => label(agent, ids)).join(", ")}` : "";
-	if (results.length === 0) return { text: pendingLine || "No results.", read: [], details: { results: [], pending: pending.map((agent) => agent.id) } };
+	const { results, pending, interrupted } = outcome;
+	const pendingLine = pending.length > 0 ? `Still pending: ${pending.map((agent) => label(agent, ids)).join(", ")}${interrupted ? `\n${WAIT_INTERRUPTED}` : ""}` : "";
+	const flag = interrupted ? { interrupted } : {};
+	if (results.length === 0) return { text: pendingLine || "No results.", read: [], details: { results: [], pending: pending.map((agent) => agent.id), ...flag } };
 	const only = results[0]!;
 	if (results.length === 1 && pending.length === 0 && !only.history && only.input.state === "completed") {
 		const bounded = boundText(only.input.result ?? "", "pi-agents-wait");
@@ -56,7 +60,7 @@ function renderWait(outcome: WaitOutcome, ids: string[]): { text: string; read: 
 	const omitted = results.slice(bounded.shown);
 	if (omitted.length > 0) text += `\n\n[Results omitted: ${omitted.map((result) => label(result.agent, ids)).join(", ")}. Use wait with fewer targets.]`;
 	if (pendingLine) text += `\n\n${pendingLine}`;
-	return { text, read, details: { results: details, pending: pending.map((agent) => agent.id), ...bounded.details } };
+	return { text, read, details: { results: details, pending: pending.map((agent) => agent.id), ...flag, ...bounded.details } };
 }
 
 /** Registers the `agent` tool. */
@@ -168,7 +172,8 @@ export function registerAgentTool(
 					const selected = targets?.map((target) => agents.ownedTarget(target));
 					// An empty partial result lets the row show the elapsed time.
 					onUpdate?.({ content: [], details: undefined });
-					const outcome = await agents.wait(selected, params.history ?? 0, params.timeout ?? 30, signal);
+					const session = agentSession(current.sessionManager);
+					const outcome = await agents.wait(selected, params.history ?? 0, params.timeout ?? 30, signal, () => steerQueued(session?.agent));
 					const rendered = renderWait(outcome, ids());
 					agents.markRead(rendered.read);
 					return { content: [{ type: "text", text: rendered.text }], details: rendered.details };

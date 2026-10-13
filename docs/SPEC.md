@@ -115,8 +115,9 @@ withdrawn. Its result is the answer or the error. Only inputs from the
 owner have results; the recipient replies to other senders with `send`.
 
 `wait` returns unread results in order and marks them read. On timeout, it
-returns the results so far and names the Agents still pending. It can also
-return read results again.
+returns the results so far and names the Agents still pending. A steer input
+to the waiting Agent, from any sender, ends `wait` the same way; a write does
+not. It can also return read results again.
 
 When an input ends and its owner is not waiting for that Agent, the owner
 receives a notification, unless the owner aborted it. The notification is an input delivered as `steer`,
@@ -218,6 +219,13 @@ write:           { ids }
 Still pending: <name> (<id>), ...
 ```
 
+When a steer input ended the wait, a line follows:
+
+```text
+Still pending: <name> (<id>), ...
+Stopped waiting for a new message. Wait again to keep waiting.
+```
+
 A result returned again through `history` adds `history="true"`. A single
 unread completed result, with nothing pending, is returned as the answer
 alone. When there are no results or pending inputs:
@@ -229,10 +237,11 @@ No results.
 Details:
 
 ```text
-{ results: [{ id, name, state, history, result? }], pending: [id] }
+{ results: [{ id, name, state, history, result? }], pending: [id], interrupted? }
 ```
 
-`state` is the input outcome (§5); `history` marks a previously read result.
+`state` is the input outcome (§5); `history` marks a previously read result;
+`interrupted` is `true` when a steer input ended the wait.
 
 `list` returns one entry per Agent, followed by its latest request, if any,
 and its time. With a query, entries are ordered by their most recent match,

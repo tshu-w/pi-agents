@@ -183,6 +183,27 @@ test("a steer input joins the current turn, and a followUp input gets its own tu
 	await root.close();
 });
 
+test("a steer queued for the waiting Agent ends wait early, and a write does not", async () => {
+	const root = await startRoot();
+	root.state.hold = gate();
+	await root.call({ action: "spawn", name: "worker", message: "one" });
+	await root.waitBusy(1);
+	const agent = root.session.agent;
+	agent.steer({ role: "custom", customType: "pi-agents", content: "note", display: true, details: { delivery: "write" }, timestamp: Date.now() });
+	let settled = false;
+	const waiting = root.callResult({ action: "wait", target: "worker", timeout: 10 }).finally(() => { settled = true; });
+	await new Promise((resolve) => setTimeout(resolve, 600));
+	assert.equal(settled, false);
+	agent.steer({ role: "user", content: [{ type: "text", text: "look" }], timestamp: Date.now() });
+	const result = await waiting;
+	assert.match(textOf(result.content), /^Still pending: worker \(\S+\)\nStopped waiting for a new message\. Wait again to keep waiting\.$/);
+	assert.equal(result.details.interrupted, true);
+	agent.clearAllQueues();
+	root.state.hold.open();
+	assert.match(await root.call({ action: "wait", target: "worker", timeout: 10 }), /^answer:one/);
+	await root.close();
+});
+
 test("abort ends the current turn and queued inputs, and the Agent stays usable", async () => {
 	const root = await startRoot();
 	root.state.hold = gate();
