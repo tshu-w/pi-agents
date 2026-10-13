@@ -86,6 +86,7 @@ test("an owned Agent answers its first input, and wait returns the answer once",
 	await root.call({ action: "send", target: "worker", message: "zebra" });
 	await root.call({ action: "wait", target: "worker", timeout: 10 });
 	assert.match(await root.call({ action: "list", query: "zebra" }), /zebra/);
+	assert.match(await root.call({ action: "list" }), /\n  \d{4}-\d\d-\d\d \d\d:\d\d  zebra$/);
 	await root.close();
 });
 

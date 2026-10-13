@@ -56,8 +56,8 @@ specific Agents and take a timeout.
 
 ### 2.4 list
 
-`list` returns visible Agents with their ID, name, working directory, and
-state.
+`list` returns visible Agents with their ID, name, working directory,
+state, and latest request: the last user message or input it received.
 
 ### 2.5 abort
 
@@ -234,13 +234,13 @@ Details:
 
 `state` is the input outcome (§5); `history` marks a previously read result.
 
-`list` returns one entry per Agent. With a query, entries are ordered by
-their most recent match. When a summary or user message matches, the entry
-shows the latest matching excerpt and its time:
+`list` returns one entry per Agent, followed by its latest request, if any,
+and its time. With a query, entries are ordered by their most recent match,
+and a matching summary or user message shows its latest excerpt instead:
 
 ```text
 <name> (<id>)  <state>  <cwd>
-  YYYY-MM-DD HH:MM  …<matching excerpt>…
+  YYYY-MM-DD HH:MM  <latest request or matching excerpt>
 ```
 
 When more entries remain:

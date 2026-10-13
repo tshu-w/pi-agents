@@ -4,6 +4,8 @@ import { entryLine, MESSAGE_TAG, MESSAGE_TYPE, type Entry } from "./registry.ts"
 interface SearchText {
 	time: number;
 	text: string;
+	/** A user message or an input, not a summary, write, or notification. */
+	request?: boolean;
 }
 
 /** Parsed texts by Session file, reused while the file is unchanged. */
@@ -32,9 +34,10 @@ function sessionTexts(sessionFile: string | undefined): SearchText[] {
 			const text = typeof content === "string"
 				? content
 				: Array.isArray(content) ? content.flatMap((part: any) => part?.type === "text" ? [part.text] : []).join("\n") : "";
-			if (text) texts.push({ time, text });
+			if (text) texts.push({ time, text, request: true });
 		} else if (entry.type === "custom_message" && entry.customType === MESSAGE_TYPE && typeof entry.content === "string") {
-			texts.push({ time, text: entry.content });
+			const request = entry.details?.delivery !== "write" && (entry.content.startsWith(`<${MESSAGE_TAG} `) || entry.details?.user === true);
+			texts.push({ time, text: entry.content, request });
 		}
 	}
 	cache.set(sessionFile, { stamp, texts });
@@ -85,9 +88,23 @@ export function searchEntries(entries: Entry[], query: string | undefined): List
 	return items.sort((left, right) => right.time - left.time).map(({ time: _time, ...item }) => item);
 }
 
+/** An entry with its latest matching excerpt, else its latest request, and its time. */
 export function listLine(item: ListItem, ids: Iterable<string>): string {
 	const line = entryLine(item.entry, ids);
-	return item.match ? `${line}\n  ${formatTime(item.match.time)}  ${item.match.excerpt}` : line;
+	const detail = item.match ?? latestRequest(item.entry.sessionFile);
+	return detail ? `${line}\n  ${formatTime(detail.time)}  ${detail.excerpt}` : line;
+}
+
+function latestRequest(sessionFile: string | undefined): { time: number; excerpt: string } | undefined {
+	const text = sessionTexts(sessionFile).findLast((text) => text.request);
+	if (!text) return undefined;
+	const flat = messageBody(text.text).replace(/\s+/g, " ").trim();
+	return { time: text.time, excerpt: flat.length > 120 ? `${flat.slice(0, 120)}…` : flat };
+}
+
+/** A message's body without its `agent-message` element. */
+function messageBody(content: string): string {
+	return content.startsWith(`<${MESSAGE_TAG} `) ? content.slice(content.indexOf("\n") + 1, content.lastIndexOf("\n")) : content;
 }
 
 /**
@@ -103,7 +120,7 @@ export function latestActivity(sessionFile: string | undefined): string | undefi
 		let entry: Record<string, any>;
 		try { entry = JSON.parse(line); } catch { continue; }
 		if (input === undefined && entry.type === "custom_message" && entry.customType === MESSAGE_TYPE && typeof entry.content === "string") {
-			input = entry.content.startsWith(`<${MESSAGE_TAG} `) ? entry.content.slice(entry.content.indexOf("\n") + 1, entry.content.lastIndexOf("\n")) : entry.content;
+			input = messageBody(entry.content);
 		}
 		if (input !== undefined && entry.type === "message" && entry.message?.role === "assistant" && Array.isArray(entry.message.content)) {
 			activity = replyActivity(entry.message.content) ?? activity;

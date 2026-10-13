@@ -230,7 +230,7 @@ test("a Program's Agents are invisible to the caller, count toward its limit, an
 	` }));
 	await waitBusy(2);
 	// Other roots may be listed; the Program's Agents share the caller's cwd.
-	assert.match(await root.text({ action: "list", query: root.cwd }, "agent"), /^outside \(\S+\)  running  \S+$/);
+	assert.match(await root.text({ action: "list", query: root.cwd }, "agent"), /^outside \(\S+\)  running  \S+\n  .+  hold$/);
 	assert.equal(await root.text({ action: "stop", target: id }), `Program ${id} stopped.`);
 	const result = await root.text({ action: "wait", target: id, timeout: 10 });
 	assert.match(result, /status="stopped">\n[\s\S]*Input rejected: 2 inputs have not ended/);
