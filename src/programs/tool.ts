@@ -146,7 +146,8 @@ export function registerProgramTools(
 		defaultActive: false,
 		prepareLoadout: programLoadout(pi, piCodemode, PROGRAM_DESCRIPTION, AGENT_API),
 		// Only `run` reaches tools, as a `codemode` script does; extensions that register tools late wait on it.
-		...(codemodeReach && { reachesTools: (input: { action?: string; code?: unknown }) => input.action === "run" ? codemodeReach({ code: input.code }) : [] }),
+		// MCP sees a run as a `codemode` call, without `action`.
+		...(codemodeReach && { reachesTools: (input: { action?: string; code?: unknown }) => (input.action ?? "run") === "run" ? codemodeReach({ code: input.code }) : [] }),
 		...renderers,
 		description: programDescription(piCodemode, PROGRAM_DESCRIPTION, AGENT_API),
 		promptSnippet: "Run JavaScript that composes tool calls and Agents",
