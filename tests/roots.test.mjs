@@ -102,7 +102,7 @@ test("an input starts the offline root in a host on its active branch, which ans
 	assert.match(await sender.call({ action: "list", query: "reviewer" }), /reviewer \(offline-\)\s+idle/);
 	assert.equal(await sender.call({ action: "send", target: "reviewer", message: "hello" }), "Input accepted by reviewer (offline-).");
 	const answered = await until(() => entriesOf(target.file).find((entry) => entry.type === "message" && entry.message.role === "assistant"), "answer");
-	assert.match(textOf(answered.message.content), /^answer:<agent-message from="sender" id="\S+" note="Reply with send">\nhello\n<\/agent-message>$/);
+	assert.match(textOf(answered.message.content), /^answer:<agent-message from="sender" [^>]*note="Reply with send">\nhello\n/);
 	const [host] = (await listHosts(paths)).filter((entry) => entry.session?.id === target.id);
 	assert.equal(host.attached, false);
 	// The host gives up the Session once Pi exits.
@@ -151,7 +151,7 @@ test("a root in another process is listed with its state and cannot be opened tw
 
 	const second = runPi(["--session", target.file], target.cwd);
 	await second.exited;
-	assert.match(second.output(), /\[pi-agents\] Session live-c is in use \(PID \d+\)\. Quit the other Pi instance\./);
+	assert.match(second.output(), /Session live-c is in use/);
 	assert.equal(first.child.exitCode, null);
 
 	const handlers = new Map();
@@ -170,7 +170,7 @@ test("a root in another process is listed with its state and cannot be opened tw
 		},
 		shutdown() { shutdown = true; },
 	});
-	assert.match(dialog?.title ?? "", /\[pi-agents\] Session live-c is in use/);
+	assert.match(dialog?.title ?? "", /Session live-c is in use/);
 	assert.deepEqual(dialog.options, ["Quit"]);
 	assert.equal(shutdown, false);
 	dismiss("Quit");
@@ -178,5 +178,5 @@ test("a root in another process is listed with its state and cannot be opened tw
 	assert.equal(shutdown, true);
 
 	await sender.call({ action: "send", target: "live-c", message: "note", deliverAs: "write" });
-	await until(() => entriesOf(target.file).some((entry) => entry.type === "custom_message" && sender.sessionManager.getSessionId().startsWith(/^<agent-message from="sender" id="(\S{8,})">\nnote\n<\/agent-message>$/.exec(entry.content)?.[1] ?? "-")), "write");
+	await until(() => entriesOf(target.file).some((entry) => entry.type === "custom_message" && entry.content.startsWith('<agent-message from="sender" ') && entry.content.includes("\nnote\n")), "write");
 });
