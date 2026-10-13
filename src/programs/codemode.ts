@@ -27,8 +27,8 @@ export function loadCodemode(): Promise<Codemode> {
 
 /** Parts of Pi's `codemode` tool that its package entry does not export. */
 export interface PiCodemode {
-	/** Pi's `codemode` tool definition; `program` reuses its `prepareLoadout`. */
-	createCodemodeToolDefinition(options: Record<string, unknown>): ToolDefinition;
+	/** Pi's `codemode` tool definition; `program` reuses its `prepareLoadout` and, since Pi 1.2.0, `reachesTools`. */
+	createCodemodeToolDefinition(options: Record<string, unknown>): ToolDefinition & { reachesTools?: (input: { code: unknown }) => "all" | string[] };
 	createCodemodeDescription(tools: unknown[], options?: Record<string, unknown>): string;
 	/** The `codemode` parameter schema, by which the MCP extension recognizes the tool. */
 	codemodeSchema: unknown;

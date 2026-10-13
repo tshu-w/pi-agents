@@ -137,6 +137,7 @@ export function registerProgramTools(
 		},
 	});
 
+	const codemodeReach = piCodemode.createCodemodeToolDefinition({}).reachesTools;
 	pi.registerTool({
 		name: PROGRAM_TOOL_NAME,
 		label: "Program",
@@ -144,6 +145,8 @@ export function registerProgramTools(
 		exposure: "model-only",
 		defaultActive: false,
 		prepareLoadout: programLoadout(pi, piCodemode, PROGRAM_DESCRIPTION, AGENT_API),
+		// Only `run` reaches tools, as a `codemode` script does; extensions that register tools late wait on it.
+		...(codemodeReach && { reachesTools: (input: { action?: string; code?: unknown }) => input.action === "run" ? codemodeReach({ code: input.code }) : [] }),
 		...renderers,
 		description: programDescription(piCodemode, PROGRAM_DESCRIPTION, AGENT_API),
 		promptSnippet: "Run JavaScript that composes tool calls and Agents",
