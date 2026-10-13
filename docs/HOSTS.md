@@ -105,7 +105,7 @@ Running owned Agents and Programs are counted, as in `3 agents running`.
 
 Rows are grouped by state, newest first in each group:
 
-- **Needs input**: a dialog waiting for the user, or a finished turn the user
+- **Needs attention**: a dialog waiting for the user, or a finished turn the user
   has not seen. A turn that failed after Pi's retries, or a host that exited
   abnormally, is marked failed.
 - **Working**: the Session or its tree has live work.

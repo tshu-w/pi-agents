@@ -76,9 +76,9 @@ const COMMANDS = [
 // Pi's working spinner.
 const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const GROUPS = [
-  ['attention', 'Needs input', 'Sessions waiting on you or with a finished turn you have not seen land here'],
-  ['working', 'Working', 'Sessions Pi is working on; they keep running after you leave'],
-  ['completed', 'Completed', 'Sessions you have seen wait here'],
+  ['attention', 'Needs attention', 'Sessions with a question for you or a reply you have not read'],
+  ['working', 'Working', 'Sessions still working; they keep running when you close the terminal'],
+  ['completed', 'Completed', 'Sessions with nothing new for you'],
 ];
 
 function stateOf(session) {
