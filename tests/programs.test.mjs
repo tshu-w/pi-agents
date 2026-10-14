@@ -171,6 +171,19 @@ test("/tasks opens a background Program as its tool call shows in the foreground
 	}
 });
 
+test("a Program's Agent calls show beside its tool calls, and its result names the calls its end cut off or that preceded its failure", async () => {
+	const root = await startRoot();
+	const completed = await root.call({ action: "run", code: "const answer = await agent({ name: 'reviewer' }).send('one'); tools.read({ path: 'note.txt' }); agent({ name: 'slow' }).send('hold'); return answer" });
+	assert.deepEqual(completed.details.calls.map((call) => [call.name, call.status]), [["agent reviewer", "ok"], ["read", "cancelled"], ["agent slow", "cancelled"]]);
+	assert.match(textOf(completed.content), /answer:one\n\nCalls still running when the script returned were cancelled.*: read, agent slow$/);
+	// A Program without Agent calls names a cut-off tool call too.
+	assert.match(textOf((await root.call({ action: "run", code: "tools.read({ path: 'note.txt' }); return 'early'" })).content), /early\n\nCalls still running.*: read$/);
+	const failed = await root.call({ action: "run", code: "agent({ name: 'slow' }).send('hold'); throw new Error('boom')" });
+	assert.match(textOf(failed.content), /\n\nAgent calls made before the failure.*: agent slow \(cancelled\)$/);
+	root.state.hold.open();
+	await root.close();
+});
+
 test("stop and timeout stop background Programs", async () => {
 	const root = await startRoot();
 	const loop = "while (true) await tools.read({ path: 'note.txt' })";

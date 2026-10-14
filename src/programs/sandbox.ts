@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { CodemodeTool } from "@earendil-works/pi-codemode";
+import type { CallTracker } from "./execute.ts";
 
 export interface AgentOptions {
 	name?: string;
@@ -54,9 +55,10 @@ export function withAgentPrefix(code: string): string {
 	return `${agentPrefix()}${code}`;
 }
 
-/** Globals behind `agent()`. A handle's calls wait for its Agent to be created. */
-export function agentGlobals(host: ProgramAgentHost): CodemodeTool[] {
+/** Globals behind `agent()`. A handle's calls wait for its Agent to be created; `track` records each `send()`. */
+export function agentGlobals(host: ProgramAgentHost, track: CallTracker): CodemodeTool[] {
 	const created = new Map<string, Promise<void>>();
+	const names = new Map<string, string>();
 	const ready = (id: string) => created.get(id) ?? Promise.reject(new Error(`Unknown Agent ${id}`));
 	return [
 		{
@@ -64,6 +66,7 @@ export function agentGlobals(host: ProgramAgentHost): CodemodeTool[] {
 			spread: true,
 			execute: (args) => {
 				const [id, name, options] = args as [string, string, AgentOptions];
+				names.set(id, name);
 				const creation = host.create(id, name, options ?? {});
 				created.set(id, creation);
 				return creation;
@@ -74,8 +77,17 @@ export function agentGlobals(host: ProgramAgentHost): CodemodeTool[] {
 			spread: true,
 			execute: async (args) => {
 				const [id, message, options] = args as [string, string, SendOptions | undefined];
-				await ready(id);
-				return host.send(id, message, options ?? {});
+				// Recorded from the start, so a send whose Agent fails to be created shows too.
+				const end = track(`agent ${names.get(id) ?? id}`, JSON.stringify(message) ?? "");
+				try {
+					await ready(id);
+					const value = await host.send(id, message, options ?? {});
+					end("ok");
+					return value;
+				} catch (error) {
+					end((error as { cancelled?: boolean }).cancelled ? "cancelled" : "error", error instanceof Error ? error.message : String(error));
+					throw error;
+				}
 			},
 		},
 		{

@@ -77,8 +77,9 @@ export function programScope(
 			}
 			const { record, timedOut } = await agents.request(agentId, text, delivery, schema, timeout === undefined ? undefined : timeout * 1000);
 			if (record.state === "completed") return schema === undefined ? record.result : record.value;
-			if (timedOut) throw new Error(`Agent ${label(agent, agents.ids())} timed out after ${timeout} seconds.`);
-			throw new Error(record.state === "failed" ? `Agent ${label(agent, agents.ids())} failed: ${record.result}` : `Agent ${label(agent, agents.ids())} was aborted.`);
+			if (record.state === "failed") throw new Error(`Agent ${label(agent, agents.ids())} failed: ${record.result}`);
+			// An aborted input, timed out or not, shows as a cancelled call.
+			throw Object.assign(new Error(timedOut ? `Agent ${label(agent, agents.ids())} timed out after ${timeout} seconds.` : `Agent ${label(agent, agents.ids())} was aborted.`), { cancelled: true });
 		},
 		abort: async (agentId) => {
 			await agents.abort(agents.ownedTarget(agentId));

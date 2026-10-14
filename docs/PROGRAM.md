@@ -188,6 +188,8 @@ In these formats, `<id>` is the Program's short ID.
 
 `run` in the foreground returns the Program result, as an error if the
 Program failed or was stopped.
+A Program result lists its `send()` calls with its tool calls, and names the
+calls still running when the script returned, which were cancelled.
 
 `run` in the background:
 

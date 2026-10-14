@@ -20,6 +20,45 @@ export interface ProgramFiles {
 	edited: string[];
 }
 
+/** A call in codemode's `details.calls`. */
+interface CallRecord {
+	id: string;
+	name: string;
+	args: string;
+	status: "running" | "ok" | "error" | "cancelled";
+	durationMs?: number;
+	error?: string;
+}
+
+/**
+ * Records calls that a Program's own globals make, which codemode does not see, beside its tool calls.
+ * `start` returns the function that ends the call; a call still running when the script ends is cancelled.
+ */
+export type CallTracker = (name: string, args: string) => (status: "ok" | "error" | "cancelled", error?: string) => void;
+
+const ARGS_PREVIEW_CHARS = 200;
+const ERROR_PREVIEW_CHARS = 500;
+const NOTE_NAMES = 10;
+const NOTE_NAME_CHARS = 60;
+
+const preview = (text: string, max: number) => text.length > max ? `${text.slice(0, max - 3)}...` : text;
+
+/** Names of calls for a note: at most `NOTE_NAMES` of them, each cut to `NOTE_NAME_CHARS`, since scripts name Agents. */
+function callNames(calls: CallRecord[], status: boolean): string {
+	const shown = calls.slice(0, NOTE_NAMES).map((call) => {
+		const name = preview(call.name, NOTE_NAME_CHARS);
+		return status ? `${name} (${call.status})` : name;
+	});
+	return calls.length > NOTE_NAMES ? `${shown.join(", ")}, and ${calls.length - NOTE_NAMES} more` : shown.join(", ");
+}
+
+/** Adds a note after a blank line to the last text item, or as a new item after images. */
+function appendNote(content: AgentToolResult<unknown>["content"], note: string): void {
+	const last = content.at(-1);
+	if (last?.type === "text") last.text += `\n\n${note}`;
+	else content.push({ type: "text", text: note });
+}
+
 export interface ProgramRunResult {
 	outcome: ProgramOutcome;
 	result: AgentToolResult<unknown> & { isError?: boolean };
@@ -31,8 +70,8 @@ export interface ProgramRunResult {
 export interface ProgramRunOptions {
 	/** Seconds until the Program stops; the script's `timeout_ms` option applies as well. */
 	timeout?: number;
-	/** Globals added to the script, such as the host side of `agent()`. */
-	globals?: CodemodeTool[];
+	/** Globals added to the script, such as the host side of `agent()`; `track` records their calls. */
+	globals?: (track: CallTracker) => CodemodeTool[];
 	/** Rewrites the code before it runs, such as prepending the `agent()` prelude. */
 	prepare?: (code: string) => string;
 	onUpdate?: AgentToolUpdateCallback<unknown>;
@@ -54,6 +93,8 @@ interface SandboxExtras {
 	timeoutMs: number;
 	result?: CodemodeResult;
 	used: boolean;
+	/** Called when the script ends, before the sandbox closes. */
+	ended(): void;
 }
 
 const sandboxExtras = new AsyncLocalStorage<SandboxExtras>();
@@ -77,7 +118,11 @@ async function withSandboxExtras<T>(extras: SandboxExtras, run: () => Promise<T>
 			const timeoutMs = Math.min(current.timeoutMs, (options.timeoutMs as number | undefined) ?? this.timeoutMs);
 			return execute.call(this, current.prepare(code), { ...options, timeoutMs }).then((result: CodemodeResult) => {
 				current.result = result;
+				current.ended();
 				return result;
+			}, (error: unknown) => {
+				current.ended();
+				throw error;
 			});
 		};
 	}
@@ -114,19 +159,77 @@ export async function executeProgram(
 			},
 		},
 	}) as ExtensionToolContext;
+	// The globals' calls, each placed after the codemode calls seen when it started.
+	const own: Array<{ record: CallRecord; after: number; startedAt: number }> = [];
+	let seen: CallRecord[] = [];
+	let last: Parameters<AgentToolUpdateCallback<unknown>>[0] = { content: [], details: undefined };
+	let scriptEnded = false;
+	const merged = (): CallRecord[] => {
+		const calls: CallRecord[] = [];
+		let next = 0;
+		for (const { record, after } of own) {
+			while (next < after && next < seen.length) calls.push({ ...seen[next++]! });
+			calls.push({ ...record });
+		}
+		while (next < seen.length) calls.push({ ...seen[next++]! });
+		return calls;
+	};
+	const publish = () => options.onUpdate?.({ ...last, details: { ...(last.details as object | undefined), calls: merged() } });
+	const onUpdate: AgentToolUpdateCallback<unknown> = (update) => {
+		last = update;
+		seen = (update.details as { calls?: CallRecord[] } | undefined)?.calls ?? seen;
+		publish();
+	};
+	const finish = (entry: (typeof own)[number], status: "ok" | "error" | "cancelled", error?: string) => {
+		if (entry.record.status !== "running") return;
+		entry.record.status = status;
+		entry.record.durationMs = performance.now() - entry.startedAt;
+		if (error !== undefined) entry.record.error = preview(error, ERROR_PREVIEW_CHARS);
+		publish();
+	};
+	const track: CallTracker = (name, args) => {
+		const entry = { record: { id: `${toolCallId}/${name}-${own.length + 1}`, name, args: preview(args, ARGS_PREVIEW_CHARS), status: "running" as const }, after: seen.length, startedAt: performance.now() };
+		own.push(entry);
+		if (scriptEnded) finish(entry, "cancelled");
+		else publish();
+		return (status, error) => finish(entry, status, error);
+	};
+	// Calls still running when the script ends are cut off by it.
+	let cutOff: CallRecord[] = [];
 	const extras: SandboxExtras = {
-		globals: options.globals ?? [],
+		globals: options.globals?.(track) ?? [],
 		prepare: options.prepare ?? ((code) => code),
 		timeoutMs: options.timeout === undefined ? Number.POSITIVE_INFINITY : options.timeout * 1000,
 		used: false,
+		ended: () => {
+			scriptEnded = true;
+			const running = own.filter((entry) => entry.record.status === "running");
+			for (const entry of running) finish(entry, "cancelled");
+			cutOff = running.map((entry) => entry.record);
+		},
 	};
-	const result = await withSandboxExtras(extras, () => executeCodemode(toolCallId, { code: source }, signal, options.onUpdate, programCtx, {
-		models: true,
-		appendEntry: options.appendEntry,
-		getToolNamespace: options.getToolNamespace,
-	}));
+	let result: Awaited<ReturnType<typeof executeCodemode>>;
+	try {
+		result = await withSandboxExtras(extras, () => executeCodemode(toolCallId, { code: source }, signal, onUpdate, programCtx, {
+			models: true,
+			appendEntry: options.appendEntry,
+			getToolNamespace: options.getToolNamespace,
+		}));
+	} finally {
+		if (!scriptEnded) extras.ended();
+	}
 	const outcome: ProgramOutcome = extras.result?.ok
 		? "completed"
 		: extras.result?.error.kind === "timeout" || extras.result?.error.kind === "aborted" ? "stopped" : "failed";
+	// codemode marks calls cut off by the script ending only in its result, after the last update.
+	seen = (result.details as { calls?: CallRecord[] } | undefined)?.calls ?? seen;
+	if (own.length > 0) result.details = { ...(result.details as object | undefined), calls: merged() };
+	// codemode lists the tool calls made before a failure; the globals' calls get a line of their own.
+	if (outcome !== "completed" && own.length > 0) {
+		appendNote(result.content, `Agent calls made before the failure (they are not undone): ${callNames(own.map((entry) => entry.record), true)}`);
+	} else if (outcome === "completed") {
+		const stopped = [...seen.filter((call) => call.status === "cancelled"), ...cutOff];
+		if (stopped.length > 0) appendNote(result.content, `Calls still running when the script returned were cancelled; their effects are not undone: ${callNames(stopped, false)}`);
+	}
 	return { outcome, result, files };
 }

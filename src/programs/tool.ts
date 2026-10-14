@@ -103,7 +103,7 @@ export function registerProgramTools(
 		try {
 			run = await executeProgram(toolCallId, code, signal, current, {
 				...options,
-				globals: agentGlobals(scope.host),
+				globals: (track) => agentGlobals(scope.host, track),
 				// On the first line, so line numbers in errors match the script as written.
 				prepare: (source) => withAgentPrefix(args === undefined ? source : `const args = ${JSON.stringify(args)};${source}`),
 				appendEntry: (customType, data) => pi.appendEntry(customType, data),
