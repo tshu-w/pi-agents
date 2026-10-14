@@ -101,9 +101,10 @@ export async function startHost(paths, { pi, args, cwd, cols = 120, rows = 40, e
 /**
  * Attaches this process's terminal to a host until the host detaches it or Pi exits.
  * The detach key detaches here, before Pi sees it, so it works whatever Pi shows.
+ * `onAttach` runs once the host has attached the terminal and told Pi.
  * Resolves to { reason: 'detach' | 'takeover' | 'exited' | 'closed', session }.
  */
-export function attach(socketPath, { isDetach, stdin = process.stdin, stdout = process.stdout }) {
+export function attach(socketPath, { isDetach, onAttach, stdin = process.stdin, stdout = process.stdout }) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(socketPath);
     const size = () => ({ cols: stdout.columns, rows: stdout.rows });
@@ -117,7 +118,7 @@ export function attach(socketPath, { isDetach, stdin = process.stdin, stdout = p
       if (at > 0) socket.write(frame(FRAME.data, Buffer.from(keys.slice(0, at).join(''), encoding)));
       socket.write(frame(FRAME.detached));
     };
-    let result, connected = false, altScreen = false;
+    let result, connected = false, altScreen = false, attached = false;
     function finish() {
       stdout.off('resize', onResize);
       stdin.off('data', onInput);
@@ -143,6 +144,11 @@ export function attach(socketPath, { isDetach, stdin = process.stdin, stdout = p
       if (type === FRAME.data) {
         for (const [, mode] of body.toString('latin1').matchAll(ALT_SCREEN)) altScreen = mode === 'h';
         stdout.write(body);
+        // The host sends the screen only after it has told Pi that a terminal is attached.
+        if (!attached) {
+          attached = true;
+          onAttach?.();
+        }
       }
       else if (type === FRAME.detached) result = { ...json(body) };
       else if (type === FRAME.exited) result = { reason: 'exited', ...json(body) };

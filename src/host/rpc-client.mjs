@@ -20,6 +20,57 @@ function fault(code, message) {
   return Object.assign(new Error(message), { code });
 }
 
+function stopped(paths) {
+  return fault('HOST_STOPPED', `Pi stopped before the Session was ready. See ${paths.hostLog}`);
+}
+
+/** Opens a `role` stream to Session `id` once its Pi is ready, while `live()` holds. */
+async function connect(paths, id, handlers, live, role = 'rpc') {
+  const socket = paths.session(id);
+  const deadline = performance.now() + TIMEOUT_MS;
+  for (;;) {
+    try {
+      const status = await request(socket, { action: 'status' });
+      if (status.ready) {
+        if (status.availabilityError) throw new Error(status.availabilityError);
+        return { status, stream: await openStream(socket, { action: 'stream', role }, handlers) };
+      }
+    } catch (error) { if (!NOT_READY.includes(error.code)) throw error; }
+    if (!live()) throw stopped(paths);
+    if (performance.now() > deadline) throw new Error(`The Session did not become ready. See ${paths.hostLog}`);
+    await delay(50);
+  }
+}
+
+/** `args` without the prompts, and without the options that make Pi non-interactive. */
+function withoutPrompts(parseArgs, args) {
+  const options = [];
+  let separated = false;
+  for (let i = 0, before = parseArgs([]); i < args.length; i++) {
+    const after = parseArgs(args.slice(0, i + 1));
+    const positional = after.messages.length > before.messages.length || after.fileArgs.length > before.fileArgs.length;
+    before = after;
+    if (separated || positional) continue;
+    if (args[i] === '--') separated = true;
+    else if (args[i] === '--mode') i++;
+    else if (args[i] !== '-p' && args[i] !== '--print') options.push(args[i]);
+  }
+  return options;
+}
+
+/** The prompts Pi sends on startup for `parsed`: its initial message, then each further message. */
+async function startupPrompts(dist, parsed, stdinContent) {
+  const { buildInitialMessage } = await dist('cli/initial-message.js');
+  let files = {};
+  if (parsed.fileArgs.length) {
+    const { processFileArguments } = await dist('cli/file-processor.js');
+    const { text, images } = await processFileArguments(parsed.fileArgs, { autoResizeImages: false });
+    files = { fileText: text, fileImages: images };
+  }
+  const { initialMessage, initialImages } = buildInitialMessage({ parsed, stdinContent, ...files });
+  return [...(initialMessage ? [{ message: initialMessage, images: initialImages }] : []), ...parsed.messages.map(message => ({ message }))];
+}
+
 function write(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
@@ -38,20 +89,8 @@ export async function runHeadless({ pi, paths, args, mode, findRunning, warnIgno
   }
 
   // The host runs Pi without the prompts, which arrive as RPC commands instead.
-  const hostArgs = [];
-  let separated = false;
-  for (let i = 0, before = parseArgs([]); i < args.length; i++) {
-    const after = parseArgs(args.slice(0, i + 1));
-    const positional = after.messages.length > before.messages.length || after.fileArgs.length > before.fileArgs.length;
-    before = after;
-    if (separated || positional) continue;
-    if (args[i] === '--') separated = true;
-    else if (args[i] === '--mode') i++;
-    else if (args[i] !== '-p' && args[i] !== '--print') hostArgs.push(args[i]);
-  }
+  const hostArgs = withoutPrompts(parseArgs, args);
   const sessionArgs = hostArgs.filter((arg, i) => !SESSION_FLAGS.has(arg) && !SESSION_SWITCHES.has(arg) && !SESSION_FLAGS.has(hostArgs[i - 1]));
-
-  const stopped = () => fault('HOST_STOPPED', `Pi stopped before the Session was ready. See ${paths.hostLog}`);
 
   /** Starts a host for `hostArgs` in `cwd`; resolves once its Pi reports the Session. */
   async function host(hostArgs, cwd) {
@@ -60,27 +99,9 @@ export async function runHeadless({ pi, paths, args, mode, findRunning, warnIgno
     for (;;) {
       let status;
       try { status = await hostStatus(socket); }
-      catch (error) { throw GONE.includes(error.code) ? stopped() : error; }
+      catch (error) { throw GONE.includes(error.code) ? stopped(paths) : error; }
       if (status.session?.id) return status;
       if (performance.now() > deadline) throw new Error(`Pi did not start. See ${paths.hostLog}`);
-      await delay(50);
-    }
-  }
-
-  /** Opens a `role` stream to Session `id` once its Pi is ready, while `live()` holds. */
-  async function connect(id, handlers, live, role = 'rpc') {
-    const socket = paths.session(id);
-    const deadline = performance.now() + TIMEOUT_MS;
-    for (;;) {
-      try {
-        const status = await request(socket, { action: 'status' });
-        if (status.ready) {
-          if (status.availabilityError) throw new Error(status.availabilityError);
-          return { status, stream: await openStream(socket, { action: 'stream', role }, handlers) };
-        }
-      } catch (error) { if (!NOT_READY.includes(error.code)) throw error; }
-      if (!live()) throw stopped();
-      if (performance.now() > deadline) throw new Error(`The Session did not become ready. See ${paths.hostLog}`);
       await delay(50);
     }
   }
@@ -93,12 +114,12 @@ export async function runHeadless({ pi, paths, args, mode, findRunning, warnIgno
       const holds = h => h.session && (h.session.id === id || h.session.file === file);
       try {
         const held = (await settledHosts(paths, holds)).find(holds);
-        if (held) return await connect(held.session.id, handlers, () => alive(held.pid));
+        if (held) return await connect(paths, held.session.id, handlers, () => alive(held.pid));
         if (id && await request(paths.session(id), { action: 'status' }).then(() => true, () => false)) {
-          return await connect(id, handlers, () => true);
+          return await connect(paths, id, handlers, () => true);
         }
         const status = await host([...sessionArgs, '--session', file], cwd);
-        return await connect(status.session.id, handlers, () => alive(status.pid));
+        return await connect(paths, status.session.id, handlers, () => alive(status.pid));
       } catch (error) {
         // Its Pi may be stopping, another client may have just started it, or its previous Pi may still hold its lock.
         if (error.code !== 'HOST_STOPPED' || performance.now() > deadline) throw error;
@@ -117,9 +138,9 @@ export async function runHeadless({ pi, paths, args, mode, findRunning, warnIgno
         if (error.code !== 'HOST_STOPPED' || !(running = await findRunning())) throw error;
       }
     }
-    if (!running) return connect(status.session.id, handlers, () => alive(status.pid), role);
+    if (!running) return connect(paths, status.session.id, handlers, () => alive(status.pid), role);
     warnIgnored(hostArgs);
-    return connect(running.session.id, handlers, () => alive(running.pid), role);
+    return connect(paths, running.session.id, handlers, () => alive(running.pid), role);
   }
 
   try {
@@ -131,6 +152,38 @@ export async function runHeadless({ pi, paths, args, mode, findRunning, warnIgno
   }
 }
 
+/**
+ * Prepares the messages in `args` for the Session in the host `running`, as Pi sends them on startup; `warnIgnored`
+ * reports the other options, which a running host does not apply. Resolves to a function that sends them, each as a
+ * follow-up once the previous one is accepted, and resolves to the error that stopped it, if any.
+ */
+export async function startupMessages({ pi, paths, args, running, warnIgnored }) {
+  const dist = file => import(pathToFileURL(`${piPackage(pi)}/dist/${file}`).href);
+  const { parseArgs } = await dist('cli/args.js');
+  warnIgnored(withoutPrompts(parseArgs, args));
+  const prompts = await startupPrompts(dist, parseArgs(args));
+  return async () => {
+    if (!prompts.length) return;
+    try {
+      let answer;
+      const { stream } = await connect(paths, running.session.id, {
+        onMessage(value) { if (value.type === 'response') answer?.(value); },
+        onClose() { answer?.({ success: false, error: 'The Session stopped.' }); },
+      }, () => alive(running.pid));
+      for (const { message, images } of prompts) {
+        const response = await new Promise(resolve => {
+          answer = resolve;
+          stream.send({ type: 'prompt', message, images, streamingBehavior: 'followUp' });
+        });
+        if (!response.success) throw new Error(response.error);
+      }
+      stream.close();
+    } catch (error) {
+      return error.message;
+    }
+  };
+}
+
 async function print({ start, parsed, mode, dist }) {
   let stdinContent;
   if (!process.stdin.isTTY) {
@@ -139,16 +192,7 @@ async function print({ start, parsed, mode, dist }) {
     for await (const chunk of process.stdin) data += chunk;
     stdinContent = data.trim() || undefined;
   }
-  const { buildInitialMessage } = await dist('cli/initial-message.js');
-  let files = {};
-  if (parsed.fileArgs.length) {
-    const { processFileArguments } = await dist('cli/file-processor.js');
-    const { text, images } = await processFileArguments(parsed.fileArgs, { autoResizeImages: false });
-    files = { fileText: text, fileImages: images };
-  }
-  const { initialMessage, initialImages } = buildInitialMessage({ parsed, stdinContent, ...files });
-
-  const prompts = [...(initialMessage ? [{ message: initialMessage, images: initialImages }] : []), ...parsed.messages.map(message => ({ message }))];
+  const prompts = await startupPrompts(dist, parsed, stdinContent);
 
   // The host runs the prompts once the Session is idle, and sends the events of their turns.
   let header, last, stopping, done = false, finish;

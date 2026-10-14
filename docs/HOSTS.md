@@ -44,7 +44,7 @@ load the extension, but run outside hosts and end with their terminal.
 
 - `pd [pi options]` starts Pi interactively in a new host and attaches the
   terminal. If the Session is already running in a host, `pd` attaches to it
-  instead.
+  instead, sending it the messages as follow-ups and ignoring other options.
 - `pd agents` opens the workbench.
 - `pd attach <session>` attaches to a Session, starting it first if it is not
   running.

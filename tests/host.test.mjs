@@ -45,10 +45,10 @@ const paths = statePaths();
 const client = fileURLToPath(new URL("../bin/pd.mjs", import.meta.url));
 
 /** Runs the `pi` client in a terminal of its own. */
-function terminal(args) {
+function terminal(args, env = process.env) {
 	const [cols, rows] = [100, 30];
 	const screen = new Terminal({ cols, rows, allowProposedApi: true });
-	const child = pty.spawn(process.execPath, [client, ...args], { cols, rows, cwd: home, env: process.env });
+	const child = pty.spawn(process.execPath, [client, ...args], { cols, rows, cwd: home, env });
 	let output = "";
 	child.onData((data) => { output += data; screen.write(data); });
 	// The terminal answers what Pi asks of it.
@@ -79,10 +79,14 @@ test("Pi keeps running in its host when another terminal takes over or the termi
 	first.child.write("\r");
 	await until(() => first.text().includes("answer:hello"), "answer");
 
-	const second = terminal(["--session-id", host.session.id]);
+	// A message given to a running Session reaches it, and the terminal attaches before the message is accepted.
+	const second = terminal(["--session-id", host.session.id, "gate again"]);
 	assert.equal((await first.exited).exitCode, 0);
 	assert.match(stripVTControlCharacters(first.output()), /Attached in another terminal\.\r?\nPi keeps running\. To reattach: pd attach \S+/);
 	await until(() => second.text().includes("answer:hello"), "restored screen");
+	writeFileSync(`${process.env.AGENTS_TEST_RELEASE}-gate`, "");
+	await until(() => second.text().includes("answer:gate again"), "answer to the message");
+	assert.ok(!second.output().includes("without applying"));
 
 	// An attached host outlives the idle limit.
 	await delay(7000);
@@ -95,6 +99,29 @@ test("Pi keeps running in its host when another terminal takes over or the termi
 	assert.equal((await second.exited).exitCode, 0);
 	assert.match(stripVTControlCharacters(second.output()), /Pi keeps running\. To reattach: pd attach \S+/);
 	await until(async () => (await listHosts(paths)).length === 0, "idle exit", 15000);
+});
+
+test("a message given to a running Session reaches Pi only once the terminal is attached", async () => {
+	const opener = terminal([]);
+	const host = await until(async () => (await listHosts(paths)).find((entry) => entry.session), "host");
+	opener.child.write("\x1a");
+	assert.equal((await opener.exited).exitCode, 0);
+	// The host pauses as the terminal connects, so a message sent then would find no terminal for its dialog.
+	const pause = join(home, "pause.mjs");
+	writeFileSync(pause, `const setRawMode = process.stdin.setRawMode;
+process.stdin.setRawMode = function (mode) {
+  if (mode) {
+    process.kill(${host.pid}, "SIGSTOP");
+    setTimeout(() => process.kill(${host.pid}, "SIGCONT"), 1000);
+  }
+  return setRawMode.call(this, mode);
+};`);
+	const asking = terminal(["--session-id", host.session.id, "/ask"], { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS} --import=${pause}` });
+	await until(() => asking.text().includes("Proceed?"), "the dialog");
+	asking.child.write("\x1a");
+	assert.equal((await asking.exited).exitCode, 0);
+	process.kill(host.pid, "SIGTERM");
+	await until(async () => (await listHosts(paths)).length === 0, "host exit");
 });
 
 test("a terminal attaching to a background host gets Pi's startup queries and status, even when split across chunks", async () => {

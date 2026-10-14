@@ -53,18 +53,22 @@ function option(name, alias) {
 }
 
 
-async function attachAndReport(socket) {
+/** Attaches the terminal to the host at `socket`; `send`, if given, sends messages once attached, and its error is reported once detached. */
+async function attachAndReport(socket, send) {
   const tui = await import(pathToFileURL(createRequire(join(piPackage(real), 'package.json')).resolve('@earendil-works/pi-tui')).href);
-  const result = await attach(socket, { isDetach: detachMatcher(tui, detachKey(agentDir())) });
+  let sent;
+  const result = await attach(socket, { isDetach: detachMatcher(tui, detachKey(agentDir())), onAttach: () => { sent = send?.(); } });
+  const failure = await sent;
+  if (failure) process.stderr.write(`${error(failure)}\n`);
   const id = result.session?.id;
-  if (result.reason === 'exited') process.exit(result.exitCode ?? 0);
+  if (result.reason === 'exited') process.exit(failure ? 1 : result.exitCode ?? 0);
   if (result.reason === 'closed') {
     process.stderr.write(`${error(`The host stopped unexpectedly. See ${paths.hostLog}`)}\n`);
     process.exit(1);
   }
   if (result.reason === 'takeover') process.stdout.write('Attached in another terminal.\n');
   process.stdout.write(`${styleText('dim', 'Pi keeps running. To reattach:')} pd attach ${id ?? '<session>'}\n`);
-  process.exit(0);
+  process.exit(failure ? 1 : 0);
 }
 
 /** The running host already holding the Session that `--session`, `--session-id`, or `-c` would open. */
@@ -143,8 +147,8 @@ async function attachCommand(query) {
 
 /** Warns about the options a running Session does not apply. */
 function warnIgnored(options) {
-  const ignored = options.filter((arg, i) => !['--session', '--session-dir', '-c', '--continue'].includes(arg)
-    && !arg.startsWith('--session=') && !['--session', '--session-dir'].includes(options[i - 1]));
+  const ignored = options.filter((arg, i) => !['--session', '--session-id', '--session-dir', '-c', '--continue'].includes(arg)
+    && !arg.startsWith('--session=') && !arg.startsWith('--session-id=') && !['--session', '--session-id', '--session-dir'].includes(options[i - 1]));
   if (ignored.length) process.stderr.write(`${styleText('yellow', `The Session is already running; using it without applying: ${ignored.join(' ')}`, { stream: process.stderr })}\n`);
 }
 
@@ -169,10 +173,15 @@ else if (headlessMode()) {
 }
 else {
   const running = await runningTarget();
-  // Pi already runs this Session, so options that would start it differently do not apply.
-  if (running) warnIgnored(args);
+  let send;
+  if (running) {
+    // Pi already runs this Session: its messages reach it as follow-ups once attached, as Pi sends them once its TUI starts,
+    // and options that would start it differently do not apply.
+    const { startupMessages } = await import('../src/host/rpc-client.mjs');
+    send = await startupMessages({ pi: real, paths, args, running, warnIgnored });
+  }
   const socket = running?.socket ?? await startHost(paths, {
     pi: real, args, cwd: process.cwd(), cols: process.stdout.columns, rows: process.stdout.rows, waitForTerminal: true,
   });
-  await attachAndReport(socket);
+  await attachAndReport(socket, send);
 }
