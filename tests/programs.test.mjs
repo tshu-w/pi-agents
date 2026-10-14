@@ -254,6 +254,25 @@ test("agent() handles return answers and submitted values, and schema inputs fai
 	await root.close();
 });
 
+test("a send() timeout aborts only that input, whether running or queued, and the Agent stays usable", async () => {
+	const root = await startRoot(undefined, undefined, { maxConcurrent: 1 });
+	const result = await root.text({ action: "run", code: `
+		const a = agent({ name: 'a' }), b = agent({ name: 'b' });
+		const errors = [];
+		const running = a.send('hold', { timeout: 0.5 }).catch((error) => errors.push(error.message));
+		try { await b.send('queued', { timeout: 0.2 }); } catch (error) { errors.push(error.message); }
+		await running;
+		try { await a.send('x', { deliverAs: 'steer', timeout: 1 }); } catch (error) { errors.push(error.message); }
+		return { errors, answers: [await a.send('again'), await b.send('again')] };
+	` });
+	const value = JSON.parse(result.slice(result.indexOf("Output:\n") + 8));
+	assert.match(value.errors[0], /^Agent b \(\S+\) timed out after 0\.2 seconds\.$/);
+	assert.match(value.errors[1], /^Agent a \(\S+\) timed out after 0\.5 seconds\.$/);
+	assert.equal(value.errors[2], 'send() accepts timeout only with deliverAs "followUp"');
+	assert.deepEqual(value.answers, ["answer:again", "answer:again"]);
+	await root.close();
+});
+
 test("a Program's Agents are invisible to the caller, count toward its limit, and are aborted when it stops", async () => {
 	const root = await startRoot(undefined, undefined, { maxConcurrent: 2, maxOutstanding: 2 });
 	const waitBusy = async (count) => {

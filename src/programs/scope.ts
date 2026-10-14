@@ -55,7 +55,7 @@ export function programScope(
 		},
 		send: async (agentId, message, sendOptions: SendOptions) => {
 			const delivery = sendOptions.deliverAs ?? "followUp";
-			const { schema } = sendOptions;
+			const { schema, timeout } = sendOptions;
 			if (typeof message !== "string" || !message.trim()) throw new Error("send() requires a non-empty message");
 			if (!DELIVERIES.includes(delivery)) throw new Error('send() deliverAs must be "followUp", "steer", or "write"');
 			if (schema !== undefined) {
@@ -64,6 +64,10 @@ export function programScope(
 					throw new Error("send() schema must be a JSON Schema object or boolean");
 				}
 			}
+			if (timeout !== undefined) {
+				if (delivery !== "followUp") throw new Error('send() accepts timeout only with deliverAs "followUp"');
+				if (typeof timeout !== "number" || !(timeout > 0) || !Number.isFinite(timeout)) throw new Error("send() timeout must be a positive number of seconds");
+			}
 			const agent = agents.ownedTarget(agentId).record;
 			const body = schema === undefined ? message : `${message}\n\nWhen done, call \`${SUBMIT_RESULT_TOOL_NAME}\` with a \`value\` that matches this JSON Schema:\n${JSON.stringify(schema)}`;
 			const text = messageText(from, true, delivery, body, visibleIds(agentId, false));
@@ -71,8 +75,9 @@ export function programScope(
 				agents.accept(agentId, text, "write", { fromOwner: true, notification: false });
 				return undefined;
 			}
-			const record = await agents.request(agentId, text, delivery, schema);
+			const { record, timedOut } = await agents.request(agentId, text, delivery, schema, timeout === undefined ? undefined : timeout * 1000);
 			if (record.state === "completed") return schema === undefined ? record.result : record.value;
+			if (timedOut) throw new Error(`Agent ${label(agent, agents.ids())} timed out after ${timeout} seconds.`);
 			throw new Error(record.state === "failed" ? `Agent ${label(agent, agents.ids())} failed: ${record.result}` : `Agent ${label(agent, agents.ids())} was aborted.`);
 		},
 		abort: async (agentId) => {

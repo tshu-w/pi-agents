@@ -415,14 +415,25 @@ export class Agents {
 	/**
 	 * Sends an input from the owner and resolves when it ends. With a schema, the Agent must call
 	 * `submit_result` with a matching value, which becomes the input's `value`; `text` tells it so.
+	 * An input not ended within `timeoutMs` is aborted alone, and `timedOut` is set.
 	 */
-	async request(id: string, text: string, delivery: "followUp" | "steer", schema?: unknown): Promise<InputRecord> {
+	async request(id: string, text: string, delivery: "followUp" | "steer", schema?: unknown, timeoutMs?: number): Promise<{ record: InputRecord; timedOut: boolean }> {
 		const agent = this.agent(id);
 		const input: Input = { text, permit: this.reserve(), record: this.newRecord(agent), done: deferred() };
 		if (schema !== undefined) input.schema = schema;
 		this.add(agent, input, delivery);
-		await input.done!.promise;
-		return input.record!;
+		let stopping: Promise<void> | undefined;
+		const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
+			stopping = this.cancel(agent, input);
+			stopping.catch(() => {});
+		}, timeoutMs);
+		try {
+			await input.done!.promise;
+		} finally {
+			clearTimeout(timer);
+		}
+		await stopping;
+		return { record: input.record!, timedOut: stopping !== undefined && input.record!.state === "aborted" };
 	}
 
 	/** Records a value from `submit_result` for the Agent's current input with a schema. */
@@ -521,22 +532,37 @@ export class Agents {
 		if (silent) for (const input of [...agent.queue, ...(turn?.inputs ?? [])]) input.silent = true;
 		for (const input of agent.queue.splice(0)) this.end(agent, input, "aborted", "");
 		this.changed();
-		if (turn) {
-			turn.abort.abort();
-			const stopping = (async () => {
-				if (turn.started && agent.session) {
-					agent.session.abortCompaction();
-					agent.session.abortRetry();
-					await agent.session.abort();
-				}
-				await turn.done.promise;
-			})();
-			if (!await settlesBy(stopping, deadline)) {
-				this.finish(agent, turn, { outcome: "aborted", result: "" });
-				throw new Error(`Agent ${label(agent.record, this.ids())} did not stop within the timeout and may still be running.`);
-			}
-		}
+		if (turn) await this.stop(agent, turn, deadline);
 		return true;
+	}
+
+	/** Ends one input as aborted: withdraws it if queued, or else stops its turn, as `abort` does. */
+	private async cancel(agent: Owned, input: Input): Promise<void> {
+		const index = agent.queue.indexOf(input);
+		if (index !== -1) {
+			agent.queue.splice(index, 1);
+			this.end(agent, input, "aborted", "");
+			this.changed();
+		} else if (agent.turn?.inputs.includes(input)) {
+			await this.stop(agent, agent.turn, Date.now() + SHUTDOWN_TIMEOUT_MS);
+		}
+	}
+
+	/** Stops a turn; one that has not stopped by `deadline` is abandoned: its inputs end as aborted, and this throws. */
+	private async stop(agent: Owned, turn: Turn, deadline: number): Promise<void> {
+		turn.abort.abort();
+		const stopping = (async () => {
+			if (turn.started && agent.session) {
+				agent.session.abortCompaction();
+				agent.session.abortRetry();
+				await agent.session.abort();
+			}
+			await turn.done.promise;
+		})();
+		if (!await settlesBy(stopping, deadline)) {
+			this.finish(agent, turn, { outcome: "aborted", result: "" });
+			throw new Error(`Agent ${label(agent.record, this.ids())} did not stop within the timeout and may still be running.`);
+		}
 	}
 
 	restore(ctx: ExtensionContext): void {

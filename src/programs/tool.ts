@@ -59,11 +59,13 @@ interface SendOptions {
   deliverAs?: "followUp" | "steer" | "write";
   /** \`followUp\` only. The Agent must submit a value matching it. */
   schema?: JsonSchema;
+  /** \`followUp\` only. Seconds before the input is aborted. Default: none. */
+  timeout?: number;
 }
 interface AgentHandle {
   readonly id: string;
   readonly name: string;
-  /** Resolves with the answer, or with the submitted value when \`schema\` is set; a write resolves with undefined once accepted. Throws if the input fails or is aborted. */
+  /** Resolves with the answer, or with the submitted value when \`schema\` is set; a write resolves with undefined once accepted. Throws if the input fails, is aborted, or times out. */
   send(message: string, options?: SendOptions): Promise<unknown>;
   /** Aborts the Agent's current turn and queued inputs; the Agent stays usable. */
   abort(): Promise<void>;

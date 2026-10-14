@@ -12,6 +12,7 @@ export interface AgentOptions {
 export interface SendOptions {
 	deliverAs?: "followUp" | "steer" | "write";
 	schema?: unknown;
+	timeout?: number;
 }
 
 /** What `agent()` and its handles do on the host. */
