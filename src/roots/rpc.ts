@@ -222,22 +222,44 @@ export function installRpcPatches(Session: typeof AgentSession, Runner: typeof E
 	};
 	// While a job holds the Session, a run that is not part of it, as one an input hook delayed past the job's turn
 	// or an Agent's message started, waits until the job ends; a run started by then takes its messages as follow-ups.
-	const runAgentPrompt = session._runAgentPrompt;
-	session._runAgentPrompt = async function (this: Patchable, messages: unknown) {
-		const current = lane(this);
+	// Pi 1.2 starts runs with `_startRun(trigger, onStarted)`, which prepares the messages itself; Pi 1.1 with
+	// `_runAgentPrompt(messages)`.
+	const waitForJob = async (self: Patchable): Promise<boolean> => {
+		const current = lane(self);
 		const store = admitting.getStore();
-		if (current.holder && (store?.session !== this || store.job !== current.holder)) {
-			current.deferred++;
-			try {
-				while (current.holder) await current.holder.ended;
-			} finally {
-				current.deferred--;
-			}
-			if (this._isEmittingAgentSettled) return void this._deferredSettledActions.push(() => this._runAgentPrompt(messages));
-			if (this.isStreaming) return void [messages].flat().forEach((message) => this.agent.followUp(message));
+		if (!current.holder || (store?.session === self && store.job === current.holder)) return false;
+		current.deferred++;
+		try {
+			while (current.holder) await current.holder.ended;
+		} finally {
+			current.deferred--;
 		}
-		return runAgentPrompt.call(this, messages);
+		return true;
 	};
+	const followUp = (self: Patchable, messages: unknown) => [messages].flat().forEach((message) => self.agent.followUp(message));
+	if (typeof session._startRun === "function") {
+		const startRun = session._startRun;
+		session._startRun = async function (this: Patchable, trigger: unknown, onStarted?: () => void) {
+			if (await waitForJob(this)) {
+				if (this._isEmittingAgentSettled) return void this._deferredSettledActions.push(() => this._startRun(trigger, onStarted));
+				if (this.isStreaming) {
+					const messages = await this._prepareRun(trigger);
+					onStarted?.();
+					return void followUp(this, messages);
+				}
+			}
+			return startRun.call(this, trigger, onStarted);
+		};
+	} else {
+		const runAgentPrompt = session._runAgentPrompt;
+		session._runAgentPrompt = async function (this: Patchable, messages: unknown) {
+			if (await waitForJob(this)) {
+				if (this._isEmittingAgentSettled) return void this._deferredSettledActions.push(() => this._runAgentPrompt(messages));
+				if (this.isStreaming) return void followUp(this, messages);
+			}
+			return runAgentPrompt.call(this, messages);
+		};
+	}
 	const runner = Runner.prototype as Patchable;
 	const setUIContext = runner.setUIContext;
 	runner.setUIContext = function (this: Patchable, ui: Patchable | undefined, mode: string) {
