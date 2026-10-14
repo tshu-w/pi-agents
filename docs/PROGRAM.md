@@ -243,7 +243,7 @@ Program <id> has already ended.
 ```
 
 When some of the Program's work does not stop within the timeout, `stop`
-fails with:
+fails with the following; only restarting Pi stops it.
 
 ```text
 Program <id> did not stop within the timeout and may still be running.

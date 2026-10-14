@@ -50,9 +50,12 @@ load the extension, but run outside hosts and end with their terminal.
   running.
 - Non-interactive starts (`-p`, `--mode json`, `--mode rpc`, piped stdin) work
   as in Pi, on the Session in a host, so several of them and an attached
-  terminal can use one Session at once. Unlike Pi:
+  terminal can use one Session at once. Their commands act on that Session,
+  as `abort` stops whichever turn is running. Unlike Pi:
   - Dialogs are not sent to them. A dialog waits while a terminal is attached
     and is cancelled otherwise.
+  - Extensions see interactive mode, so what an extension writes to stdout
+    does not reach them; `/program` prints as with `pi -p`.
   - `new_session`, `switch_session`, `fork`, and `clone` move only the caller
     to the other Session.
   - `-p` and `--mode json` wait until the Session is idle, then run their

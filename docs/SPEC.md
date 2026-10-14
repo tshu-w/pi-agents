@@ -76,7 +76,7 @@ stays `idle`.
 if needed. Acceptance does not mean the recipient has handled it; a message
 not yet handled is lost if the recipient exits.
 
-An input to an offline Agent wakes it. A write never wakes an Agent.
+An input to an offline Agent wakes it; a write to one is rejected.
 
 Owned Agents run independently of their owner's turns. When their owner
 goes offline, they go offline too, from the bottom of the tree up, and their
@@ -106,7 +106,7 @@ continuing, ahead of inputs that have not started.
 
 An input is outstanding from acceptance until its turn ends or it is
 withdrawn. `maxOutstanding` (default 8) limits outstanding inputs; an input
-beyond it is rejected.
+beyond it is rejected. Notifications (§5) do not count.
 
 ## 5. Results and notifications
 
@@ -316,6 +316,13 @@ Input rejected: <N> inputs have not ended. Wait for results or abort an Agent.
 
 ```text
 <name> (<id>) is not owned by the caller.
+```
+
+When an aborted turn does not stop within the timeout (§3), `abort` fails
+with the following; only restarting Pi stops it.
+
+```text
+Agent <name> (<id>) did not stop within the timeout and may still be running.
 ```
 
 truncation:
