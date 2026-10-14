@@ -188,6 +188,8 @@ export class Programs {
 	 */
 	async stop(program: Running, reason = "Program stopped"): Promise<boolean> {
 		if (ended(program.record)) return false;
+		// As with `abort`, the caller that stops a Program is not notified.
+		program.record.notified = true;
 		program.controller?.abort(new Error(reason));
 		if (!await settlesBy(program.done!, Date.now() + CLEANUP_TIMEOUT_MS)) {
 			program.abandoned = true;

@@ -190,10 +190,14 @@ test("stop and timeout stop background Programs", async () => {
 	const stopped = idOf(await root.text({ action: "run", background: true, code: loop }));
 	const timedOut = idOf(await root.text({ action: "run", background: true, code: loop, timeout: 0.2 }));
 	const spinning = idOf(await root.text({ action: "run", background: true, code: "while (true) {}" }));
+	// Only the Program that timed out notifies its caller.
+	await until(() => root.messages.includes(`Program ${timedOut} stopped.`), "timeout notification");
 	await root.text({ action: "stop", target: stopped });
 	await root.text({ action: "stop", target: spinning });
+	await root.session.waitForIdle();
 	const results = await root.text({ action: "wait", target: [stopped, timedOut, spinning], timeout: 10 });
 	for (const id of [stopped, timedOut, spinning]) assert.match(results, new RegExp(`<program-result id="${id}" status="stopped">`));
+	assert.deepEqual(root.messages.filter((message) => /^Program \S+ stopped\.$/.test(message)), [`Program ${timedOut} stopped.`]);
 	await root.close();
 });
 
