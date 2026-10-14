@@ -3,7 +3,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deferred, settlesBy, STEER_POLL_MS, WAIT_INTERRUPTED, waitForChange, type Deferred } from "../agents/agents.ts";
 import { shortId, trackTreeWork } from "../agents/registry.ts";
 import { boundBlocks, boundText } from "../output.ts";
-import type { ProgramFiles, ProgramOutcome, ProgramRunResult } from "./execute.ts";
+import { PROGRAM_TOOL_NAME, type ProgramFiles, type ProgramOutcome, type ProgramRunResult } from "./execute.ts";
 
 const PROGRAM_ENTRY = "pi-agents-program";
 const CLEANUP_TIMEOUT_MS = 15_000;
@@ -22,13 +22,25 @@ export interface ProgramRecord {
 	isError?: boolean;
 	/** Files the Program's tool calls used, for compaction. */
 	files?: ProgramFiles;
+	/** The tool calls its result lists, which the task viewer shows after a restart. */
+	calls?: unknown[];
 	/** Whether `wait` has returned the result. */
 	returned: boolean;
 	notified: boolean;
 }
 
+/** What the task viewer shows of a Program, as its tool call shows in the foreground. */
+export interface ProgramView {
+	record: ProgramRecord;
+	code?: string;
+	/** The latest partial result while it runs, then its result. */
+	result?: ProgramRunResult["result"];
+}
+
 interface Running {
 	record: ProgramRecord;
+	code?: string;
+	result?: ProgramRunResult["result"];
 	controller?: AbortController;
 	done?: Promise<void>;
 	/** Stops counting the Program as the tree's work. */
@@ -60,6 +72,7 @@ export class Programs {
 	private programs = new Map<string, Running>();
 	private change: Deferred = deferred();
 	private closing = false;
+	private viewers = new Set<() => void>();
 
 	constructor(
 		private rootId: string,
@@ -72,10 +85,26 @@ export class Programs {
 	) {}
 
 	restore(ctx: ExtensionContext): void {
+		// A Program's code is in the `run` call that started it, whose result names the Program.
+		const codes = new Map<string, string>();
+		const callIds = new Map<string, string>();
 		for (const entry of ctx.sessionManager.getEntries()) {
+			if (entry.type === "message" && entry.message.role === "assistant") {
+				for (const part of entry.message.content) {
+					const code = part.type === "toolCall" && part.name === PROGRAM_TOOL_NAME ? (part.arguments as { code?: unknown }).code : undefined;
+					if (typeof code === "string") codes.set((part as { id: string }).id, code);
+				}
+			} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === PROGRAM_TOOL_NAME) {
+				const id = (entry.message.details as { id?: unknown } | undefined)?.id;
+				if (typeof id === "string") callIds.set(id, entry.message.toolCallId);
+			}
 			if (entry.type !== "custom" || entry.customType !== PROGRAM_ENTRY) continue;
 			const record = entry.data as ProgramRecord;
 			this.programs.set(record.id, { record, waiters: 0 });
+		}
+		for (const program of this.programs.values()) {
+			const callId = callIds.get(program.record.id);
+			program.code = callId === undefined ? undefined : codes.get(callId);
 		}
 		for (const program of this.programs.values()) {
 			const { record } = program;
@@ -88,19 +117,25 @@ export class Programs {
 		}
 	}
 
-	/** Starts a background Program, which `run` executes with its ID, and returns its record. */
-	start(run: (id: string, signal: AbortSignal, abort: () => void) => Promise<ProgramRunResult>): ProgramRecord {
+	/** Starts a background Program, which `run` executes with its ID and reports its partial results to `update`, and returns its record. */
+	start(code: string, run: (id: string, signal: AbortSignal, abort: () => void, update: (result: unknown) => void) => Promise<ProgramRunResult>): ProgramRecord {
 		const record: ProgramRecord = { id: randomUUID(), state: "running", startedAt: Date.now(), returned: false, notified: false };
 		const controller = new AbortController();
-		const program: Running = { record, controller, waiters: 0 };
+		const program: Running = { record, code, controller, waiters: 0 };
+		const update = (result: unknown) => {
+			if (ended(record)) return;
+			program.result = result as Running["result"];
+			this.viewed();
+		};
 		this.programs.set(record.id, program);
 		// The tree stays busy until the Program ends and its notification is delivered.
 		const release = program.release = trackTreeWork(this.rootId);
 		this.persist(record);
 		this.hooks.changed?.();
-		program.done = run(record.id, controller.signal, () => controller.abort(new Error("Program stopped"))).then(
+		program.done = run(record.id, controller.signal, () => controller.abort(new Error("Program stopped")), update).then(
 			({ outcome, result, files, abandoned }) => {
 				if (abandoned) program.abandoned = true;
+				if (!ended(record)) program.result = result;
 				this.end(program, outcome, result.content, result.isError === true, files);
 			},
 			(error: unknown) => this.end(program, "failed", [{ type: "text", text: `Script failed\nOutput:\nScript error:\n${error instanceof Error ? error.message : String(error)}` }], true),
@@ -131,6 +166,20 @@ export class Programs {
 
 	list(): ProgramRecord[] {
 		return [...this.programs.values()].map((program) => program.record).sort((a, b) => b.startedAt - a.startedAt);
+	}
+
+	view(id: string): ProgramView | undefined {
+		const program = this.programs.get(id);
+		if (!program) return undefined;
+		const { record, code } = program;
+		const restored = record.content && { content: record.content, details: record.calls && { calls: record.calls }, isError: record.isError };
+		return { record, code, result: program.result ?? restored as ProgramView["result"] };
+	}
+
+	/** Calls `listener` when a Program's view changes; returns a function that stops it. */
+	onView(listener: () => void): () => void {
+		this.viewers.add(listener);
+		return () => this.viewers.delete(listener);
 	}
 
 	/**
@@ -220,6 +269,10 @@ export class Programs {
 		record.state = outcome;
 		record.content = content;
 		record.isError = isError;
+		// Keeps the calls the result's details list, from the result or the last partial one.
+		program.result = { content, details: program.result?.details, isError };
+		const calls = (program.result.details as { calls?: unknown[] } | undefined)?.calls;
+		if (calls?.length) record.calls = calls;
 		if (files && (files.read.length > 0 || files.written.length > 0 || files.edited.length > 0)) record.files = files;
 		program.controller = undefined;
 		this.persist(record);
@@ -228,6 +281,11 @@ export class Programs {
 		this.change = deferred();
 		previous.resolve();
 		this.hooks.changed?.();
+		this.viewed();
+	}
+
+	private viewed(): void {
+		for (const listener of this.viewers) listener();
 	}
 
 	private notify(record: ProgramRecord): void {

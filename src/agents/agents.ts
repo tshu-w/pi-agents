@@ -203,7 +203,7 @@ function ended(input: InputRecord): boolean {
 
 interface Input {
 	text: string;
-	/** The user's input from the Agent viewer. */
+	/** The user's input from the task viewer. */
 	user?: boolean;
 	record?: InputRecord;
 	permit?: symbol;

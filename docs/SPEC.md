@@ -363,7 +363,7 @@ asking for a reply:
 
 A panel above the editor shows the current Agent's live work:
 
-    Tasks (<N> live, /tasks to hide)
+    Tasks (<N> live, /tasks to view)
       Agent <name> (<id>)  <state>  <time>  <cost>  <N> pending
         Agent <name> (<id>)  <state>  <time>  <cost>
       Program <id>  running  <time>  <cost>
@@ -382,7 +382,7 @@ like `7.3M tok`.
 
 The panel updates as states change, and its times each second. It is shown
 while it has a row.
-`/tasks` hides or shows it.
+`/tasks panel` hides or shows it.
 
 ### Queued messages
 
@@ -394,21 +394,22 @@ Session takes them in:
     Write: [<sender>] <body>
     Follow-up: [<sender>] <body>
 
-### Agent viewer
+### Task viewer
 
-`/agents` lists the Agents in the current Agent's tree, including Programs'
-Agents, those not `idle` first and newest first within each group, with their state
-and latest activity, and opens the selected one in a viewer. An Agent not owned
-by the current Agent is named with its owners up to it, as
-`<name> ‹ <owner> ‹ …`, where a Program is `Program <id>`. The viewer shows the
-Agent's conversation and updates while it works; the current Session keeps
-running behind it.
+`/tasks` lists the Agents in the current Agent's tree, including its Programs'
+Agents, and its background Programs, live ones first and newest first, with
+their state and latest activity, and opens the selected one in a viewer. An
+Agent not owned by the current Agent is named with its owners, as
+`<name> ‹ <owner> ‹ …`, where a Program is `Program <id>`. The viewer follows
+an Agent's conversation, or a Program as it shows in the foreground, while the
+current Session keeps running.
 
-Text entered in the viewer is the user's input to that Agent and is sent as
-in Pi's editor.
+Text entered in an Agent's viewer is the user's input to it, sent as in Pi's
+editor; a Program takes no input.
 
-`app.interrupt` stops the Agent's current turn, as `abort` does.
-`app.clear` clears the input, and closes the viewer when the input is empty.
+`app.interrupt` stops an Agent's current turn, as `abort` does, or a Program,
+as `stop` does. `app.clear` clears the input, and closes the viewer when the
+input is empty.
 
 ### Workbench
 

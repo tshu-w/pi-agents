@@ -41,7 +41,7 @@ import { agentSession, installRpcPatches } from "./roots/rpc.ts";
 import { createRootRuntime } from "./roots/runtime.ts";
 import { createPanel } from "./ui/panel.ts";
 import { showQueue } from "./ui/queue.ts";
-import { openAgentViewer } from "./ui/viewer.ts";
+import { openTaskViewer } from "./ui/viewer.ts";
 
 const DEFAULT_LIMITS: Limits = { maxConcurrent: 3, maxOutstanding: 8 };
 
@@ -204,17 +204,17 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	registerProgramTools(pi, { agentDir, settings, piCodemode, requireNode, programs: () => programs });
 
 	pi.registerCommand("tasks", {
-		description: "Hide or show the task panel",
-		handler: async () => panel.toggle(),
-	});
-
-	pi.registerCommand("agents", {
-		description: "Open an owned Agent to watch and talk to it",
-		handler: async (_args, current) => {
+		description: "Watch an Agent or Program; `/tasks panel` toggles the panel",
+		handler: async (args, current) => {
+			if (args.trim() === "panel") return panel.toggle();
+			if (args.trim()) {
+				current.ui.notify("Usage: /tasks [panel]", "error");
+				return;
+			}
 			if (!node) return;
 			browsing = true;
 			try {
-				await openAgentViewer(current, requireNode(current), pi.getSettings().editorPaddingX ?? 0);
+				await openTaskViewer(current, requireNode(current), programs, pi.getSettings().editorPaddingX ?? 0);
 			} finally {
 				browsing = false;
 			}

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { stripVTControlCharacters } from "node:util";
 import { fileURLToPath } from "node:url";
 
 const agentDir = mkdtempSync(join(tmpdir(), "pi-agents-home-"));
@@ -127,6 +128,45 @@ test("a background Program runs on after run returns, notifies its caller, and w
 	assert.equal(await root.text({ action: "wait", timeout: 10 }), "No results.");
 	assert.match(await root.text({ action: "list" }), new RegExp(`^${id}  completed$`));
 	await root.close();
+});
+
+test("/tasks opens a background Program as its tool call shows in the foreground, also after the Session reopens", async () => {
+	const root = await startRoot();
+	const { details } = await root.call({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' }); return 'done'" });
+	await until(() => root.messages.some((message) => /^Program \S+ completed\.$/.test(message)), "notification");
+	pi.initTheme();
+	const noop = () => {};
+	// The list picks the Program, whose viewer is rendered once.
+	const view = async (session) => {
+		const runner = session.extensionRunner;
+		let lines;
+		const custom = async (factory) => {
+			if (lines === undefined) return (lines = "", `program:${details.id}`);
+			const viewer = factory({ terminal: { rows: 40 }, requestRender: noop }, pi.theme, { matches: () => false }, noop);
+			lines = stripVTControlCharacters(viewer.render(100).join("\n"));
+			viewer.dispose();
+		};
+		await runner.getCommand("tasks").handler("", { ...runner.createCommandContext(), ui: { notify: noop, custom } });
+		return lines;
+	};
+	const file = root.sessionManager.getSessionFile();
+	let live, restored;
+	try {
+		live = await view(root.session);
+	} finally {
+		await root.close();
+	}
+	const reopened = await startRoot(root.cwd, file);
+	try {
+		restored = await view(reopened.session);
+	} finally {
+		await reopened.close();
+	}
+	for (const lines of [live, restored]) {
+		assert.match(lines, /await tools\.read\(\{ path: 'note\.txt' \}\)/);
+		assert.match(lines, /✓ read/);
+		assert.match(lines, /\n done/);
+	}
 });
 
 test("stop and timeout stop background Programs", async () => {

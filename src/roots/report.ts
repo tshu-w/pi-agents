@@ -13,7 +13,7 @@ export interface ReportHooks {
 	treeIdle(): boolean;
 	/** The tree's running owned Agents and background Programs. */
 	liveWork(): number;
-	/** Whether `/agents` is open, whose list and viewer Pi counts as prompts though they ask nothing. */
+	/** Whether `/tasks` is open, whose list and viewer Pi counts as prompts though they ask nothing. */
 	browsing(): boolean;
 	/** The host this Pi runs in, if any. */
 	host?: { socket: string; attached(): boolean; onChange(listener: () => void): void };

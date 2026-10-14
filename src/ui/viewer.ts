@@ -36,6 +36,9 @@ import {
 } from "@earendil-works/pi-tui";
 import { MESSAGE_TYPE, nodes, onTreeChange, programLabel, programsOf, type AgentNode, type Entry } from "../agents/registry.ts";
 import { latestActivity } from "../agents/search.ts";
+import { PROGRAM_TOOL_NAME } from "../programs/execute.ts";
+import type { Programs } from "../programs/programs.ts";
+import { agentSession } from "../roots/rpc.ts";
 import { execFileSync } from "node:child_process";
 
 type Message = AgentSession["messages"][number];
@@ -328,6 +331,79 @@ class AgentViewer implements Component, Focusable {
 	}
 }
 
+/** The user's view of one background Program, as its tool call shows in the foreground. */
+class ProgramViewer implements Component, Focusable {
+	private readonly tool: ToolExecutionComponent;
+	private expanded = false;
+	/** Lines scrolled up from the end. */
+	private scroll = 0;
+	private disposers: Array<() => void> = [];
+	focused = false;
+
+	constructor(
+		private tui: TUI,
+		private theme: Theme,
+		private keys: KeybindingsManager,
+		private ctx: ExtensionContext,
+		private programs: Programs,
+		private id: string,
+		private done: () => void,
+	) {
+		const code = programs.view(id)?.code;
+		this.tool = new ToolExecutionComponent(PROGRAM_TOOL_NAME, `program-${id}`, { action: "run", background: true, ...(code !== undefined && { code }) }, { showImages: false },
+			agentSession(ctx.sessionManager)?.getToolDefinition(PROGRAM_TOOL_NAME), tui, ctx.cwd);
+		this.tool.markExecutionStarted();
+		this.sync();
+		this.disposers.push(programs.onView(() => {
+			this.sync();
+			this.tui.requestRender();
+		}));
+	}
+
+	handleInput(data: string): void {
+		const page = Math.max(1, this.tui.terminal.rows - 4);
+		if (this.keys.matches(data, "app.clear" as never)) return this.done();
+		if (this.keys.matches(data, "app.interrupt" as never)) this.stop();
+		else if (this.keys.matches(data, "app.tools.expand" as never)) {
+			this.expanded = !this.expanded;
+			this.tool.setExpanded(this.expanded);
+		} else if (matchesKey(data, "pageUp")) this.scroll += page;
+		else if (matchesKey(data, "pageDown")) this.scroll = Math.max(0, this.scroll - page);
+		this.tui.requestRender();
+	}
+
+	render(width: number): string[] {
+		const running = this.programs.view(this.id)?.record.state === "running";
+		const hints = [...running ? [keyHint("app.interrupt", "stop")] : [], keyHint("app.clear", "back")].join("  ");
+		const footer = truncateToWidth(" ".repeat(Math.max(0, width - visibleWidth(hints))) + hints, width);
+		const border = new DynamicBorder().render(width);
+		const budget = Math.max(1, this.tui.terminal.rows - border.length - 2);
+		const lines = this.tool.render(width);
+		this.scroll = Math.min(this.scroll, Math.max(0, lines.length - budget));
+		const end = lines.length - this.scroll;
+		// As tall as its content, so the Session shows above it.
+		return [...border, ...lines.slice(Math.max(0, end - budget), end), " ".repeat(width), footer];
+	}
+
+	invalidate(): void {
+		this.tool.invalidate();
+	}
+
+	dispose(): void {
+		for (const dispose of this.disposers.splice(0)) dispose();
+	}
+
+	private sync(): void {
+		const view = this.programs.view(this.id);
+		if (view?.result) this.tool.updateResult(view.result as ToolResult, view.record.state === "running");
+	}
+
+	private stop(): void {
+		this.programs.stop(this.programs.target(this.id)).catch((error: unknown) =>
+			this.ctx.ui.notify(error instanceof Error ? error.message : String(error), "error"));
+	}
+}
+
 /** A filterable list in place of the editor, like Pi Durable's conversation switcher. */
 class ListSelector extends Container implements Focusable {
 	private readonly input = new Input();
@@ -404,12 +480,17 @@ export function ownedEntries(self: AgentNode): Entry[] {
 	return entries.sort((a, b) => Number(b.state !== "idle") - Number(a.state !== "idle") || (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
 }
 
-/** `/agents`: picks an owned Agent and opens it in the viewer. */
-/** `paddingX` is Pi's editor padding, so the viewer's editor lines up as Pi's does. */
-export async function openAgentViewer(ctx: ExtensionContext, self: AgentNode, paddingX: number): Promise<void> {
+const PROGRAM_ITEM = "program:";
+
+/**
+ * `/tasks`: picks an Agent in the tree or a background Program, live ones first and newest first, and opens it in
+ * the viewer. `paddingX` is Pi's editor padding, so the viewer's editor lines up as Pi's does.
+ */
+export async function openTaskViewer(ctx: ExtensionContext, self: AgentNode, programs: Programs | undefined, paddingX: number): Promise<void> {
 	const entries = ownedEntries(self);
-	if (entries.length === 0) {
-		ctx.ui.notify("No owned Agents.", "info");
+	const records = programs?.list() ?? [];
+	if (entries.length === 0 && records.length === 0) {
+		ctx.ui.notify("No tasks.", "info");
 		return;
 	}
 	const byId = new Map(entries.map((entry) => [entry.id, entry]));
@@ -421,13 +502,30 @@ export async function openAgentViewer(ctx: ExtensionContext, self: AgentNode, pa
 		return program?.program ? ` ‹ ${programLabel(program)}${owners(program.ownerId)}` : "";
 	};
 	const path = (entry: Entry): string => `${entry.name ?? entry.id}${owners(entry.ownerId)}`;
-	const items: SelectItem[] = entries.map((entry) => ({
-		value: entry.id,
-		label: path(entry),
-		description: [entry.state, latestActivity(entry.sessionFile) ?? ""].filter(Boolean).join("  "),
-	}));
+	const tasks = [
+		...entries.map((entry) => ({ live: entry.state !== "idle", at: entry.createdAt ?? "", item: {
+			value: entry.id,
+			label: path(entry),
+			description: [entry.state, latestActivity(entry.sessionFile) ?? ""].filter(Boolean).join("  "),
+		} })),
+		...records.map((record) => ({ live: record.state === "running", at: new Date(record.startedAt).toISOString(), item: {
+			value: PROGRAM_ITEM + record.id,
+			label: `Program ${programs!.label(record)}`,
+			description: record.state,
+		} })),
+	];
+	const items: SelectItem[] = tasks
+		.sort((a, b) => Number(b.live) - Number(a.live) || b.at.localeCompare(a.at))
+		.map((task) => task.item);
 	const id = await ctx.ui.custom<string | undefined>((_tui, theme, keys, done) =>
-		new ListSelector("Open Agent:", items, theme, keys, (value) => done(value), () => done(undefined)));
+		new ListSelector("Open task:", items, theme, keys, (value) => done(value), () => done(undefined)));
+	if (id?.startsWith(PROGRAM_ITEM) && programs) {
+		await ctx.ui.custom<void>(
+			(tui, theme, keys, done) => new ProgramViewer(tui, theme, keys, ctx, programs, id.slice(PROGRAM_ITEM.length), () => done()),
+			{ overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "bottom-center" } },
+		);
+		return;
+	}
 	const entry = id === undefined ? undefined : byId.get(id);
 	const owner = entry?.ownerId === undefined ? undefined : nodes.get(entry.ownerId);
 	if (!entry || !owner) return;

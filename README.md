@@ -9,7 +9,7 @@ https://github.com/user-attachments/assets/52dd1de6-bf26-45ea-8775-2b1a1a187f4f
 
 1. Ask for three background reviews. Three Agents start, and the task panel lists them.
 2. Ask about `res.redirect` while they run. The first review finishes, and its notification arrives.
-3. `/agents` opens `review-application` to watch it work; `Ctrl+C` returns.
+3. `/tasks` opens `review-application` to watch it work; `Ctrl+C` returns.
 4. The other notifications arrive, and the main Agent reports each review.
 5. Ask for a summary of each file in `lib/`. A background Program starts one Agent per file; the panel shows three running and the rest queued.
 6. `Ctrl+Z` detaches and leaves the Session running. `pd agents` opens the workbench, and `Space` previews the Session.
@@ -50,9 +50,9 @@ Ask Pi in plain words; it starts Agents and Programs when the work calls for the
 
 | Command | Does |
 |---|---|
-| `/agents` | Opens an Agent in the tree to watch and talk to it |
 | `/program <path> [args]` | Runs a saved Program script, with `args` as its input |
-| `/tasks` | Hides or shows the task panel |
+| `/tasks` | Opens an Agent or background Program to watch it; you can talk to Agents |
+| `/tasks panel` | Hides or shows the task panel |
 | `Ctrl+Z`, `/detach` | Leaves a Session running and returns to the shell |
 | `pd agents` | Opens the workbench |
 | `pd attach <session>` | Attaches to a Session, starting it if needed |

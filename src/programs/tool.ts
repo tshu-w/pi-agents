@@ -177,7 +177,7 @@ export function registerProgramTools(
 					if (!params.code?.trim()) throw new Error("run requires code");
 					const code = params.code;
 					if (params.background) {
-						const record = programs.start((id, programSignal, abort) => runProgram(id, self, toolCallId, code, programSignal, current, { timeout: params.timeout, background: true, detached: true, abort }));
+						const record = programs.start(code, (id, programSignal, abort, update) => runProgram(id, self, toolCallId, code, programSignal, current, { timeout: params.timeout, background: true, detached: true, abort, onUpdate: update }));
 						return { content: [{ type: "text", text: `Program ${programs.label(record)} started.` }], details: { id: record.id } };
 					}
 					const { result } = await self.agents.whileSuspended(() => runProgram(randomUUID(), self, toolCallId, code, signal ?? new AbortController().signal, current, {

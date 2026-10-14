@@ -25,7 +25,7 @@ target is an ID or a unique ID prefix.
 Agents created with `agent()` belong to the Program: it gets their results
 from `send()`, without `wait` or notifications, and only it can abort
 them. Each of these Agents and the Agents under it see only one another,
-and no other Agent sees them. The user sees them in `/tasks` and `/agents`,
+and no other Agent sees them. The user sees them in the task panel and `/tasks`,
 and can talk to them or interrupt them in the viewer; an interrupted input
 makes its `send()` throw. When the Program ends, their unfinished inputs end
 as `aborted`, and the Agents go offline for good, from the bottom up.
@@ -280,6 +280,7 @@ Program <id> <outcome>.
 ## 7. Human interface
 
 The task panel (SPEC §7) lists running background Programs.
+`/tasks` opens a background Program in the task viewer (SPEC §7).
 
 `/program <path> [args]` runs the script in a file as a foreground Program of
 the current Agent, with the text after the path as the global `args`. Esc

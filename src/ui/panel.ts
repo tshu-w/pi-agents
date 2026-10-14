@@ -69,7 +69,7 @@ export function panelLines(self: AgentNode, now = Date.now()): string[] {
 	const lines = rows.filter((row) => row.shown).map((row) => row.line);
 	if (lines.length === 0) return [];
 	if (lines.length > MAX_LINES - 1) lines.splice(MAX_LINES - 2, Infinity, `+${lines.length - (MAX_LINES - 2)} more`);
-	return [`Tasks (${live} live, /tasks to hide)`, ...lines.map((line) => `  ${line}`)];
+	return [`Tasks (${live} live, /tasks to view)`, ...lines.map((line) => `  ${line}`)];
 }
 
 /**

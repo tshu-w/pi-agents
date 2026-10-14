@@ -17,7 +17,7 @@ export interface AgentNode {
 	/** The node whose tree this node sees: its root, or the Program its Agents belong to. */
 	scopeId: string;
 	ownerId?: string;
-	/** A Program that owns Agents; no Agent sees it, but the user sees it in the task panel and the Agent viewer. */
+	/** A Program that owns Agents; no Agent sees it, but the user sees it in the task panel and the task viewer. */
 	program?: boolean;
 	/** Whether a Program runs in the background. */
 	background?: boolean;
@@ -259,7 +259,7 @@ export function messageText(from: { id: string; name?: string }, fromOwner: bool
 
 /**
  * `messageId` marks a message from a root Agent in another process, so it is added once; `user`
- * marks the user's input from the Agent viewer.
+ * marks the user's input from the task viewer.
  */
 export function customMessage(text: string, delivery: Delivery, messageId?: string, user?: boolean) {
 	return { customType: MESSAGE_TYPE, content: text, display: true, details: { delivery, ...(messageId ? { messageId } : {}), ...(user ? { user } : {}) } };
