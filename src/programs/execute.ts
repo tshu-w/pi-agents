@@ -10,6 +10,8 @@ import { loadCodemode, loadPiCodemode } from "./codemode.ts";
 import type { DetachedCallOptions } from "./host-patches.ts";
 
 export const PROGRAM_TOOL_NAME = "program";
+/** How long a Program's work may take to stop once it ends. */
+export const CLEANUP_TIMEOUT_MS = 15_000;
 
 export type ProgramOutcome = "completed" | "failed" | "stopped";
 
@@ -65,6 +67,8 @@ export interface ProgramRunResult {
 	files: ProgramFiles;
 	/** Whether some of the Program's work did not stop during cleanup. */
 	abandoned?: boolean;
+	/** Settles once the tool calls the script started have ended, which may be after it ends. */
+	toolCalls: Promise<unknown>;
 }
 
 export interface ProgramRunOptions {
@@ -98,7 +102,27 @@ interface SandboxExtras {
 }
 
 const sandboxExtras = new AsyncLocalStorage<SandboxExtras>();
-let sandboxPatched = false;
+let sandboxPatch: Promise<void> | undefined;
+
+async function patchSandbox(): Promise<void> {
+	const proto = (await loadCodemode()).CodemodeSandbox.prototype as unknown as Record<string, any>;
+	const execute = proto.execute;
+	proto.execute = function (this: Record<string, any>, code: string, options: Record<string, unknown> = {}) {
+		const current = sandboxExtras.getStore();
+		if (!current || current.used) return execute.call(this, code, options);
+		current.used = true;
+		for (const global of current.globals) this.globalsByName.set(global.name, global);
+		const timeoutMs = Math.min(current.timeoutMs, (options.timeoutMs as number | undefined) ?? this.timeoutMs);
+		return execute.call(this, current.prepare(code), { ...options, timeoutMs }).then((result: CodemodeResult) => {
+			current.result = result;
+			current.ended();
+			return result;
+		}, (error: unknown) => {
+			current.ended();
+			throw error;
+		});
+	};
+}
 
 /**
  * Pi's executor creates and runs one sandbox per script. Its first execution in `extras`' async
@@ -106,26 +130,8 @@ let sandboxPatched = false;
  * do not.
  */
 async function withSandboxExtras<T>(extras: SandboxExtras, run: () => Promise<T>): Promise<T> {
-	if (!sandboxPatched) {
-		sandboxPatched = true;
-		const proto = (await loadCodemode()).CodemodeSandbox.prototype as unknown as Record<string, any>;
-		const execute = proto.execute;
-		proto.execute = function (this: Record<string, any>, code: string, options: Record<string, unknown> = {}) {
-			const current = sandboxExtras.getStore();
-			if (!current || current.used) return execute.call(this, code, options);
-			current.used = true;
-			for (const global of current.globals) this.globalsByName.set(global.name, global);
-			const timeoutMs = Math.min(current.timeoutMs, (options.timeoutMs as number | undefined) ?? this.timeoutMs);
-			return execute.call(this, current.prepare(code), { ...options, timeoutMs }).then((result: CodemodeResult) => {
-				current.result = result;
-				current.ended();
-				return result;
-			}, (error: unknown) => {
-				current.ended();
-				throw error;
-			});
-		};
-	}
+	// Programs started together wait for the same patch.
+	await (sandboxPatch ??= patchSandbox());
 	return sandboxExtras.run(extras, run);
 }
 
@@ -148,14 +154,20 @@ export async function executeProgram(
 		if (typeof path === "string" && list && !list.includes(path)) list.push(path);
 	};
 	let detachedCalls = 0;
+	const toolCalls: Promise<unknown>[] = [];
+	const executeTool = (name: string, args: unknown, callOptions: { signal?: AbortSignal }) => {
+		if (!options.detached) return ctx.executeTool(name, args, callOptions);
+		addFile(name, args);
+		const detachedOptions = { ...callOptions, detachedCallerId: `${toolCallId}:${++detachedCalls}`, detachedAbort: () => options.abort?.() } satisfies DetachedCallOptions;
+		return ctx.executeTool(name, args, detachedOptions as never);
+	};
 	const programCtx = Object.create(ctx, {
 		tools: { get: () => ctx.tools.filter((tool) => tool.name !== PROGRAM_TOOL_NAME) },
 		executeTool: {
 			value: (name: string, args: unknown, callOptions: { signal?: AbortSignal } = {}) => {
-				if (!options.detached) return ctx.executeTool(name, args, callOptions);
-				addFile(name, args);
-				const detachedOptions = { ...callOptions, detachedCallerId: `${toolCallId}:${++detachedCalls}`, detachedAbort: () => options.abort?.() } satisfies DetachedCallOptions;
-				return ctx.executeTool(name, args, detachedOptions as never);
+				const call = executeTool(name, args, callOptions);
+				toolCalls.push(call);
+				return call;
 			},
 		},
 	}) as ExtensionToolContext;
@@ -231,5 +243,5 @@ export async function executeProgram(
 		const stopped = [...seen.filter((call) => call.status === "cancelled"), ...cutOff];
 		if (stopped.length > 0) appendNote(result.content, `Calls still running when the script returned were cancelled; their effects are not undone: ${callNames(stopped, false)}`);
 	}
-	return { outcome, result, files };
+	return { outcome, result, files, toolCalls: Promise.allSettled(toolCalls) };
 }

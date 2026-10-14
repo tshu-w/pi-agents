@@ -7,6 +7,7 @@ import { alive, hostStatus, settledHosts, startHost } from './client.mjs';
 import { readSessionHeader, readSessionId } from '../roots/guard.mjs';
 import { openStream, request } from '../roots/transport.mjs';
 import { piPackage } from '../pi.mjs';
+import { PROGRAM_MESSAGE, runOutput } from '../programs/run-output.mjs';
 
 const TIMEOUT_MS = 30000;
 const NOT_READY = ['ENOENT', 'ECONNREFUSED', 'SOCKET_MODE', 'NOT_READY'];
@@ -157,7 +158,17 @@ async function print({ start, parsed, mode, dist }) {
       if (value.start && mode === 'json' && header) write(header);
       if (value.event) {
         if (mode === 'json') write(value.event);
-        if (value.event.type === 'message_end') last = value.event.message;
+        if (value.event.type === 'message_end') {
+          last = value.event.message;
+          // A `/program` run prints when it ends, as with `pi -p`; a failed one sets status 1.
+          if (mode === 'text' && last.role === 'custom' && last.customType === PROGRAM_MESSAGE) {
+            const body = runOutput(last.content.slice(1));
+            if (last.details?.isError) {
+              process.stderr.write(`${body}\n`);
+              process.exitCode = 1;
+            } else process.stdout.write(`${body}\n`);
+          }
+        }
       }
       if (value.end) finish(value);
     },
@@ -192,7 +203,14 @@ async function print({ start, parsed, mode, dist }) {
       process.stderr.write(`${last.errorMessage || `Request ${last.stopReason}`}\n`);
       process.exitCode = 1;
     }
-    else for (const content of last.content) if (content.type === 'text') process.stdout.write(`${content.text}\n`);
+    else {
+      for (const content of last.content) if (content.type === 'text') process.stdout.write(`${content.text}\n`);
+      // As Pi's print mode does.
+      if (last.stopReason === 'length') {
+        process.stderr.write('Response was truncated: the model reached its output token limit.\n');
+        process.exitCode = 1;
+      }
+    }
   }
 }
 

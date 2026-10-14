@@ -5,17 +5,18 @@ import { writeSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import { Type } from "typebox";
-import { steerQueued, SUBMIT_RESULT_TOOL_NAME, type Limits } from "../agents/agents.ts";
+import { settlesBy, steerQueued, SUBMIT_RESULT_TOOL_NAME, type Limits } from "../agents/agents.ts";
 import { nodes, trackTreeWork, type AgentNode } from "../agents/registry.ts";
 import { rejectFields } from "../params.ts";
 import { agentSession } from "../roots/rpc.ts";
 import { programScope } from "./scope.ts";
 import type { PiCodemode } from "./codemode.ts";
-import { executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./execute.ts";
+import { CLEANUP_TIMEOUT_MS, executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./execute.ts";
 import { commandSession, runDetached } from "./host-patches.ts";
 import { programDescription, programLoadout, programRenderers } from "./loadout.ts";
 import { randomUUID } from "node:crypto";
 import { CLEANUP_ERROR, programListLine, Programs, renderProgramWait } from "./programs.ts";
+import { PROGRAM_MESSAGE, runOutput } from "./run-output.mjs";
 import { agentGlobals, withAgentPrefix } from "./sandbox.ts";
 
 const PROGRAM_DESCRIPTION = `Run JavaScript that composes tool calls and Agents; only its output and return value reach the caller. \`run\` runs a Program in the foreground, or in the background with \`background\`; \`wait\` waits for background Programs and returns their results; \`list\` lists background Programs; \`stop\` stops a running Program. When a background Program ends while its caller is not waiting for it, the caller receives a notification; \`wait\` returns the result.
@@ -24,8 +25,6 @@ Program code is the body of an async function. It calls the caller's tools throu
 
 \`program\` replaces the \`codemode\` tool; wherever \`codemode\` is mentioned, use \`program\`.`;
 
-const PROGRAM_MESSAGE = "pi-agents-program-run";
-const SCRIPT_HEADER = /^Script (completed|failed)\nWall time [\d.]+ seconds\nOutput:\n$/;
 
 interface ProgramCall {
 	path: string;
@@ -110,13 +109,18 @@ export function registerProgramTools(
 				getToolNamespace: (name) => pi.getAllTools().find((tool) => tool.name === name)?.namespace,
 			});
 		} finally {
+			// Tool calls the script left running and the Program's Agents stop within the same timeout.
+			const deadline = Date.now() + CLEANUP_TIMEOUT_MS;
+			const stopped = await Promise.all([
+				run ? settlesBy(run.toolCalls, deadline) : true,
+				scope.close().then(() => true, () => false),
+			]);
 			// A cleanup failure ends the result, which keeps the Program's output and calls.
-			await scope.close().catch(() => {
-				if (!run) return;
+			if (run && stopped.includes(false)) {
 				run.result.content.push({ type: "text", text: CLEANUP_ERROR });
 				run.result.isError = true;
 				run.abandoned = true;
-			});
+			}
 		}
 		return run;
 	};
@@ -307,9 +311,8 @@ export function registerProgramTools(
 			});
 		} else send();
 		if (current.mode !== "print") return;
-		const [first, ...rest] = result.content;
-		const output = first?.type === "text" && SCRIPT_HEADER.test(first.text) ? rest : result.content;
-		const body = output.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+		// A Session in a host prints through its print client instead (src/host/rpc-client.mjs).
+		const body = runOutput(result.content);
 		if (result.isError) {
 			process.stderr.write(`${body}\n`);
 			process.exitCode = 1;

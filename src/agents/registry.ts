@@ -194,7 +194,9 @@ export function treeMetadata(ctx: ExtensionContext): TreeMetadata | undefined {
 export function treeEntries(scopeId: string): Entry[] {
 	const root = shared.nodes.get(scopeId);
 	if (!root) return [];
-	const entries: Entry[] = root.program ? [] : [{
+	// A Program's Agent heads its own scope; it stays owned, so messages to it go through its owner.
+	const owned = root.ownerId === undefined ? undefined : shared.nodes.get(root.ownerId)?.agents.owned().find((agent) => agent.id === root.id);
+	const entries: Entry[] = root.program ? [] : [owned ? { ...owned, ownerId: root.ownerId } : {
 		id: root.id,
 		name: root.name(),
 		cwd: root.cwd(),

@@ -69,14 +69,17 @@ after(async () => {
 });
 
 test("Pi keeps running in its host when another terminal takes over or the terminal detaches, and exits once idle and detached", async () => {
-	const first = terminal([]);
+	const opener = terminal([]);
 	const host = await until(async () => (await listHosts(paths)).find((entry) => entry.session), "host");
+	// Opening the Session by its ID takes it over, before it has a file and after.
+	const first = terminal(["--session-id", host.session.id]);
+	assert.equal((await opener.exited).exitCode, 0);
 	first.child.write("hello");
 	await until(() => first.text().includes("hello"), "typed");
 	first.child.write("\r");
 	await until(() => first.text().includes("answer:hello"), "answer");
 
-	const second = terminal(["attach", host.session.id.slice(0, 8)]);
+	const second = terminal(["--session-id", host.session.id]);
 	assert.equal((await first.exited).exitCode, 0);
 	assert.match(stripVTControlCharacters(first.output()), /Attached in another terminal\.\r?\nPi keeps running\. To reattach: pd attach \S+/);
 	await until(() => second.text().includes("answer:hello"), "restored screen");
@@ -283,6 +286,18 @@ test("-p and --mode json run their own turns once the Session is idle, and a sig
 	await delay(500);
 	assert.ok(!other.records.slice(at).some(reply("aborted")));
 	assert.ok(!other.records.slice(at).some(user("later")));
+
+	// `/program` prints its output, or its error with status 1.
+	writeFileSync(join(home, "ok.js"), "return 'program output'");
+	writeFileSync(join(home, "fail.js"), "throw new Error('program failure')");
+	const ok = start(["-p", "/program ok.js"]);
+	assert.equal(await ok.exited, 0);
+	assert.equal(ok.output(), "program output\n");
+	// A failed run keeps status 1 when a reply follows it.
+	const failed = start(["-p", "/program fail.js", "mine"]);
+	assert.equal(await failed.exited, 1);
+	assert.match(failed.output(), /answer:mine/);
+	assert.match(failed.output(), /program failure/);
 	assert.equal(await other.end(), 0);
 	for (const host of await listHosts(paths)) process.kill(host.pid, "SIGTERM");
 	await until(async () => (await listHosts(paths)).length === 0, "host exit");

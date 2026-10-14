@@ -45,6 +45,13 @@ type Message = AgentSession["messages"][number];
 type ToolResult = Parameters<ToolExecutionComponent["updateResult"]>[0];
 type StatusIndicator = Parameters<CustomEditor["setWorkingStatusIndicator"]>[0];
 
+/** Stops the elapsed-time timer of a tool component the viewer drops; only a final result stops it otherwise. */
+function stopTimer(tool: ToolExecutionComponent): void {
+	const state = (tool as unknown as { rendererState: { interval?: ReturnType<typeof setInterval> } }).rendererState;
+	clearInterval(state.interval);
+	state.interval = undefined;
+}
+
 /** A spinner and message for the editor's top border, like Pi's working status. */
 class WorkingStatus extends Loader {
 	renderInBorder(width: number): string {
@@ -182,6 +189,7 @@ class AgentViewer implements Component, Focusable {
 	dispose(): void {
 		this.indicator?.dispose();
 		this.footer.dispose();
+		for (const tool of this.tools.values()) stopTimer(tool);
 		for (const dispose of this.disposers.splice(0)) dispose();
 	}
 
@@ -267,6 +275,7 @@ class AgentViewer implements Component, Focusable {
 		this.dirty = false;
 		this.transcript.clear();
 		this.live = undefined;
+		for (const tool of this.tools.values()) stopTimer(tool);
 		this.tools.clear();
 		if (!conversation) return;
 		const messages = [...conversation.messages];
@@ -390,6 +399,7 @@ class ProgramViewer implements Component, Focusable {
 	}
 
 	dispose(): void {
+		stopTimer(this.tool);
 		for (const dispose of this.disposers.splice(0)) dispose();
 	}
 

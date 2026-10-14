@@ -4,7 +4,7 @@
 import { spawn } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { createRequire } from 'node:module';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { styleText } from 'node:util';
 import { attach, settledHosts, startHost } from '../src/host/client.mjs';
@@ -67,13 +67,22 @@ async function attachAndReport(socket) {
   process.exit(0);
 }
 
-/** The running host already holding the Session that `--session` or `-c` would open. */
+/** The running host already holding the Session that `--session`, `--session-id`, or `-c` would open. */
 async function runningTarget() {
   let running;
   const session = option('--session');
+  const sessionId = option('--session-id');
   if (session) {
     const file = resolve(session);
     running = host => host.session && (host.session.id.startsWith(session) || host.session.file === file);
+  } else if (sessionId && option('--fork') === undefined) {
+    // With `--fork`, the ID names a new Session.
+    const file = await sessionById(sessionId);
+    // A Session without messages has no file yet; its host reports where it will be.
+    const directory = sessionDirOption() ?? defaultSessionDir(process.cwd());
+    running = host => host.session && (file
+      ? host.session.file === file
+      : host.session.id === sessionId && dirname(host.session.file) === directory && host.session.cwd === process.cwd());
   } else if (args.includes('-c') || args.includes('--continue')) {
     const file = await recentSession();
     if (file) running = host => host.session?.file === file;
@@ -84,12 +93,22 @@ async function runningTarget() {
 /** The Session `-c` continues, chosen by Pi's own `continueRecent` rules. */
 async function recentSession() {
   const { findMostRecentSession } = await import(pathToFileURL(join(piPackage(real), 'dist/core/session-manager.js')).href);
-  const flag = option('--session-dir');
-  const configured = flag ? resolvePath(flag) : configuredSessionDir();
+  const configured = sessionDirOption();
   const fallback = defaultSessionDir(process.cwd());
   const directory = configured ?? fallback;
   // A configured directory may hold other cwds' Sessions.
   return findMostRecentSession(directory, directory === fallback ? undefined : process.cwd()) ?? undefined;
+}
+
+/** The Session `--session-id` would open, found by Pi's own rules, if it exists. */
+async function sessionById(id) {
+  const { SessionManager } = await import(pathToFileURL(join(piPackage(real), 'dist/core/session-manager.js')).href);
+  return SessionManager.findById(process.cwd(), id, sessionDirOption());
+}
+
+function sessionDirOption() {
+  const flag = option('--session-dir');
+  return flag ? resolvePath(flag) : configuredSessionDir();
 }
 
 async function attachCommand(query) {

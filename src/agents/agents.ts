@@ -596,9 +596,7 @@ export class Agents {
 		const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
 		const agents = [...this.agents.values()];
 		const aborted = await Promise.allSettled(agents.map((agent) => this.abort(agent, { deadline })));
-		const closed = await Promise.allSettled(agents.map(async (agent) => {
-			const session = agent.session ?? await agent.loading?.catch(() => undefined);
-			if (!session) return;
+		const close = async (agent: Owned, session: AgentSession) => {
 			try {
 				if (!await settlesBy(session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }), deadline)) {
 					throw new Error(`Agent ${label(agent.record, this.ids())} did not shut down within the timeout and may still be running.`);
@@ -607,6 +605,16 @@ export class Agents {
 				session.dispose();
 				agent.session = undefined;
 			}
+		};
+		const closed = await Promise.allSettled(agents.map(async (agent) => {
+			const loading = agent.loading;
+			if (!agent.session && loading && !await settlesBy(loading, deadline)) {
+				// A Session that loads after the timeout is closed once it does.
+				void loading.then((late) => close(agent, late).catch(() => {}), () => {});
+				throw new Error(`Agent ${label(agent.record, this.ids())} did not shut down within the timeout and may still be running.`);
+			}
+			const session = agent.session ?? await loading?.catch(() => undefined);
+			if (session) await close(agent, session);
 		}));
 		const errors = [...aborted, ...closed].flatMap((result) => result.status === "rejected" ? [result.reason] : []);
 		if (errors.length > 0) throw new Error(errors.map((error) => error instanceof Error ? error.message : String(error)).join("\n"));

@@ -44,31 +44,44 @@ export function hostExtension(pi: ExtensionAPI, { treeIdle, rpcClients }: { tree
 	const report = () => {
 		if (!ctx) return;
 		const file = ctx.sessionManager.getSessionFile();
-		send({ type: "session", session: { id: ctx.sessionManager.getSessionId(), name: pi.getSessionName(), file } });
+		send({ type: "session", session: { id: ctx.sessionManager.getSessionId(), name: pi.getSessionName(), file, cwd: ctx.cwd } });
 	};
 
 	// Pi suspends by stopping its process group; a host has no shell to resume it, so resume at once.
-	process.on("SIGTSTP", () => process.kill(process.pid, "SIGCONT"));
-
-	const timer = setInterval(() => {
+	const resume = () => process.kill(process.pid, "SIGCONT");
+	const checkIdle = () => {
 		if (!ctx || attached || !ctx.isIdle() || ctx.hasPendingMessages() || !treeIdle() || rpcClients() > 0) {
 			idleSince = undefined;
 			return;
 		}
 		idleSince ??= Date.now();
 		if (Date.now() - idleSince >= IDLE_EXIT_MS) ctx.shutdown();
-	}, 1000);
-	timer.unref();
+	};
+	let timer: ReturnType<typeof setInterval> | undefined;
 
 	pi.on("session_start", (_event, current) => {
 		// Owned Agents run in the same process; only the root speaks for the host.
 		if (treeMetadata(current)) return;
 		ctx = current;
 		socket ??= connect(hostSocket);
+		if (!timer) {
+			process.on("SIGTSTP", resume);
+			timer = setInterval(checkIdle, 1000);
+			timer.unref();
+		}
 		report();
 	});
 	pi.on("session_info_changed", () => report());
-	pi.on("session_shutdown", () => { ctx = undefined; });
+	// A reload or another Session loads this extension again, which takes over.
+	pi.on("session_shutdown", () => {
+		ctx = undefined;
+		idleSince = undefined;
+		clearInterval(timer);
+		timer = undefined;
+		process.off("SIGTSTP", resume);
+		socket?.destroy();
+		socket = undefined;
+	});
 
 	pi.registerCommand("detach", { description: "Detach this terminal; Pi keeps running", handler: async () => send({ type: "detach" }) });
 	return {

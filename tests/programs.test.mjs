@@ -230,6 +230,22 @@ test("a background Program's calls keep distinct IDs across turns, and their hoo
 	await root.close();
 });
 
+test("a Program returns once the tool calls its script left running have stopped", async () => {
+	const hookExtension = fileURLToPath(new URL("./fixtures/hook-extension.mjs", import.meta.url));
+	const root = await startRoot(undefined, undefined, {}, {}, [hookExtension]);
+	const { hooks } = await import(hookExtension);
+	hooks.calls.length = 0;
+	Object.assign(hooks, { holdMs: 300, ignoreAbort: true });
+	try {
+		const result = await root.call({ action: "run", code: "tools.read({ path: 'note.txt' }); return 'early'" });
+		assert.equal(result.isError, undefined);
+		assert.equal(hooks.calls[0].ended, true);
+	} finally {
+		Object.assign(hooks, { holdMs: 0, ignoreAbort: false });
+		await root.close();
+	}
+});
+
 test("compaction lists the files of background Programs", async () => {
 	const root = await startRoot(undefined, undefined, {}, { compaction: { keepRecentTokens: 1 } });
 	const id = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' })" }));
@@ -417,6 +433,22 @@ test("each of a Program's Agents sees only itself and the Agents under it", asyn
 	const [list, send] = JSON.parse(result.slice(result.indexOf("Output:\n") + 8));
 	assert.equal(list, "No matching Agents.");
 	assert.match(send, /^No visible Agent matches "beta"/);
+	await root.close();
+});
+
+test("an input to a Program's Agent from an Agent under it runs as one of the Program's inputs", async () => {
+	const root = await startRoot(undefined, undefined, {}, {}, [fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))]);
+	const { nodes, deliver, treeEntries, ownedEntries } = globalThis.piAgentsTree;
+	const self = nodes.get(root.session.sessionManager.getSessionId());
+	const id = idOf(await root.text({ action: "run", background: true, code: "await agent({ name: 'alpha' }).send('one'); while (true) await tools.read({ path: 'note.txt' })" }));
+	await until(() => ownedEntries(self).some((entry) => entry.name === "alpha" && entry.state === "idle"), "alpha answered");
+	const alpha = ownedEntries(self).find((entry) => entry.name === "alpha");
+	// Its own Agents see it at the head of its scope.
+	deliver({ id: "beta" }, treeEntries(alpha.id)[0], "followUp", "hold");
+	await until(() => root.state.busy === 1, "alpha holds the input");
+	assert.equal(nodes.get(alpha.ownerId).agents.counts(alpha.id).state, "running");
+	root.state.hold.open();
+	await root.text({ action: "stop", target: id });
 	await root.close();
 });
 

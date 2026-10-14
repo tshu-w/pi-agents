@@ -3,10 +3,9 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deferred, settlesBy, STEER_POLL_MS, WAIT_INTERRUPTED, waitForChange, type Deferred } from "../agents/agents.ts";
 import { shortId, trackTreeWork } from "../agents/registry.ts";
 import { boundBlocks, boundText } from "../output.ts";
-import { PROGRAM_TOOL_NAME, type ProgramFiles, type ProgramOutcome, type ProgramRunResult } from "./execute.ts";
+import { CLEANUP_TIMEOUT_MS, PROGRAM_TOOL_NAME, type ProgramFiles, type ProgramOutcome, type ProgramRunResult } from "./execute.ts";
 
 const PROGRAM_ENTRY = "pi-agents-program";
-const CLEANUP_TIMEOUT_MS = 15_000;
 /** Ends the result of a Program some of whose work did not stop. */
 export const CLEANUP_ERROR = "Cleanup error: some of the Program's work did not stop within the timeout and may still be running.";
 
