@@ -29,12 +29,14 @@ async function startRoot(cwd = mkdtempSync(join(agentDir, "cwd-")), sessionFile 
 	writeFileSync(join(cwd, "note.txt"), "note");
 	const messages = [];
 	const pending = [];
-	const state = { busy: 0, hold: gate(), declared: [] };
+	const state = { busy: 0, hold: gate(), declared: [], inputs: [] };
 	const route = async (context, options) => {
 		const last = context.messages.at(-1);
 		const first = textOf(context.messages.find((message) => message.role === "user")?.content ?? "");
 		if (first.startsWith("<agent-message ")) {
-			const body = bodyOf(textOf(context.messages.findLast((message) => message.role === "user").content));
+			const input = textOf(context.messages.findLast((message) => message.role === "user").content);
+			state.inputs.push(input);
+			const body = bodyOf(input);
 			if (body.startsWith("submit:")) {
 				const [value, retry] = body.slice("submit:".length).split("|").map((json) => JSON.parse(json));
 				if (last.role !== "toolResult") return ai.fauxAssistantMessage(ai.fauxToolCall("submit_result", { value }));
@@ -270,6 +272,21 @@ test("a send() timeout aborts only that input, whether running or queued, and th
 	assert.match(value.errors[1], /^Agent a \(\S+\) timed out after 0\.5 seconds\.$/);
 	assert.equal(value.errors[2], 'send() accepts timeout only with deliverAs "followUp"');
 	assert.deepEqual(value.answers, ["answer:again", "answer:again"]);
+	await root.close();
+});
+
+test("an aborted Agent is not woken when its own Agent ends", async () => {
+	const root = await startRoot();
+	const calls = [{ action: "spawn", name: "b", message: "hold" }, { action: "wait", target: "b", timeout: 3600 }];
+	await root.call({ action: "spawn", name: "a", message: `calls:${JSON.stringify(calls)}` }, "agent");
+	const states = async () => Object.fromEntries((await root.call({ action: "list" }, "agent")).details.agents.map((agent) => [agent.name, agent.state]));
+	await until(async () => (await states()).a === "waiting", "a waits for b");
+	await root.text({ action: "abort", target: "a" }, "agent");
+	root.state.hold.open();
+	await until(async () => (await states()).b === "idle", "b ends");
+	await new Promise((resolve) => setTimeout(resolve, 500));
+	assert.deepEqual(root.state.inputs.filter((input) => /^Agent b \(\S+\) completed\.$/.test(input)), []);
+	assert.equal((await states()).a, "idle");
 	await root.close();
 });
 

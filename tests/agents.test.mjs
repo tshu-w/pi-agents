@@ -230,7 +230,7 @@ test("a turn that does not stop within the abort timeout is abandoned, and the t
 });
 
 
-test("an Agent message queued in a busy root is listed until taken in, and survives clearing the queue and stopping the turn", async () => {
+test("an Agent message queued in a busy root is listed until taken in and survives clearing the queue; after the user stops the turn, Agent messages start no turn until the user's next input", async () => {
 	const cwd = mkdtempSync(join(agentDir, "cwd-"));
 	let hold = gate();
 	let turns = 0;
@@ -259,14 +259,24 @@ test("an Agent message queued in a busy root is listed until taken in, and survi
 	assert.deepEqual(lines(), ["Follow-up: [peer] hello there"]);
 	session.clearQueue();
 	assert.deepEqual(lines(), ["Follow-up: [peer] hello there"]);
-	await session.abort();
+	// One that arrives while the turn stops is added as well.
+	const stopping = session.abort();
+	node.receive(message, "steer");
+	await stopping;
 	await turn;
+	assert.equal(session.messages.filter((entry) => entry.content === message).length, 2);
 	assert.deepEqual(lines(), []);
 	assert.equal(last().role, "custom");
 	assert.equal(last().content, message);
 	assert.equal(turns, 1);
 
-	// A turn takes it in.
+	// One that arrives later is added without a turn too.
+	node.receive(message, "steer");
+	await session.waitForIdle();
+	assert.equal(last().content, message);
+	assert.equal(turns, 1);
+
+	// After the user's input, a turn takes it in.
 	hold = gate();
 	turn = session.prompt("hold");
 	await until(() => session.isStreaming, "second turn started");

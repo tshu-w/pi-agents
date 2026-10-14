@@ -32,6 +32,8 @@ export interface AgentNode {
 	agents: Agents;
 	/** Delivers a message to this node; used only for root Agents. */
 	receive(text: string, delivery: Delivery, messageId?: string): void;
+	/** A root Agent's turn was stopped: messages from other Agents become writes until the user's next input. */
+	stopped?: boolean;
 }
 
 export interface Entry {

@@ -144,19 +144,21 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		agents.restore(current);
 		const manager = current.sessionManager;
 		const queue = showQueue(current, () => agentSession(manager));
-		node = {
+		const created: AgentNode = {
 			...self,
 			agents,
 			cwd: () => ctx?.cwd ?? current.cwd,
 			busy: () => !(ctx?.isIdle() ?? true),
 			sessionFile: () => ctx?.sessionManager.getSessionFile(),
 			receive: (text, delivery, messageId) => {
-				pi.sendMessage(customMessage(text, delivery, messageId), delivery === "write"
+				const as = created.stopped ? "write" : delivery;
+				pi.sendMessage(customMessage(text, as, messageId), as === "write"
 					? { deliverAs: "steer" }
-					: { deliverAs: delivery, triggerTurn: true });
+					: { deliverAs: as, triggerTurn: true });
 				queue.update();
 			},
 		};
+		node = created;
 		nodes.set(id, node);
 		programs = new Programs(rootId, {
 			appendEntry: (customType, data) => pi.appendEntry(customType, data),
@@ -165,6 +167,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		});
 		programs.restore(current);
 		panel.start(current);
+	});
+
+	// The user's input ends what stopping a turn started (§2.2).
+	pi.on("input", () => {
+		if (node) node.stopped = false;
 	});
 
 	pi.on("before_agent_start", (_event, current) => {

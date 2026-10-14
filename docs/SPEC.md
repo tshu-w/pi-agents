@@ -46,8 +46,9 @@ A write is added at the recipient's next tool boundary, or at once if it is
 idle. A write can go to several Agents at once.
 
 When the user of a root Agent clears its queued messages, messages from other
-Agents stay queued; when the user stops its turn, they are added to its
-conversation without starting a turn.
+Agents stay queued. After an Agent's turn is stopped, messages from other
+Agents, notifications included, become writes until its next input from its
+user or owner.
 
 ### 2.3 wait
 
@@ -120,7 +121,7 @@ to the waiting Agent, from any sender, ends `wait` the same way; a write does
 not. It can also return read results again.
 
 When an input ends and its owner is not waiting for that Agent, the owner
-receives a notification, unless the owner aborted it. The notification is an input delivered as `steer`,
+receives a notification, unless the owner aborted it. The notification is an input delivered as `steer` (a write after the owner's turn is stopped, §2.2),
 and it names the Agent and how the input ended. It does not include the
 result; the owner reads the result with `wait`.
 

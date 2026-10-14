@@ -246,6 +246,8 @@ interface Owned {
 	loading?: Promise<AgentSession>;
 	prepared?: Prepared;
 	waiters: number;
+	/** Its turn was stopped: messages from other Agents become writes until its owner's or user's next input. */
+	stopped?: boolean;
 }
 
 export interface SpawnRequest {
@@ -449,6 +451,7 @@ export class Agents {
 
 	accept(id: string, text: string, delivery: Delivery, options: { fromOwner: boolean; notification: boolean }): { queued: boolean } {
 		const agent = this.agent(id);
+		if (agent.stopped && !options.fromOwner) delivery = "write";
 		if (delivery === "write") {
 			this.write(agent, text);
 			return { queued: false };
@@ -550,6 +553,7 @@ export class Agents {
 
 	/** Stops a turn; one that has not stopped by `deadline` is abandoned: its inputs end as aborted, and this throws. */
 	private async stop(agent: Owned, turn: Turn, deadline: number): Promise<void> {
+		agent.stopped = true;
 		turn.abort.abort();
 		const stopping = (async () => {
 			if (turn.started && agent.session) {
@@ -637,6 +641,8 @@ export class Agents {
 
 	/** A steer joins the current turn; other inputs queue. Returns whether the input waits for a slot. */
 	private add(agent: Owned, input: Input, delivery: "followUp" | "steer"): boolean {
+		// While stopped, other senders' messages become writes, so this is the owner's or user's next input.
+		agent.stopped = false;
 		if (delivery !== "steer" || !agent.turn) return this.enqueue(agent, input);
 		this.join(agent, agent.turn, input);
 		return false;
