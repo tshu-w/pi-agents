@@ -65,7 +65,8 @@ load the extension, but run outside hosts and end with their terminal.
     terminal) makes `-p` and `--mode json` withdraw their prompts that have
     not started and stop their running turn, including input other clients
     added to it. Killed with `SIGKILL`, they leave their turn running.
-  - An RPC client that ends leaves its turn running.
+  - An RPC client that ends leaves its turn running. One whose Session stops
+    opens it again; requests awaiting a response then fail.
 - `--no-session` starts and package commands (`pd install`, `pd update`, ...)
   run Pi directly.
 
