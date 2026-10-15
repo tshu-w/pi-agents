@@ -1,6 +1,6 @@
 {
   "name": "@tshu-w/pi-agents",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Multi-agent runtime for Pi: persistent async agents, dynamic workflows, and inter-agent messaging",
   "license": "AGPL-3.0-only",
   "repository": {
