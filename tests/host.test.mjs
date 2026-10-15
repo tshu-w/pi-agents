@@ -37,7 +37,7 @@ Object.assign(process.env, {
 	TERM: "xterm-256color",
 	AGENTS_TEST_RELEASE: join(home, "release"),
 });
-const { until } = await import("./pi.mjs");
+const { until, PI_PACKAGE } = await import("./pi.mjs");
 const { statePaths } = await import("../src/roots/paths.mjs");
 const { listHosts } = await import("../src/host/client.mjs");
 const { request } = await import("../src/roots/transport.mjs");
@@ -122,6 +122,14 @@ process.stdin.setRawMode = function (mode) {
 	assert.equal((await asking.exited).exitCode, 0);
 	process.kill(host.pid, "SIGTERM");
 	await until(async () => (await listHosts(paths)).length === 0, "host exit");
+});
+
+test("pd groups arguments as Pi reads them, so an option's value is never taken for an option", async () => {
+	const { argGroups } = await import("../src/host/rpc-client.mjs");
+	const { parseArgs } = await import(join(PI_PACKAGE, "dist/cli/args.js"));
+	// `--thinking` takes `-p` and reports it as an invalid level.
+	assert.deepEqual(argGroups(parseArgs, ["--thinking", "-p", "hello", "--append-system-prompt", "-c", "-p", "-c", "--", "-c"]),
+		[["--thinking", "-p"], ["hello"], ["--append-system-prompt", "-c"], ["-p"], ["-c"], ["--", "-c"]]);
 });
 
 test("a terminal attaching to a background host gets Pi's startup queries and status, even when split across chunks", async () => {

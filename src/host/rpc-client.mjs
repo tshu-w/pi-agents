@@ -13,8 +13,7 @@ const TIMEOUT_MS = 30000;
 const NOT_READY = ['ENOENT', 'ECONNREFUSED', 'SOCKET_MODE', 'NOT_READY'];
 const GONE = ['ENOENT', 'ECONNREFUSED', 'ECONNRESET'];
 // Options that choose the Session; another Session opens with the rest.
-const SESSION_FLAGS = new Set(['--session', '--session-id', '--fork', '--name', '-n']);
-const SESSION_SWITCHES = new Set(['-c', '--continue', '-r', '--resume']);
+const SESSION_OPTIONS = new Set(['--session', '--session-id', '--fork', '--name', '-n', '-c', '--continue', '-r', '--resume']);
 
 function fault(code, message) {
   return Object.assign(new Error(message), { code });
@@ -42,20 +41,39 @@ async function connect(paths, id, handlers, live, role = 'rpc') {
   }
 }
 
+/**
+ * Whether Pi's `parseArgs` reads `next` as the value of `arg`. It decides by the form of `next`, so a probe of that form
+ * shows it: the probe is consumed, or parsed on its own as a message, a file, an unknown short option, or an unknown flag.
+ */
+function takesValue(parseArgs, arg, next) {
+  const probe = next.startsWith('---') ? '---\0' : next.startsWith('-') ? '-\0' : next.startsWith('@') ? '@\0' : '\0';
+  const parsed = parseArgs([arg, probe]);
+  if (probe === '\0') return !parsed.messages.includes(probe);
+  if (probe === '@\0') return !parsed.fileArgs.includes('\0');
+  // Only Pi's own diagnostic for the probe alone; an option may consume it and report it as an invalid value.
+  if (probe === '-\0') return !parsed.diagnostics.some(({ message }) => message === `Unknown option: ${probe}`);
+  return !parsed.unknownFlags.has('-\0');
+}
+
+/** `args` in the groups Pi reads: an option with its value, or an argument alone; from `--` on, one group. */
+export function argGroups(parseArgs, args) {
+  const groups = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--') {
+      groups.push(args.slice(i));
+      break;
+    }
+    groups.push(i + 1 < args.length && takesValue(parseArgs, args[i], args[i + 1]) ? [args[i], args[++i]] : [args[i]]);
+  }
+  return groups;
+}
+
 /** `args` without the prompts, and without the options that make Pi non-interactive. */
 function withoutPrompts(parseArgs, args) {
-  const options = [];
-  let separated = false;
-  for (let i = 0, before = parseArgs([]); i < args.length; i++) {
-    const after = parseArgs(args.slice(0, i + 1));
-    const positional = after.messages.length > before.messages.length || after.fileArgs.length > before.fileArgs.length;
-    before = after;
-    if (separated || positional) continue;
-    if (args[i] === '--') separated = true;
-    else if (args[i] === '--mode') i++;
-    else if (args[i] !== '-p' && args[i] !== '--print') options.push(args[i]);
-  }
-  return options;
+  return argGroups(parseArgs, args).filter(group => {
+    const parsed = parseArgs(group);
+    return !parsed.messages.length && !parsed.fileArgs.length && !['-p', '--print', '--mode'].includes(group[0]);
+  }).flat();
 }
 
 /** The prompts Pi sends on startup for `parsed`: its initial message, then each further message. */
@@ -90,7 +108,7 @@ export async function runHeadless({ pi, paths, args, mode, findRunning, warnIgno
 
   // The host runs Pi without the prompts, which arrive as RPC commands instead.
   const hostArgs = withoutPrompts(parseArgs, args);
-  const sessionArgs = hostArgs.filter((arg, i) => !SESSION_FLAGS.has(arg) && !SESSION_SWITCHES.has(arg) && !SESSION_FLAGS.has(hostArgs[i - 1]));
+  const sessionArgs = argGroups(parseArgs, hostArgs).filter(([option]) => !SESSION_OPTIONS.has(option)).flat();
 
   /** Starts a host for `hostArgs` in `cwd`; resolves once its Pi reports the Session. */
   async function host(hostArgs, cwd) {

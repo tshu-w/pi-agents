@@ -13,6 +13,7 @@ import { discoverRoots, findRoot } from '../src/roots/discovery.mjs';
 import { agentDir, configuredSessionDir, defaultSessionDir, resolvePath, sessionDir, statePaths } from '../src/roots/paths.mjs';
 import { piPackage } from '../src/pi.mjs';
 import { markedFiles } from '../src/daemon/sessions.mjs';
+import { argGroups } from '../src/host/rpc-client.mjs';
 
 const real = process.env.PATH.split(':').map(dir => join(dir, 'pi')).find(file => {
   try { accessSync(file, constants.X_OK); return true; } catch { return false; }
@@ -23,9 +24,11 @@ if (!real) {
 }
 const args = process.argv.slice(2);
 const paths = statePaths();
+// Pi's own parsing, so that `pd` reads every argument as `pi` does.
+const { parseArgs } = await import(pathToFileURL(join(piPackage(real), 'dist/cli/args.js')).href);
+const parsed = parseArgs(args);
 
 const COMMANDS = new Set(['install', 'remove', 'uninstall', 'update', 'list', 'config', 'auth', 'mcp']);
-const DIRECT_FLAGS = new Set(['-h', '--help', '-v', '--version', '--export', '--list-models', '--no-session']);
 
 function runDirectly() {
   const child = spawn(real, args, { stdio: 'inherit' });
@@ -42,14 +45,6 @@ function runDirectly() {
 
 function error(text) {
   return styleText('red', text, { stream: process.stderr });
-}
-
-function option(name, alias) {
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--') return;
-    if (args[i] === name || args[i] === alias) return args[i + 1] ?? '';
-    if (args[i].startsWith(`${name}=`)) return args[i].slice(name.length + 1);
-  }
 }
 
 
@@ -74,12 +69,11 @@ async function attachAndReport(socket, send) {
 /** The running host already holding the Session that `--session`, `--session-id`, or `-c` would open. */
 async function runningTarget() {
   let running;
-  const session = option('--session');
-  const sessionId = option('--session-id');
+  const { session, sessionId } = parsed;
   if (session) {
     const file = resolve(session);
     running = host => host.session && (host.session.id.startsWith(session) || host.session.file === file);
-  } else if (sessionId && option('--fork') === undefined) {
+  } else if (sessionId && parsed.fork === undefined) {
     // With `--fork`, the ID names a new Session.
     const file = await sessionById(sessionId);
     // A Session without messages has no file yet; its host reports where it will be.
@@ -87,7 +81,7 @@ async function runningTarget() {
     running = host => host.session && (file
       ? host.session.file === file
       : host.session.id === sessionId && dirname(host.session.file) === directory && host.session.cwd === process.cwd());
-  } else if (args.includes('-c') || args.includes('--continue')) {
+  } else if (parsed.continue) {
     const file = await recentSession();
     if (file) running = host => host.session?.file === file;
   }
@@ -111,8 +105,7 @@ async function sessionById(id) {
 }
 
 function sessionDirOption() {
-  const flag = option('--session-dir');
-  return flag ? resolvePath(flag) : configuredSessionDir();
+  return parsed.sessionDir ? resolvePath(parsed.sessionDir) : configuredSessionDir();
 }
 
 async function attachCommand(query) {
@@ -147,16 +140,14 @@ async function attachCommand(query) {
 
 /** Warns about the options a running Session does not apply. */
 function warnIgnored(options) {
-  const ignored = options.filter((arg, i) => !['--session', '--session-id', '--session-dir', '-c', '--continue'].includes(arg)
-    && !arg.startsWith('--session=') && !arg.startsWith('--session-id=') && !['--session', '--session-id', '--session-dir'].includes(options[i - 1]));
+  const ignored = argGroups(parseArgs, options).filter(([option]) => !['--session', '--session-id', '--session-dir', '-c', '--continue'].includes(option)).flat();
   if (ignored.length) process.stderr.write(`${styleText('yellow', `The Session is already running; using it without applying: ${ignored.join(' ')}`, { stream: process.stderr })}\n`);
 }
 
 /** Pi's mode for `args` when it is not interactive: 'text', 'json', or 'rpc'. */
 function headlessMode() {
-  const mode = option('--mode');
-  if (mode === 'json' || mode === 'rpc') return mode;
-  if (!interactive || args.includes('-p') || args.includes('--print')) return 'text';
+  if (parsed.mode === 'json' || parsed.mode === 'rpc') return parsed.mode;
+  if (!interactive || parsed.print) return 'text';
 }
 
 const interactive = process.stdin.isTTY && process.stdout.isTTY;
@@ -166,7 +157,9 @@ else if (args[0] === 'agents' && interactive) {
   await workbench({ pi: real, paths, sessionDir: sessionDir() });
   process.exit(0);
 }
-else if (COMMANDS.has(args[0]) || args.some(arg => DIRECT_FLAGS.has(arg.split('=')[0]))) runDirectly();
+else if (COMMANDS.has(args[0]) || parsed.help || parsed.version || parsed.export !== undefined || parsed.listModels !== undefined || parsed.noSession) {
+  runDirectly();
+}
 else if (headlessMode()) {
   const { runHeadless } = await import('../src/host/rpc-client.mjs');
   await runHeadless({ pi: real, paths, args, mode: headlessMode(), findRunning: runningTarget, warnIgnored });
