@@ -155,9 +155,9 @@ test("a terminal attaching to a background host gets Pi's startup queries and st
 	process.kill(Number(/h-(\d+)\.sock$/.exec(socket)[1]), "SIGTERM");
 });
 
-/** Runs `pd args` with `input` piped to it. */
-function run(args, input = "") {
-	const child = spawn(process.execPath, [client, ...args], { cwd: home, env: process.env });
+/** Runs `pd args` in `cwd` with `input` piped to it. */
+function run(args, input = "", cwd = home) {
+	const child = spawn(process.execPath, [client, ...args], { cwd, env: process.env });
 	let stdout = "", stderr = "";
 	child.stdout.on("data", (data) => { stdout += data; });
 	child.stderr.on("data", (data) => { stderr += data; });
@@ -211,6 +211,18 @@ test("-p and --mode json run on the Session in a host, beside the attached termi
 
 	screen.child.write("\x1a");
 	assert.equal((await screen.exited).exitCode, 0);
+	process.kill(host.pid, "SIGTERM");
+	await until(async () => (await listHosts(paths)).length === 0, "host exit");
+});
+
+test("-c finds the Session running in a host when the project keeps Sessions in a relative directory", async () => {
+	const project = join(home, "project");
+	mkdirSync(join(project, ".pi"), { recursive: true });
+	writeFileSync(join(project, ".pi", "settings.json"), JSON.stringify({ sessionDir: "project-sessions" }));
+	assert.deepEqual(await run(["--approve", "-p", "hello"], "", project), { code: 0, stdout: "answer:hello\n", stderr: "" });
+	const host = (await listHosts(paths)).find((entry) => entry.session);
+	assert.deepEqual(await run(["-p", "-c", "again"], "", project), { code: 0, stdout: "answer:again\n", stderr: "" });
+	assert.deepEqual((await listHosts(paths)).map((entry) => entry.pid), [host.pid]);
 	process.kill(host.pid, "SIGTERM");
 	await until(async () => (await listHosts(paths)).length === 0, "host exit");
 });

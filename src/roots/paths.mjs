@@ -39,7 +39,7 @@ export function agentDir(env = process.env) {
 }
 
 /** The session directory configured without `--session-dir`: PI_CODING_AGENT_SESSION_DIR, then the global `sessionDir` setting. */
-export function configuredSessionDir(env = process.env) {
+function configuredSessionDir(env = process.env) {
   if (env.PI_CODING_AGENT_SESSION_DIR) return resolvePath(env.PI_CODING_AGENT_SESSION_DIR);
   let setting;
   try { setting = JSON.parse(readFileSync(join(agentDir(env), 'settings.json'), 'utf8').replace(/^\uFEFF/, '')).sessionDir; }
@@ -52,9 +52,9 @@ export function sessionDir(env = process.env) {
   return configuredSessionDir(env) ?? join(agentDir(env), 'sessions');
 }
 
-/** The directory Pi keeps a cwd's Sessions in when none is configured. */
-export function defaultSessionDir(cwd, env = process.env) {
-  return join(agentDir(env), 'sessions', `--${resolve(cwd).replace(/^\//, '').replace(/[/\\:]/g, '-')}--`);
+/** The directory Pi keeps a cwd's Sessions in when none is configured, as Pi's unexported `getDefaultSessionDirPath`. */
+export function defaultSessionDir(cwd, agentDirectory) {
+  return join(resolve(agentDirectory), 'sessions', `--${resolve(cwd).replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`);
 }
 
 export async function prepareDirectory(directory) {

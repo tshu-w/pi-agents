@@ -39,6 +39,7 @@ import {
 	type Spend,
 	type TreeMetadata,
 } from "./registry.ts";
+import { defaultSessionDir } from "../roots/paths.mjs";
 
 const AGENT_ENTRY = "pi-agents-agent";
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -77,16 +78,11 @@ export interface AgentRecord {
 }
 
 
-function defaultSessionDirectory(cwd: string, agentDir: string): string {
-	const safePath = `--${path.resolve(cwd).replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-	return path.join(path.resolve(agentDir), "sessions", safePath);
-}
-
 function childSessionDirectory(cwd: string, currentCwd: string, currentSessionDir: string, agentDir: string): string {
-	const targetDefault = defaultSessionDirectory(cwd, agentDir);
+	const targetDefault = defaultSessionDir(cwd, agentDir);
 	if (!currentSessionDir) return path.join(targetDefault, "subagents");
 	const current = path.resolve(currentSessionDir);
-	const currentDefault = defaultSessionDirectory(currentCwd, agentDir);
+	const currentDefault = defaultSessionDir(currentCwd, agentDir);
 	if (current === currentDefault ||
 		(path.basename(current) === "subagents" && path.dirname(current) === currentDefault)) {
 		return path.join(targetDefault, "subagents");

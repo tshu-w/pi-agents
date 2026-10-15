@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { open, readdir, stat, unlink } from 'node:fs/promises';
 import net from 'node:net';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { FRAME, frame, json, readFrames } from './frames.mjs';
@@ -25,6 +25,11 @@ export function hostStatus(path) {
     socket.on('connect', () => socket.write(frame(FRAME.status)));
     readFrames(socket, (type, body) => { if (type === FRAME.status) { resolve(json(body)); socket.destroy(); } });
   });
+}
+
+/** The file of the Session a host runs; Pi keeps a relative session directory relative, so it resolves against the host's cwd. */
+export function hostSessionFile(host) {
+  return host.session?.file && resolve(host.cwd, host.session.file);
 }
 
 export function alive(pid) {

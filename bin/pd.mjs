@@ -7,10 +7,10 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { styleText } from 'node:util';
-import { attach, settledHosts, startHost } from '../src/host/client.mjs';
+import { attach, hostSessionFile, settledHosts, startHost } from '../src/host/client.mjs';
 import { detachKey, detachMatcher } from '../src/host/keys.mjs';
 import { discoverRoots, findRoot } from '../src/roots/discovery.mjs';
-import { agentDir, configuredSessionDir, defaultSessionDir, resolvePath, sessionDir, statePaths } from '../src/roots/paths.mjs';
+import { defaultSessionDir, resolvePath, sessionDir, statePaths } from '../src/roots/paths.mjs';
 import { piPackage } from '../src/pi.mjs';
 import { markedFiles } from '../src/daemon/sessions.mjs';
 import { argGroups } from '../src/host/rpc-client.mjs';
@@ -24,8 +24,10 @@ if (!real) {
 }
 const args = process.argv.slice(2);
 const paths = statePaths();
+const dist = file => import(pathToFileURL(join(piPackage(real), 'dist', file)).href);
 // Pi's own parsing, so that `pd` reads every argument as `pi` does.
-const { parseArgs } = await import(pathToFileURL(join(piPackage(real), 'dist/cli/args.js')).href);
+const { parseArgs } = await dist('cli/args.js');
+const { ENV_SESSION_DIR, getAgentDir } = await dist('config.js');
 const parsed = parseArgs(args);
 
 const COMMANDS = new Set(['install', 'remove', 'uninstall', 'update', 'list', 'config', 'auth', 'mcp']);
@@ -52,7 +54,7 @@ function error(text) {
 async function attachAndReport(socket, send) {
   const tui = await import(pathToFileURL(createRequire(join(piPackage(real), 'package.json')).resolve('@earendil-works/pi-tui')).href);
   let sent;
-  const result = await attach(socket, { isDetach: detachMatcher(tui, detachKey(agentDir())), onAttach: () => { sent = send?.(); } });
+  const result = await attach(socket, { isDetach: detachMatcher(tui, detachKey(getAgentDir())), onAttach: () => { sent = send?.(); } });
   const failure = await sent;
   if (failure) process.stderr.write(`${error(failure)}\n`);
   const id = result.session?.id;
@@ -72,27 +74,27 @@ async function runningTarget() {
   const { session, sessionId } = parsed;
   if (session) {
     const file = resolve(session);
-    running = host => host.session && (host.session.id.startsWith(session) || host.session.file === file);
+    running = host => host.session && (host.session.id.startsWith(session) || hostSessionFile(host) === file);
   } else if (sessionId && parsed.fork === undefined) {
     // With `--fork`, the ID names a new Session.
     const file = await sessionById(sessionId);
     // A Session without messages has no file yet; its host reports where it will be.
-    const directory = sessionDirOption() ?? defaultSessionDir(process.cwd());
+    const directory = await sessionDirOption() ?? defaultSessionDir(process.cwd(), getAgentDir());
     running = host => host.session && (file
-      ? host.session.file === file
-      : host.session.id === sessionId && dirname(host.session.file) === directory && host.session.cwd === process.cwd());
+      ? hostSessionFile(host) === file
+      : host.session.id === sessionId && dirname(hostSessionFile(host)) === directory && host.session.cwd === process.cwd());
   } else if (parsed.continue) {
     const file = await recentSession();
-    if (file) running = host => host.session?.file === file;
+    if (file) running = host => hostSessionFile(host) === file;
   }
   return running && (await settledHosts(paths, running)).find(running);
 }
 
 /** The Session `-c` continues, chosen by Pi's own `continueRecent` rules. */
 async function recentSession() {
-  const { findMostRecentSession } = await import(pathToFileURL(join(piPackage(real), 'dist/core/session-manager.js')).href);
-  const configured = sessionDirOption();
-  const fallback = defaultSessionDir(process.cwd());
+  const { findMostRecentSession } = await dist('core/session-manager.js');
+  const configured = await sessionDirOption();
+  const fallback = defaultSessionDir(process.cwd(), getAgentDir());
   const directory = configured ?? fallback;
   // A configured directory may hold other cwds' Sessions.
   return findMostRecentSession(directory, directory === fallback ? undefined : process.cwd()) ?? undefined;
@@ -100,12 +102,14 @@ async function recentSession() {
 
 /** The Session `--session-id` would open, found by Pi's own rules, if it exists. */
 async function sessionById(id) {
-  const { SessionManager } = await import(pathToFileURL(join(piPackage(real), 'dist/core/session-manager.js')).href);
-  return SessionManager.findById(process.cwd(), id, sessionDirOption());
+  const { SessionManager } = await dist('core/session-manager.js');
+  return SessionManager.findById(process.cwd(), id, await sessionDirOption());
 }
 
-function sessionDirOption() {
-  return parsed.sessionDir ? resolvePath(parsed.sessionDir) : configuredSessionDir();
+/** The session directory configured for Pi in this cwd, as Pi resolves it: `--session-dir`, its environment variable, then its settings. */
+async function sessionDirOption() {
+  const configured = parsed.sessionDir || process.env[ENV_SESSION_DIR] || (await dist('core/settings-manager.js')).SettingsManager.create(process.cwd(), getAgentDir()).getSessionDir();
+  return configured ? resolvePath(configured) : undefined;
 }
 
 async function attachCommand(query) {

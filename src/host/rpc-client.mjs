@@ -3,7 +3,7 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { alive, hostStatus, settledHosts, startHost } from './client.mjs';
+import { alive, hostSessionFile, hostStatus, settledHosts, startHost } from './client.mjs';
 import { readSessionHeader, readSessionId } from '../roots/guard.mjs';
 import { openStream, request } from '../roots/transport.mjs';
 import { piPackage } from '../pi.mjs';
@@ -126,10 +126,12 @@ export async function runHeadless({ pi, paths, args, mode, findRunning, warnIgno
 
   /** Connects to the Session in `file`, starting it in a host in `cwd` if no Pi runs it. */
   async function open(file, cwd, handlers) {
+    // A Session Pi created in a relative session directory has a relative file.
+    file = resolve(cwd, file);
     const deadline = performance.now() + TIMEOUT_MS;
     for (;;) {
       const id = readSessionId(file);
-      const holds = h => h.session && (h.session.id === id || h.session.file === file);
+      const holds = h => h.session && (h.session.id === id || hostSessionFile(h) === file);
       try {
         const held = (await settledHosts(paths, holds)).find(holds);
         if (held) return await connect(paths, held.session.id, handlers, () => alive(held.pid));
