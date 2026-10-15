@@ -1,16 +1,17 @@
 import type { AgentSession, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { TruncatedText, type TUI } from "@earendil-works/pi-tui";
-import { MESSAGE_TAG, MESSAGE_TYPE } from "../agents/registry.ts";
+import { messageBody, MESSAGE_TYPE, type Sender } from "../agents/registry.ts";
 
 const WIDGET_KEY = "pi-agents-queue";
 
-type Queued = { role: string; customType?: string; content?: unknown; details?: { delivery?: string } };
+type Queued = { role: string; customType?: string; content?: unknown; details?: { delivery?: string; sender?: Sender } };
 
 /** One line for an Agent message: its sender and body. */
-function summary(content: unknown): string {
+function summary({ content, details }: Queued): string {
 	const text = typeof content === "string" ? content : "";
-	const match = new RegExp(`^<${MESSAGE_TAG} from="([^"]*)"[^>]*>\\n([\\s\\S]*)\\n</${MESSAGE_TAG}>$`).exec(text);
-	return (match ? `[${match[1]}] ${match[2]}` : text).replace(/\s+/g, " ").trim();
+	const sender = details?.sender;
+	const body = sender && messageBody(text, sender);
+	return (body === undefined ? text : `[${sender!.name ?? sender!.id}] ${body}`).replace(/\s+/g, " ").trim();
 }
 
 /** Agent messages waiting in the Session's queues, which Pi does not list as it lists the user's. */
@@ -19,7 +20,7 @@ export function queuedLines(agent: AgentSession["agent"]): string[] {
 	const lines = (label: string, messages: Queued[]) => messages
 		.filter((message) => message.role === "custom" && message.customType === MESSAGE_TYPE)
 		// A write waits in the steering queue but asks for nothing, so it is labeled apart from a steer.
-		.map((message) => `${message.details?.delivery === "write" ? "Write" : label}: ${summary(message.content)}`);
+		.map((message) => `${message.details?.delivery === "write" ? "Write" : label}: ${summary(message)}`);
 	return [...lines("Steering", queues.steeringQueue.messages), ...lines("Follow-up", queues.followUpQueue.messages)];
 }
 

@@ -276,13 +276,13 @@ Agent <name> (<id>) <outcome>.
 A recipient sees each message in an `agent-message` element naming the sender. An input from a sender other than the owner also carries a note asking for a reply:
 
 ```text
-<agent-message from="<name>" id="<id>">
+<agent-message name="<name>" id="<id>">
 <body>
 </agent-message>
 ```
 
 ```text
-<agent-message from="<name>" id="<id>" note="Reply with send">
+<agent-message name="<name>" id="<id>" note="Reply with send">
 <body>
 </agent-message>
 ```

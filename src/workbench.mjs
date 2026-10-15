@@ -551,7 +551,7 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
         fold();
         summarize('branch summary');
       } else if (message.role === 'custom') {
-        const from = message.customType === 'pi-agents' ? message.details?.from?.name ?? message.details?.from?.id : undefined;
+        const from = message.customType === 'pi-agents' ? message.details?.sender?.name ?? message.details?.sender?.id : undefined;
         fold();
         summarize(from ? `message from ${from}` : `${message.customType} message`);
       }

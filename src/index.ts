@@ -157,7 +157,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			sessionFile: () => ctx?.sessionManager.getSessionFile(),
 			receive: (text, delivery, messageId, from) => {
 				const as = created.stopped ? "write" : delivery;
-				pi.sendMessage(customMessage(text, as, { messageId, from }), as === "write"
+				pi.sendMessage(customMessage(text, as, { messageId, sender: from }), as === "write"
 					? { deliverAs: "steer" }
 					: { deliverAs: as, triggerTurn: true });
 				queue.update();

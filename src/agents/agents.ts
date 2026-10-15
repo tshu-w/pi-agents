@@ -204,7 +204,7 @@ interface Input {
 	/** The user's input from the task viewer. */
 	user?: boolean;
 	/** The Agent that sent it. */
-	from?: Sender;
+	sender?: Sender;
 	record?: InputRecord;
 	permit?: symbol;
 	schema?: unknown;
@@ -214,7 +214,7 @@ interface Input {
 	silent?: boolean;
 }
 
-type Message = Pick<Input, "text" | "user" | "from">;
+type Message = Pick<Input, "text" | "user" | "sender">;
 
 interface Turn {
 	inputs: Input[];
@@ -388,7 +388,7 @@ export class Agents {
 		}
 		const self = { id: this.self.id, name: this.self.name() };
 		const text = messageText(self, true, "followUp", request.message, this.ids());
-		const queued = this.enqueue(agent, { text, from: sender(self, this.ids()), permit, record: this.newRecord(agent) });
+		const queued = this.enqueue(agent, { text, sender: sender(self, this.ids()), permit, record: this.newRecord(agent) });
 		return { record: agent.record, queued };
 	}
 
@@ -422,7 +422,7 @@ export class Agents {
 	 */
 	async request(id: string, text: string, delivery: "followUp" | "steer", from: Sender, schema?: unknown, timeoutMs?: number): Promise<{ record: InputRecord; timedOut: boolean }> {
 		const agent = this.agent(id);
-		const input: Input = { text, from, permit: this.reserve(), record: this.newRecord(agent), done: deferred() };
+		const input: Input = { text, sender: from, permit: this.reserve(), record: this.newRecord(agent), done: deferred() };
 		if (schema !== undefined) input.schema = schema;
 		this.add(agent, input, delivery);
 		let stopping: Promise<void> | undefined;
@@ -450,16 +450,16 @@ export class Agents {
 		input.submitted = { value: args.value };
 	}
 
-	accept(id: string, text: string, delivery: Delivery, options: { fromOwner: boolean; notification: boolean; from?: Sender }): { queued: boolean } {
+	accept(id: string, text: string, delivery: Delivery, options: { fromOwner: boolean; notification: boolean; sender?: Sender }): { queued: boolean } {
 		const agent = this.agent(id);
 		if (agent.stopped && !options.fromOwner) delivery = "write";
 		if (delivery === "write") {
-			this.write(agent, text, options.from);
+			this.write(agent, text, options.sender);
 			return { queued: false };
 		}
 		// Notifications keep their owner informed even at the input limit.
 		const permit = options.notification ? undefined : this.reserve();
-		const input: Input = { text, from: options.from, permit, record: options.fromOwner && !options.notification ? this.newRecord(agent) : undefined };
+		const input: Input = { text, sender: options.sender, permit, record: options.fromOwner && !options.notification ? this.newRecord(agent) : undefined };
 		return { queued: this.add(agent, input, delivery) };
 	}
 
@@ -622,7 +622,7 @@ export class Agents {
 	}
 
 	private write(agent: Owned, text: string, from?: Sender): void {
-		const message = customMessage(text, "write", { from });
+		const message = customMessage(text, "write", { sender: from });
 		const session = agent.session;
 		if (session?.isStreaming) {
 			session.agent.steer({ role: "custom", ...message, timestamp: Date.now() });
@@ -664,9 +664,9 @@ export class Agents {
 		this.changed();
 		if (!turn.started) return;
 		if (agent.session?.isStreaming) {
-			agent.session.agent.steer({ role: "custom", ...customMessage(input.text, "steer", { user: input.user, from: input.from }), timestamp: Date.now() });
+			agent.session.agent.steer({ role: "custom", ...customMessage(input.text, "steer", { user: input.user, sender: input.sender }), timestamp: Date.now() });
 		} else {
-			turn.pending.push({ text: input.text, user: input.user, from: input.from });
+			turn.pending.push({ text: input.text, user: input.user, sender: input.sender });
 		}
 	}
 
@@ -692,7 +692,7 @@ export class Agents {
 			for (const input of turn.inputs) if (input.record) input.record.state = "running";
 			this.persist(agent);
 			this.changed();
-			let batch: Message[] = turn.inputs.map(({ text, user, from }) => ({ text, user, from }));
+			let batch: Message[] = turn.inputs.map(({ text, user, sender }) => ({ text, user, sender }));
 			while (batch.length > 0 && !turn.abort.signal.aborted) {
 				for (const { text, ...rest } of batch.slice(0, -1)) await session.sendCustomMessage(customMessage(text, "steer", rest), { triggerTurn: false });
 				const { text, ...rest } = batch.at(-1)!;
@@ -704,7 +704,7 @@ export class Agents {
 				}
 				batch = [
 					...turn.pending.splice(0),
-					...leftover.flatMap(({ content, details }) => details.delivery === "write" ? [] : [{ text: content, user: details.user, from: details.from }]),
+					...leftover.flatMap(({ content, details }) => details.delivery === "write" ? [] : [{ text: content, user: details.user, sender: details.sender }]),
 				];
 			}
 			const last = lastAnswer(session, before);

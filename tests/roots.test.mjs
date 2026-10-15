@@ -102,7 +102,7 @@ test("an input starts the offline root in a host on its active branch, which ans
 	assert.match(await sender.call({ action: "list", query: "reviewer" }), /reviewer \(offline-\)\s+idle/);
 	assert.equal(await sender.call({ action: "send", target: "reviewer", message: "hello" }), "Input accepted by reviewer (offline-).");
 	const answered = await until(() => entriesOf(target.file).find((entry) => entry.type === "message" && entry.message.role === "assistant"), "answer");
-	assert.match(textOf(answered.message.content), /^answer:<agent-message from="sender" [^>]*note="Reply with send">\nhello\n/);
+	assert.match(textOf(answered.message.content), /^answer:<agent-message name="sender" [^>]*note="Reply with send">\nhello\n/);
 	const [host] = (await listHosts(paths)).filter((entry) => entry.session?.id === target.id);
 	assert.equal(host.attached, false);
 	// The host gives up the Session once Pi exits.
@@ -178,5 +178,5 @@ test("a root in another process is listed with its state and cannot be opened tw
 	assert.equal(shutdown, true);
 
 	await sender.call({ action: "send", target: "live-c", message: "note", deliverAs: "write" });
-	await until(() => entriesOf(target.file).some((entry) => entry.type === "custom_message" && entry.content.startsWith('<agent-message from="sender" ') && entry.content.includes("\nnote\n")), "write");
+	await until(() => entriesOf(target.file).some((entry) => entry.type === "custom_message" && entry.content.startsWith('<agent-message name="sender" ') && entry.content.includes("\nnote\n")), "write");
 });

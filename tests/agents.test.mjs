@@ -312,20 +312,20 @@ test("an Agent message queued in a busy root is listed until taken in and surviv
 	await session.bindExtensions({ mode: "interactive", uiContext });
 	const lines = () => widgets.get("pi-agents-queue")({ requestRender: noop }, { fg: (_color, text) => text }).render(80).map((line) => line.trim());
 	const node = globalThis.piAgentsTree.nodes.get(sessionManager.getSessionId());
-	const message = '<agent-message from="peer" id="ab" note="Reply with send">\nhello\nthere\n</agent-message>';
+	const message = '<agent-message name="peer" id="ab" note="Reply with send">\nhello\nthere\n</agent-message>';
 
 	const last = () => session.messages.at(-1);
 
 	// Clearing the queue, as Pi's dequeue does, leaves it queued; stopping the turn adds it without a turn.
 	let turn = session.prompt("hold");
 	await until(() => session.isStreaming, "turn started");
-	node.receive(message, "followUp");
+	node.receive(message, "followUp", undefined, { id: "ab", name: "peer" });
 	assert.deepEqual(lines(), ["Follow-up: [peer] hello there"]);
 	session.clearQueue();
 	assert.deepEqual(lines(), ["Follow-up: [peer] hello there"]);
 	// One that arrives while the turn stops is added as well.
 	const stopping = session.abort();
-	node.receive(message, "steer");
+	node.receive(message, "steer", undefined, { id: "ab", name: "peer" });
 	await stopping;
 	await turn;
 	assert.equal(session.messages.filter((entry) => entry.content === message).length, 2);
@@ -335,7 +335,7 @@ test("an Agent message queued in a busy root is listed until taken in and surviv
 	assert.equal(turns, 1);
 
 	// One that arrives later is added without a turn too.
-	node.receive(message, "steer");
+	node.receive(message, "steer", undefined, { id: "ab", name: "peer" });
 	await session.waitForIdle();
 	assert.equal(last().content, message);
 	assert.equal(turns, 1);
@@ -344,7 +344,7 @@ test("an Agent message queued in a busy root is listed until taken in and surviv
 	hold = gate();
 	turn = session.prompt("hold");
 	await until(() => session.isStreaming, "second turn started");
-	node.receive(message, "followUp");
+	node.receive(message, "followUp", undefined, { id: "ab", name: "peer" });
 	hold.open();
 	await turn;
 	await session.waitForIdle();

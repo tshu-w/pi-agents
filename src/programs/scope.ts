@@ -73,7 +73,7 @@ export function programScope(
 			const ids = visibleIds(agentId, false);
 			const text = messageText(from, true, delivery, body, ids);
 			if (delivery === "write") {
-				agents.accept(agentId, text, "write", { fromOwner: true, notification: false, from: sender(from, ids) });
+				agents.accept(agentId, text, "write", { fromOwner: true, notification: false, sender: sender(from, ids) });
 				return undefined;
 			}
 			const { record, timedOut } = await agents.request(agentId, text, delivery, sender(from, ids), schema, timeout === undefined ? undefined : timeout * 1000);

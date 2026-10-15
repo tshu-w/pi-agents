@@ -9,11 +9,11 @@ import { messageBody, type Sender } from "../agents/registry.ts";
  */
 export const renderAgentMessage: MessageRenderer = (message, { expanded, outputPad }, theme) => {
 	if (expanded || typeof message.content !== "string") return undefined;
-	const details = message.details as { user?: boolean; from?: Sender } | undefined;
+	const details = message.details as { user?: boolean; sender?: Sender } | undefined;
 	if (details?.user) return new UserMessageComponent(message.content, getMarkdownTheme(), outputPad);
-	const body = details?.from && messageBody(message.content, details.from);
+	const body = details?.sender && messageBody(message.content, details.sender);
 	if (body === undefined) return undefined;
-	const { id, name } = details!.from!;
+	const { id, name } = details!.sender!;
 	const box = new Box(outputPad, 1, (text) => theme.bg("customMessageBg", text));
 	const label = theme.fg("customMessageLabel", `\x1b[1m[${message.customType}]\x1b[22m`);
 	const sender = name === undefined ? theme.fg("customMessageText", ` from ${id}`) : theme.fg("customMessageText", ` from ${name}`) + theme.fg("dim", ` (${id})`);
