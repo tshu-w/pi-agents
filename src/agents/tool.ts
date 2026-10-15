@@ -116,7 +116,7 @@ export function registerAgentTool(
 			cwd: Type.Optional(Type.String({ description: "Working directory for `spawn` (default: the caller's current working directory)." })),
 			context: Type.Optional(StringEnum(["fresh", "fork"] as const, { description: "Context for `spawn` (default: fresh). fresh starts without the caller's conversation; fork snapshots it." })),
 			model: Type.Optional(Type.String({ description: "Model for `spawn` as provider/modelId (default: the caller's model)." })),
-			thinkingLevel: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level for `spawn`: off, minimal, low, medium, high, or xhigh (default: the caller's level)." })),
+			thinkingLevel: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level for `spawn`: off, minimal, low, medium, high, xhigh, or max (default: the caller's level)." })),
 			target: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "Agent ID, name, or unique ID prefix for `send`, `wait`, or `abort`. `wait` and `send` with `deliverAs='write'` also accept an array. When omitted for `wait`, selects all owned Agents with pending or unread results." })),
 			deliverAs: Type.Optional(StringEnum(["followUp", "steer", "write"] as const, { description: "Delivery for `send` (default: followUp). followUp waits until the recipient's current turn ends; steer delivers after its current tool calls, before the next model call; write delivers like steer but never starts a turn and has no result." })),
 			history: Type.Optional(Type.Integer({ minimum: 0, description: "Number of most recent read results to return again per selected Agent for `wait` (default: 0)." })),
