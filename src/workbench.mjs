@@ -206,13 +206,13 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
       hints.keyHint('app.tools.expand', 'attach'),
       hints.rawKeyHint(['lineUp', 'halfPageUp', 'pageUp', 'lineDown', 'halfPageDown', 'pageDown']
         .map(name => hints.keyText(`tui.altScreen.${name}`)).filter(Boolean).join('/'), 'scroll'),
-      hints.rawKeyHint(`${detach}/esc`, 'close'),
+      hints.rawKeyHint(`${detach}/${hints.keyText('tui.select.cancel')}`, 'close'),
     ].join(theme.fg('muted', ' · ')) : [
-      hints.rawKeyHint('enter', 'attach'),
+      hints.keyHint('tui.select.confirm', 'attach'),
       hints.rawKeyHint(detach, 'quit'),
       hints.rawKeyHint('space', 'preview'),
       hints.rawKeyHint('ctrl+x', 'stop'),
-      hints.rawKeyHint('ctrl+d', 'remove'),
+      hints.keyHint('app.session.delete', 'remove'),
       hints.rawKeyHint('@', 'message'),
       hints.rawKeyHint('/', 'commands'),
     ].join(theme.fg('muted', ' · '));
@@ -282,11 +282,11 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
       // As in a Session, the detach key leaves and everything keeps running; in the preview, it returns to the list.
       if (isDetach(data)) return void (pane ? pane.close() : quit());
       if (pane?.handleInput(data, empty)) return;
-      if (T.matchesKey(data, 'ctrl+c')) {
+      if (keybindings.matches(data, 'app.clear')) {
         if (!empty) return editor.setText(pane?.mention ?? '');
         if (Date.now() - lastCtrlC < 1000) return void quit();
         lastCtrlC = Date.now();
-        return say('Press Ctrl+C again to quit');
+        return say(`Press ${hints.keyText('app.clear')} again to quit`);
       }
       if (T.matchesKey(data, 'ctrl+x')) return interrupt();
       if (empty && keybindings.matches(data, 'app.session.delete')) return void remove(selected()?.session);
@@ -297,10 +297,10 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
         if (pane && !editor.getText().startsWith(pane.mention)) editor.setText(before);
         return;
       }
-      if (empty && T.matchesKey(data, 'escape')) return void quit();
-      if (empty && T.matchesKey(data, 'up')) return move(-1);
-      if (empty && T.matchesKey(data, 'down')) return move(1);
-      if (empty && T.matchesKey(data, 'enter')) return void open(selected());
+      if (empty && keybindings.matches(data, 'tui.select.cancel')) return void quit();
+      if (empty && keybindings.matches(data, 'tui.select.up')) return move(-1);
+      if (empty && keybindings.matches(data, 'tui.select.down')) return move(1);
+      if (empty && keybindings.matches(data, 'tui.select.confirm')) return void open(selected());
       if (empty && T.matchesKey(data, 'space')) return void preview(selected()?.session);
       if (empty && data === '@') return pick(session => {
         picked = { session, mention: `@${mention(session)} ` };
@@ -482,16 +482,16 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
       },
       /** Enter, `↑`/`↓`, and Space act on the preview only while no message is typed. */
       handleInput(data, empty) {
-        if (keybindings.matches(data, 'app.tools.expand') || (empty && T.matchesKey(data, 'enter'))) {
+        if (keybindings.matches(data, 'app.tools.expand') || (empty && keybindings.matches(data, 'tui.select.confirm'))) {
           close();
           void openSession(session);
           return true;
         }
-        if (!empty && T.matchesKey(data, 'escape')) {
+        if (!empty && keybindings.matches(data, 'tui.select.cancel')) {
           editor.setText(pane.mention);
           return true;
         }
-        if (T.matchesKey(data, 'escape') || (empty && (T.matchesKey(data, 'space') || T.matchesKey(data, 'ctrl+c')))) {
+        if (keybindings.matches(data, 'tui.select.cancel') || (empty && (T.matchesKey(data, 'space') || keybindings.matches(data, 'app.clear')))) {
           close();
           return true;
         }
@@ -499,7 +499,7 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
         const half = Math.max(1, Math.floor(page / 2));
         const steps = { lineUp: 1, lineDown: -1, halfPageUp: half, halfPageDown: -half, pageUp: page - 1, pageDown: 1 - page, top: Infinity, bottom: -Infinity };
         const action = Object.keys(steps).find(name => keybindings.matches(data, `tui.altScreen.${name}`));
-        const step = empty && T.matchesKey(data, 'up') ? 1 : empty && T.matchesKey(data, 'down') ? -1 : action ? steps[action] : 0;
+        const step = empty && keybindings.matches(data, 'tui.select.up') ? 1 : empty && keybindings.matches(data, 'tui.select.down') ? -1 : action ? steps[action] : 0;
         if (!step) return false;
         scroll = Math.max(0, scroll + step);
         // As in Pi's `auto` mode, the scrollbar shows while scrolling and for a second after.

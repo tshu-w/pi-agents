@@ -82,22 +82,20 @@ A turn counts as seen once it has been shown in an attached terminal or a previe
 
 Keys:
 
-- `Enter` attaches; detaching returns here.
+- `Enter` (`tui.select.confirm`) attaches; detaching returns here.
 - `Space` previews the selected Session below the list: the conversation since the last compaction, with thinking left out and each run of tool calls folded to one line, such as `... (6 tool calls: bash, read, edit)`. The preview follows the Session as it works. The input keeps `@<session>` at its start, so a message goes to the previewed Session. In the preview:
-  - `Enter` sends a typed message; with none typed, it attaches.
-  - `Ctrl+O` (`app.tools.expand`) attaches.
-  - It scrolls as fullscreen mode does; with no message typed, `↑`/`↓` scroll too.
-  - `Esc` clears a typed message; with none typed, it closes the preview.
-  - `Ctrl+Z` closes the preview.
+  - With no message typed, `Enter` attaches, as `Ctrl+O` (`app.tools.expand`) always does.
+  - It scrolls as fullscreen mode does; with no message typed, `↑`/`↓` (`tui.select.up`/`tui.select.down`) scroll too.
+  - `Esc` (`tui.select.cancel`) clears a typed message; with none typed, it or `Space` closes the preview, as `Ctrl+Z` always does.
 - `Ctrl+X` stops the current turn, as `app.interrupt` does.
-- `Ctrl+D` removes the selected Session from the list. Its file stays, and `/resume` brings it back. An idle Session in a host that no terminal is attached to quits first; any other running Session must quit itself.
+- `Ctrl+D` (`app.session.delete`) removes the selected Session from the list. Its file stays, and `/resume` brings it back. An idle Session in a host that no terminal is attached to quits first; any other running Session must quit itself.
 - `Ctrl+Z` (`pi-agents.detach`) exits the workbench, as detaching leaves a Session; every Session keeps running.
 
 The input at the bottom:
 
 - `@` on an empty input opens Pi's session picker. The chosen Session is selected in the list, and the input starts with `@<session>`; the text after it goes to that Session as a user message. After `/`, Tab completes a command.
 - `/resume` opens Pi's session picker over all directories, newest first, and attaches the chosen Session. `Ctrl+D` in the picker deletes a Session file.
-- `/quit` exits the workbench, as do `Esc` and `Ctrl+C` twice on an empty input.
+- `/quit` exits the workbench, as do `Esc` and `Ctrl+C` (`app.clear`) twice on an empty input.
 - Any other text starts a new Session in the current directory with Pi's default settings, detached.
 
 ## 6. Upgrades

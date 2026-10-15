@@ -25,7 +25,6 @@ import {
 	fuzzyFilter,
 	Input,
 	Loader,
-	matchesKey,
 	SelectList,
 	Spacer,
 	Text,
@@ -114,7 +113,7 @@ class AgentViewer implements Component, Focusable {
 	constructor(
 		private tui: TUI,
 		private theme: Theme,
-		keys: KeybindingsManager,
+		private keys: KeybindingsManager,
 		private ctx: ExtensionContext,
 		private owner: AgentNode,
 		private entry: Entry,
@@ -155,8 +154,9 @@ class AgentViewer implements Component, Focusable {
 
 	handleInput(data: string): void {
 		const page = Math.max(1, this.tui.terminal.rows - 8);
-		if (matchesKey(data, "pageUp")) this.scroll += page;
-		else if (matchesKey(data, "pageDown")) this.scroll = Math.max(0, this.scroll - page);
+		// The page keys of Pi's fullscreen mode.
+		if (this.keys.matches(data, "tui.altScreen.pageUp")) this.scroll += page;
+		else if (this.keys.matches(data, "tui.altScreen.pageDown")) this.scroll = Math.max(0, this.scroll - page);
 		else this.editor.handleInput(data);
 		this.tui.requestRender();
 	}
@@ -412,8 +412,8 @@ class ProgramViewer implements Component, Focusable {
 		else if (this.keys.matches(data, "app.tools.expand" as never)) {
 			this.expanded = !this.expanded;
 			this.tool.setExpanded(this.expanded);
-		} else if (matchesKey(data, "pageUp")) this.scroll += page;
-		else if (matchesKey(data, "pageDown")) this.scroll = Math.max(0, this.scroll - page);
+		} else if (this.keys.matches(data, "tui.altScreen.pageUp")) this.scroll += page;
+		else if (this.keys.matches(data, "tui.altScreen.pageDown")) this.scroll = Math.max(0, this.scroll - page);
 		this.tui.requestRender();
 	}
 
