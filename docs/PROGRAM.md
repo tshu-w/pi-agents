@@ -1,34 +1,18 @@
 # Pi Agents Program Specification
 
-A Program is JavaScript that calls tools and Agents. Agents are defined in
-SPEC.md.
+A Program is JavaScript that calls tools and Agents. Agents are defined in SPEC.md.
 
-The `program` tool replaces Pi's `codemode` tool and keeps its script API,
-tool list, result format, and truncation. This document describes what
-Programs add.
+The `program` tool replaces Pi's `codemode` tool and keeps its script API, tool list, result format, and truncation. This document describes what Programs add.
 
 ## 1. Semantic model
 
-An Agent runs a **Program** with the `program` tool. That Agent is the
-Program's **caller**. The Program can call the caller's tools and create
-Agents.
+An Agent runs a **Program** with the `program` tool. That Agent is the Program's **caller**. The Program can call the caller's tools and create Agents.
 
-A Program runs in the **foreground** or the **background**. In the
-foreground, the tool call returns the Program's result. In the background,
-the tool call returns the Program's ID, and the caller gets the result with
-`wait`.
+A Program runs in the **foreground** or the **background**. In the foreground, the tool call returns the Program's result. In the background, the tool call returns the Program's ID, and the caller gets the result with `wait`.
 
-A Program is shown by its short ID: the shortest prefix of its ID, at least
-8 characters, that none of the caller's other Programs' IDs starts with. A
-target is an ID or a unique ID prefix.
+A Program is shown by its short ID: the shortest prefix of its ID, at least 8 characters, that none of the caller's other Programs' IDs starts with. A target is an ID or a unique ID prefix.
 
-Agents created with `agent()` belong to the Program: it gets their results
-from `send()`, without `wait` or notifications, and only it can abort
-them. Each of these Agents and the Agents under it see only one another,
-and no other Agent sees them. The user sees them in the task panel and `/tasks`,
-and can talk to them or interrupt them in the viewer; an interrupted input
-makes its `send()` throw. When the Program ends, their unfinished inputs end
-as `aborted`, and the Agents go offline for good, from the bottom up.
+Agents created with `agent()` belong to the Program: it gets their results from `send()`, without `wait` or notifications, and only it can abort them. Each of these Agents and the Agents under it see only one another, and no other Agent sees them. The user sees them in the task panel and `/tasks`, and can talk to them or interrupt them in the viewer; an interrupted input makes its `send()` throw. When the Program ends, their unfinished inputs end as `aborted`, and the Agents go offline for good, from the bottom up.
 
 A Program is `running` until it ends in one of three ways:
 
@@ -38,60 +22,38 @@ A Program is `running` until it ends in one of three ways:
 
 ## 2. Operations
 
-- `run` runs a Program in the foreground or background, with an optional
-  timeout.
+- `run` runs a Program in the foreground or background, with an optional timeout.
 - `wait` waits for background Programs and returns their results.
 - `list` lists the caller's background Programs.
 - `stop` stops a running Program.
 
-When a background Program ends and its caller is not waiting for it, the
-caller gets a notification, as in SPEC §5. A steer input ends `wait` early,
-as in SPEC §5.
+When a background Program ends and its caller is not waiting for it, the caller gets a notification, as in SPEC §5. A steer input ends `wait` early, as in SPEC §5.
 
 ## 3. Program API
 
-`tools` holds the caller's tools, except `program`; which tools the caller
-can use is checked at each call. If a Program fails or is stopped, the
-error or stop reason follows its output. Its `store()` writes are kept
-only if it completes.
+`tools` holds the caller's tools, except `program`; which tools the caller can use is checked at each call. If a Program fails or is stopped, the error or stop reason follows its output. Its `store()` writes are kept only if it completes.
 
-A Program also creates idle Agents with `agent()`, typed in the Agent API
-(§6). Options work like `agent` `spawn`; an omitted name is generated,
-unique within the Program. `send()` sends a message and returns its result.
-`abort()` works like `agent` `abort`. The Agent gets its tools as if the caller had spawned it.
+A Program also creates idle Agents with `agent()`, typed in the Agent API (§6). Options work like `agent` `spawn`; an omitted name is generated, unique within the Program. `send()` sends a message and returns its result. `abort()` works like `agent` `abort`. The Agent gets its tools as if the caller had spawned it.
 
-A result is the Agent's answer. If the input fails or is aborted, the
-result throws an Error. A write returns `undefined` once accepted.
+A result is the Agent's answer. If the input fails or is aborted, the result throws an Error. A write returns `undefined` once accepted.
 
-With `schema`, the Agent must call `submit_result` with a value that
-matches the schema, and the result is that value. If it does not, the
-input fails.
+With `schema`, the Agent must call `submit_result` with a value that matches the schema, and the result is that value. If it does not, the input fails.
 
-With `timeout`, an input that has not ended within that many seconds of
-`send()`, including time queued for a slot, is aborted; the Agent's queued
-inputs are unaffected. The result throws a timeout Error.
+With `timeout`, an input that has not ended within that many seconds of `send()`, including time queued for a slot, is aborted; the Agent's queued inputs are unaffected. The result throws a timeout Error.
 
 `send()` throws if `schema` or `timeout` is used without `followUp`.
 
 ## 4. Lifecycle
 
-When a Program ends, it cancels its unfinished tool calls and aborts its
-Agents' unfinished inputs, and waits for its Agents to go offline. It
-returns its result after cleanup. Work not stopped within the cleanup
-timeout is abandoned and may keep running; the Program's result and `stop`
-report it as an error, and the Program's state is unchanged.
+When a Program ends, it cancels its unfinished tool calls and aborts its Agents' unfinished inputs, and waits for its Agents to go offline. It returns its result after cleanup. Work not stopped within the cleanup timeout is abandoned and may keep running; the Program's result and `stop` report it as an error, and the Program's state is unchanged.
 
-When the caller goes offline, its running Programs stop. Their results
-remain available when the caller is loaded again.
+When the caller goes offline, its running Programs stop. Their results remain available when the caller is loaded again.
 
 ## 5. Limits
 
-A Program's Agents and the Agents under them count toward the caller's
-tree: they share its slots and `maxOutstanding` limit, as in SPEC §4. At
-`maxOutstanding`, `send()` throws.
+A Program's Agents and the Agents under them count toward the caller's tree: they share its slots and `maxOutstanding` limit, as in SPEC §4. At `maxOutstanding`, `send()` throws.
 
-An owned caller gives up its slot while a foreground Program runs or while
-it waits for background Programs, and takes one again before continuing.
+An owned caller gives up its slot while a foreground Program runs or while it waits for background Programs, and takes one again before continuing.
 
 ## 6. Model-facing tool
 
@@ -99,21 +61,11 @@ it waits for background Programs, and takes one again before continuing.
 
 description:
 
-Run JavaScript that composes tool calls and Agents; only its output and
-return value reach the caller. `run` runs a Program in the foreground, or
-in the background with `background`; `wait` waits for background Programs
-and returns their results; `list` lists background Programs; `stop` stops
-a running Program. When a background Program ends while its caller is not
-waiting for it, the caller receives a notification; `wait` returns the
-result.
+Run JavaScript that composes tool calls and Agents; only its output and return value reach the caller. `run` runs a Program in the foreground, or in the background with `background`; `wait` waits for background Programs and returns their results; `list` lists background Programs; `stop` stops a running Program. When a background Program ends while its caller is not waiting for it, the caller receives a notification; `wait` returns the result.
 
-Program code is the body of an async function. It calls the caller's tools
-through `tools.*`, which excludes `program`, and creates Agents through
-`agent()`. These Agents belong to the Program, are isolated from other
-Agents, and go offline when it ends.
+Program code is the body of an async function. It calls the caller's tools through `tools.*`, which excludes `program`, and creates Agents through `agent()`. These Agents belong to the Program, are isolated from other Agents, and go offline when it ends.
 
-`program` replaces the `codemode` tool; wherever `codemode` is mentioned,
-use `program`.
+`program` replaces the `codemode` tool; wherever `codemode` is mentioned, use `program`.
 
 [the script API of `codemode`, without its Model API]
 
@@ -163,14 +115,9 @@ Run JavaScript that composes tool calls and Agents
 
 promptGuidelines:
 
-- Use `program(action='run', code=...)` to call tools or Agents several
-  times without a model turn between the calls, for example to read many
-  files, filter large tool output, fan out Agents, or loop until a
-  condition holds.
-- Use `Promise.allSettled` for independent calls. Return only what the
-  caller needs; use `text()` for progress worth reading.
-- Use `background=true` for long Programs, and `program(action='wait', ...)`
-  when the next step depends on their results.
+- Use `program(action='run', code=...)` to call tools or Agents several times without a model turn between the calls, for example to read many files, filter large tool output, fan out Agents, or loop until a condition holds.
+- Use `Promise.allSettled` for independent calls. Return only what the caller needs; use `text()` for progress worth reading.
+- Use `background=true` for long Programs, and `program(action='wait', ...)` when the next step depends on their results.
 
 parameters:
 
@@ -186,10 +133,7 @@ results:
 
 In these formats, `<id>` is the Program's short ID.
 
-`run` in the foreground returns the Program result, as an error if the
-Program failed or was stopped.
-A Program result lists its `send()` calls with its tool calls, and names the
-calls still running when the script returned, which were cancelled.
+`run` in the foreground returns the Program result, as an error if the Program failed or was stopped. A Program result lists its `send()` calls with its tool calls, and names the calls still running when the script returned, which were cancelled.
 
 `run` in the background:
 
@@ -197,8 +141,7 @@ calls still running when the script returned, which were cancelled.
 Program <id> started.
 ```
 
-`wait` returns one block per result, followed by running Programs on
-timeout:
+`wait` returns one block per result, followed by running Programs on timeout:
 
 ```text
 <program-result id="<id>" status="<outcome>">
@@ -210,8 +153,7 @@ Still running: <id>, ...
 
 When a steer input ended the wait, the line of SPEC §6 follows.
 
-A single completed result, with nothing running, is returned alone. When
-there are no results or running Programs:
+A single completed result, with nothing running, is returned alone. When there are no results or running Programs:
 
 ```text
 No results.
@@ -242,8 +184,7 @@ Program <id> stopped.
 Program <id> has already ended.
 ```
 
-When some of the Program's work does not stop within the timeout, `stop`
-fails with the following; only restarting Pi stops it.
+When some of the Program's work does not stop within the timeout, `stop` fails with the following; only restarting Pi stops it.
 
 ```text
 Program <id> did not stop within the timeout and may still be running.
@@ -257,8 +198,7 @@ Cleanup error: some of the Program's work did not stop within the timeout and ma
 
 errors:
 
-Invalid calls fail with an error. Errors that need a follow-up say what to
-do:
+Invalid calls fail with an error. Errors that need a follow-up say what to do:
 
 ```text
 No Program matches "<target>". Use list to find Programs.
@@ -270,10 +210,7 @@ No Program matches "<target>". Use list to find Programs.
 
 truncation:
 
-`wait` text beyond Pi's output limits is truncated as in SPEC §6. `wait`
-adds results in order; the result that crosses the limit is truncated but keeps
-its closing tag, and later results are omitted. A truncated result counts
-as returned. Omitted results stay unreturned, and the text ends with:
+`wait` text beyond Pi's output limits is truncated as in SPEC §6. `wait` adds results in order; the result that crosses the limit is truncated but keeps its closing tag, and later results are omitted. A truncated result counts as returned. Omitted results stay unreturned, and the text ends with:
 
 ```text
 [Results omitted: <id>, ... Use wait with fewer targets.]
@@ -289,19 +226,10 @@ Program <id> <outcome>.
 
 ## 7. Human interface
 
-The task panel (SPEC §7) lists running background Programs.
-`/tasks` opens a background Program in the task viewer (SPEC §7).
+The task panel (SPEC §7) lists running background Programs. `/tasks` opens a background Program in the task viewer (SPEC §7).
 
-`/program <path> [args]` runs the script in a file as a foreground Program of
-the current Agent, with the text after the path as the global `args`. Esc
-stops it. Like a `!` command, it and its result join the context without
-starting a turn. With `pi -p`, the result is printed, and Pi exits with
-status 1 if the run fails.
+`/program <path> [args]` runs the script in a file as a foreground Program of the current Agent, with the text after the path as the global `args`. Esc stops it. Like a `!` command, it and its result join the context without starting a turn. With `pi -p`, the result is printed, and Pi exits with status 1 if the run fails.
 
 ## 8. Configuration
 
-`program` is inactive by default, like `codemode`; enable it with `"defaultTools": ["+program"]` or `--tools`. `/program` does not need it.
-MCP treats `program` as `codemode`: it activates `program` when its servers need a script tool and neither is active, unless `autoEnableCodemode` is false, and a Program waits for the MCP servers its code names.
-When both `program` and `codemode` are active, Pi warns once per Session, since they do a similar job.
-`codemode.mode` decides how the tool list is presented, as for `codemode`.
-`--program-only` activates `program` and uses `only` for the process, including its owned Agents.
+`program` is inactive by default, like `codemode`; enable it with `"defaultTools": ["+program"]` or `--tools`. `/program` does not need it. MCP treats `program` as `codemode`: it activates `program` when its servers need a script tool and neither is active, unless `autoEnableCodemode` is false, and a Program waits for the MCP servers its code names. When both `program` and `codemode` are active, Pi warns once per Session, since they do a similar job. `codemode.mode` decides how the tool list is presented, as for `codemode`. `--program-only` activates `program` and uses `only` for the process, including its owned Agents.

@@ -2,169 +2,107 @@
 
 ## 1. Overview
 
-`pd` runs each Pi Session in a host of its own, so the Session keeps running
-after its terminal closes, and terminals, scripts, and other programs can use
-it at once. The workbench, opened with `pd agents`, shows the user's root
-Sessions in one terminal view: from it the user opens a Session, reads its
-latest result, or sends it a message.
+`pd` runs each Pi Session in a host of its own, so the Session keeps running after its terminal closes, and terminals, scripts, and other programs can use it at once. The workbench, opened with `pd agents`, shows the user's root Sessions in one terminal view: from it the user opens a Session, reads its latest result, or sends it a message.
 
 Three kinds of process take part:
 
-- **Host**: one per Session. It runs Pi's full TUI in a pseudo-terminal and
-  relays it to whichever terminal is attached.
-- **Daemon**: one per user. It tracks Sessions, delivers messages, and starts
-  hosts.
+- **Host**: one per Session. It runs Pi's full TUI in a pseudo-terminal and relays it to whichever terminal is attached.
+- **Daemon**: one per user. It tracks Sessions, delivers messages, and starts hosts.
 - **Workbench**: the daemon's terminal view, opened with `pd agents`.
 
-Every running root Session reports its state to the daemon. The daemon starts
-when a Session or the workbench first needs it, and exits soon after its last
-connection closes.
+Every running root Session reports its state to the daemon. The daemon starts when a Session or the workbench first needs it, and exits soon after its last connection closes.
 
 Files live in `${XDG_STATE_HOME:-~/.local/state}/pi/agents/`:
 
 - `workbench.json`: seen marks and which Sessions are listed.
 - `host.log`, `daemon.log`: logs.
 
-Sockets and Session locks go in `$XDG_RUNTIME_DIR/pi-agents/`. macOS has no
-`XDG_RUNTIME_DIR`, so there they go in `runtime/` under the state directory.
+Sockets and Session locks go in `$XDG_RUNTIME_DIR/pi-agents/`. macOS has no `XDG_RUNTIME_DIR`, so there they go in `runtime/` under the state directory.
 
 ## 2. Setup
 
-Install with npm to get the `pd` command, also named `pi-agents`, then have Pi
-load the extension from the same copy, so the command and the extension are
-always the same version:
+Install with npm to get the `pd` command, also named `pi-agents`, then have Pi load the extension from the same copy, so the command and the extension are always the same version:
 
-    npm install -g @tshu-w/pi-agents
-    pi install "$(npm root -g)/@tshu-w/pi-agents"
+```sh
+npm install -g @tshu-w/pi-agents
+pi install "$(npm root -g)/@tshu-w/pi-agents"
+```
 
-`pd` runs whichever `pi` is on `PATH`. Sessions started with plain `pi` also
-load the extension, but run outside hosts and end with their terminal.
+`pd` runs whichever `pi` is on `PATH`. Sessions started with plain `pi` also load the extension, but run outside hosts and end with their terminal.
 
 ## 3. Commands
 
-- `pd [pi options]` starts Pi interactively in a new host and attaches the
-  terminal. If the Session is already running in a host, `pd` attaches to it
-  instead, sending it the messages as follow-ups and ignoring other options.
+- `pd [pi options]` starts Pi interactively in a new host and attaches the terminal. If the Session is already running in a host, `pd` attaches to it instead, sending it the messages as follow-ups and ignoring other options.
 - `pd agents` opens the workbench.
-- `pd attach <session>` attaches to a Session, starting it first if it is not
-  running.
-- Non-interactive starts (`-p`, `--mode json`, `--mode rpc`, piped stdin) work
-  as in Pi, on the Session in a host, so several of them and an attached
-  terminal can use one Session at once. Their commands act on that Session,
-  as `abort` stops whichever turn is running. Unlike Pi:
-  - Dialogs are not sent to them. A dialog waits while a terminal is attached
-    and is cancelled otherwise.
-  - Extensions see interactive mode, so what an extension writes to stdout
-    does not reach them; `/program` prints as with `pi -p`.
-  - `new_session`, `switch_session`, `fork`, and `clone` move only the caller
-    to the other Session.
-  - `-p` and `--mode json` wait until the Session is idle, then run their
-    messages back to back. Their output covers their own turns, including
-    input other clients add to them.
-  - `SIGINT`, `SIGTERM`, or `SIGHUP` (as from Ctrl+C, `kill`, or a closed
-    terminal) makes `-p` and `--mode json` withdraw their prompts that have
-    not started and stop their running turn, including input other clients
-    added to it. Killed with `SIGKILL`, they leave their turn running.
-  - An RPC client that ends leaves its turn running. One whose Session stops
-    opens it again; requests awaiting a response then fail.
-- `--no-session` starts and package commands (`pd install`, `pd update`, ...)
-  run Pi directly.
+- `pd attach <session>` attaches to a Session, starting it first if it is not running.
+- Non-interactive starts (`-p`, `--mode json`, `--mode rpc`, piped stdin) work as in Pi, on the Session in a host, so several of them and an attached terminal can use one Session at once. Their commands act on that Session, as `abort` stops whichever turn is running. Unlike Pi:
+  - Dialogs are not sent to them. A dialog waits while a terminal is attached and is cancelled otherwise.
+  - Extensions see interactive mode, so what an extension writes to stdout does not reach them; `/program` prints as with `pi -p`.
+  - `new_session`, `switch_session`, `fork`, and `clone` move only the caller to the other Session.
+  - `-p` and `--mode json` wait until the Session is idle, then run their messages back to back. Their output covers their own turns, including input other clients add to them.
+  - `SIGINT`, `SIGTERM`, or `SIGHUP` (as from Ctrl+C, `kill`, or a closed terminal) makes `-p` and `--mode json` withdraw their prompts that have not started and stop their running turn, including input other clients added to it. Killed with `SIGKILL`, they leave their turn running.
+  - An RPC client that ends leaves its turn running. One whose Session stops opens it again; requests awaiting a response then fail.
+- `--no-session` starts and package commands (`pd install`, `pd update`, ...) run Pi directly.
 
-A host keeps the options and environment of the process that started it, as
-Pi reads them only at startup.
+A host keeps the options and environment of the process that started it, as Pi reads them only at startup.
 
-A Session running outside a host still appears in the workbench, but can be
-attached only after it exits.
+A Session running outside a host still appears in the workbench, but can be attached only after it exits.
 
 ## 4. Attach and detach
 
-Only one terminal is attached at a time. A new terminal takes over, and the
-previous one is told how to reattach.
+Only one terminal is attached at a time. A new terminal takes over, and the previous one is told how to reattach.
 
-On attach, the host restores Pi's screen and the terminal modes Pi has set.
-Pi detects the colors and keyboard protocol of the first terminal that
-attaches, as it would without a host.
+On attach, the host restores Pi's screen and the terminal modes Pi has set. Pi detects the colors and keyboard protocol of the first terminal that attaches, as it would without a host.
 
-Closing the window, pressing `Ctrl+Z` (the `pi-agents.detach` keybinding), or
-running `/detach` detaches. The Session keeps running, and the terminal prints:
+Closing the window, pressing `Ctrl+Z` (the `pi-agents.detach` keybinding), or running `/detach` detaches. The Session keeps running, and the terminal prints:
 
-    Pi keeps running. To reattach: pd attach <session>
+```text
+Pi keeps running. To reattach: pd attach <session>
+```
 
 A host disables Pi's suspend.
 
-A detached Session exits after 10 minutes with no live work in its tree and no
-`pd --mode rpc` connected. A message to a Session that is not running starts it
-in a host, detached.
+A detached Session exits after 10 minutes with no live work in its tree and no `pd --mode rpc` connected. A message to a Session that is not running starts it in a host, detached.
 
 ## 5. Workbench
 
-The list shows running Sessions, Sessions that ran without a terminal (started
-here, woken by a message, or detached), Sessions opened here, and Sessions
-with an unseen turn. Older Sessions are reached with `/resume`.
+The list shows running Sessions, Sessions that ran without a terminal (started here, woken by a message, or detached), Sessions opened here, and Sessions with an unseen turn. Older Sessions are reached with `/resume`.
 
-Each row shows a root Session's name and what it did last. The name is the
-Session name, or else the first line of its first message. While the Session
-works, the row shows the running tool; otherwise, the start of its last reply.
-Running owned Agents and Programs are counted, as in `3 agents running`.
+Each row shows a root Session's name and what it did last. The name is the Session name, or else the first line of its first message. While the Session works, the row shows the running tool; otherwise, the start of its last reply. Running owned Agents and Programs are counted, as in `3 agents running`.
 
 Rows are grouped by state, newest first in each group:
 
-- **Needs attention**: a dialog waiting for the user, or a finished turn the user
-  has not seen. A turn that failed after Pi's retries, or a host that exited
-  abnormally, is marked failed.
+- **Needs attention**: a dialog waiting for the user, or a finished turn the user has not seen. A turn that failed after Pi's retries, or a host that exited abnormally, is marked failed.
 - **Working**: the Session or its tree has live work.
 - **Completed**: everything else.
 
-While a Session works, its icon spins. Otherwise the shape tells whether Pi is
-still running (`●`) or has exited (`○`), and the color marks a finished (green)
-or failed (red) turn, or a dialog waiting for the user (yellow). The header
-shows Pi's logo, the size of each group, and key hints.
+While a Session works, its icon spins. Otherwise the shape tells whether Pi is still running (`●`) or has exited (`○`), and the color marks a finished (green) or failed (red) turn, or a dialog waiting for the user (yellow). The header shows Pi's logo, the size of each group, and key hints.
 
-A turn counts as seen once it has been shown in an attached terminal or a
-preview. Sessions
-from before the workbench start out seen. A Session that holds its lock but is
-not reporting to the daemon, as while its Pi exits, shows as unknown (`?`).
+A turn counts as seen once it has been shown in an attached terminal or a preview. Sessions from before the workbench start out seen. A Session that holds its lock but is not reporting to the daemon, as while its Pi exits, shows as unknown (`?`).
 
 Keys:
 
 - `Enter` attaches; detaching returns here.
-- `Space` previews the selected Session below the list: the conversation
-  since the last compaction, with thinking left out and each run of tool
-  calls folded to one line, such as `... (6 tool calls: bash, read, edit)`.
-  The preview follows the Session as it works.
-  The input keeps `@<session>` at its start, so a message goes to the
-  previewed Session. In the preview:
+- `Space` previews the selected Session below the list: the conversation since the last compaction, with thinking left out and each run of tool calls folded to one line, such as `... (6 tool calls: bash, read, edit)`. The preview follows the Session as it works. The input keeps `@<session>` at its start, so a message goes to the previewed Session. In the preview:
   - `Enter` sends a typed message; with none typed, it attaches.
   - `Ctrl+O` (`app.tools.expand`) attaches.
-  - It scrolls as fullscreen mode does; with no message typed, `↑`/`↓`
-    scroll too.
+  - It scrolls as fullscreen mode does; with no message typed, `↑`/`↓` scroll too.
   - `Esc` clears a typed message; with none typed, it closes the preview.
   - `Ctrl+Z` closes the preview.
 - `Ctrl+X` stops the current turn, as `app.interrupt` does.
-- `Ctrl+D` removes the selected Session from the list. Its file stays, and
-  `/resume` brings it back. An idle Session in a host that no terminal is
-  attached to quits first; any other running Session must quit itself.
-- `Ctrl+Z` (`pi-agents.detach`) exits the workbench, as detaching leaves a
-  Session; every Session keeps running.
+- `Ctrl+D` removes the selected Session from the list. Its file stays, and `/resume` brings it back. An idle Session in a host that no terminal is attached to quits first; any other running Session must quit itself.
+- `Ctrl+Z` (`pi-agents.detach`) exits the workbench, as detaching leaves a Session; every Session keeps running.
 
 The input at the bottom:
 
-- `@` on an empty input opens Pi's session picker. The chosen Session is
-  selected in the list, and the input starts with `@<session>`; the text after
-  it goes to that Session as a user message. After `/`, Tab completes a
-  command.
-- `/resume` opens Pi's session picker over all directories, newest first, and
-  attaches the chosen Session. `Ctrl+D` in the picker deletes a Session file.
-- `/quit` exits the workbench, as do `Esc` and `Ctrl+C` twice on an empty
-  input.
-- Any other text starts a new Session in the current directory with Pi's
-  default settings, detached.
+- `@` on an empty input opens Pi's session picker. The chosen Session is selected in the list, and the input starts with `@<session>`; the text after it goes to that Session as a user message. After `/`, Tab completes a command.
+- `/resume` opens Pi's session picker over all directories, newest first, and attaches the chosen Session. `Ctrl+D` in the picker deletes a Session file.
+- `/quit` exits the workbench, as do `Esc` and `Ctrl+C` twice on an empty input.
+- Any other text starts a new Session in the current directory with Pi's default settings, detached.
 
 ## 6. Upgrades
 
-A host keeps running the version it started with until its Session exits.
-When the daemon sees a newer pi-agents version, it restarts once idle, and
-Sessions reconnect to the new daemon.
+A host keeps running the version it started with until its Session exits. When the daemon sees a newer pi-agents version, it restarts once idle, and Sessions reconnect to the new daemon.
 
 ## 7. Platform
 
@@ -172,8 +110,4 @@ macOS and Linux.
 
 ## Not in this version
 
-Attaching several terminals to one Session, Sessions on other machines,
-model-written summaries, and a confirmation before quitting while work is
-running. Keeping Sessions alive across host crashes and reboots needs a
-durable runtime, which [Pi Durable](https://earendil.com/posts/pi-durable/)
-explores.
+Attaching several terminals to one Session, Sessions on other machines, model-written summaries, and a confirmation before quitting while work is running. Keeping Sessions alive across host crashes and reboots needs a durable runtime, which [Pi Durable](https://earendil.com/posts/pi-durable/) explores.

@@ -1,26 +1,18 @@
 # Pi Agents Specification
 
-Pi Agents lets Agents in Pi discover, message, and wait for each other.
-Programs built on these operations are specified in PROGRAM.md.
+Pi Agents lets Agents in Pi discover, message, and wait for each other. Programs built on these operations are specified in PROGRAM.md.
 
-Terms follow Pi's
-[Pi Durable specification](https://github.com/earendil-works/pi/blob/main/packages/durable/docs/spec.md).
+Terms follow Pi's [Pi Durable specification](https://github.com/earendil-works/pi/blob/main/packages/durable/docs/spec.md).
 
 ## 1. Semantic model
 
-An **Agent** is an addressable conversation with a stable identity. The Agent
-that spawns another Agent is its **owner**. A root Agent has no owner and is
-usually opened by a user. Ownership forms trees.
+An **Agent** is an addressable conversation with a stable identity. The Agent that spawns another Agent is its **owner**. A root Agent has no owner and is usually opened by a user. Ownership forms trees.
 
-An Agent is shown by its name and **short ID**: the shortest prefix of its
-ID, at least 8 characters, that no other Agent visible to the reader has.
-An address is an ID, a name, or a unique ID prefix, tried in that order.
+An Agent is shown by its name and **short ID**: the shortest prefix of its ID, at least 8 characters, that no other Agent visible to the reader has. An address is an ID, a name, or a unique ID prefix, tried in that order.
 
-A **message** carries text from one Agent to another. An **input** asks the
-recipient to act. A **write** only adds to the recipient's conversation.
+A **message** carries text from one Agent to another. An **input** asks the recipient to act. A **write** only adds to the recipient's conversation.
 
-A **turn** is one continuous run of an Agent's model and tools. Its final
-assistant message is the **answer** to the inputs it handled.
+A **turn** is one continuous run of an Agent's model and tools. Its final assistant message is the **answer** to the inputs it handled.
 
 An owner can **wait** for answers to the inputs it sends to its owned Agents.
 
@@ -30,100 +22,61 @@ An owner can **wait** for answers to the inputs it sends to its owned Agents.
 
 ### 2.1 spawn
 
-`spawn` creates a named, owned Agent and sends it a first input. It
-accepts an optional working directory, model, thinking level, and forked
-context, and returns the Agent's ID. Names are unique among siblings.
+`spawn` creates a named, owned Agent and sends it a first input. It accepts an optional working directory, model, thinking level, and forked context, and returns the Agent's ID. Names are unique among siblings.
 
 ### 2.2 send
 
-`send` sends a message to a visible Agent by address. An ambiguous or
-unknown address is rejected.
+`send` sends a message to a visible Agent by address. An ambiguous or unknown address is rejected.
 
-An input to an Agent with a turn in progress is either answered by the current turn
-(`steer`) or by a new turn after it (`followUp`, the default).
+An input to an Agent with a turn in progress is either answered by the current turn (`steer`) or by a new turn after it (`followUp`, the default).
 
-A write is added at the recipient's next tool boundary, or at once if it is
-idle. A write can go to several Agents at once.
+A write is added at the recipient's next tool boundary, or at once if it is idle. A write can go to several Agents at once.
 
-When the user of a root Agent clears its queued messages, messages from other
-Agents stay queued. After an Agent's turn is stopped, messages from other
-Agents, notifications included, become writes until its next input from its
-user or owner.
+When the user of a root Agent clears its queued messages, messages from other Agents stay queued. After an Agent's turn is stopped, messages from other Agents, notifications included, become writes until its next input from its user or owner.
 
 ### 2.3 wait
 
-`wait` returns results of inputs sent to owned Agents. It can target
-specific Agents and take a timeout.
+`wait` returns results of inputs sent to owned Agents. It can target specific Agents and take a timeout.
 
 ### 2.4 list
 
-`list` returns visible Agents with their ID, name, working directory,
-state, and latest request: the last user message or input it received.
+`list` returns visible Agents with their ID, name, working directory, state, and latest request: the last user message or input it received.
 
 ### 2.5 abort
 
-`abort` stops an owned Agent's current turn and withdraws its queued
-inputs. The Agent stays available.
+`abort` stops an owned Agent's current turn and withdraws its queued inputs. The Agent stays available.
 
 ## 3. Lifecycle
 
-An Agent is `running` while a turn is in progress, `waiting` while its turn
-waits in `wait` (§4), `queued` while its next turn waits for a slot (§4),
-and `idle` otherwise. An Agent goes offline when its runtime unloads it; it
-stays `idle`.
+An Agent is `running` while a turn is in progress, `waiting` while its turn waits in `wait` (§4), `queued` while its next turn waits for a slot (§4), and `idle` otherwise. An Agent goes offline when its runtime unloads it; it stays `idle`.
 
-`send` returns once the recipient's runtime accepts the message, waking it
-if needed. Acceptance does not mean the recipient has handled it; a message
-not yet handled is lost if the recipient exits.
+`send` returns once the recipient's runtime accepts the message, waking it if needed. Acceptance does not mean the recipient has handled it; a message not yet handled is lost if the recipient exits.
 
 An input to an offline Agent wakes it; a write to one is rejected.
 
-Owned Agents run independently of their owner's turns. When their owner
-goes offline, they go offline too, from the bottom of the tree up, and their
-unfinished inputs end as `aborted`. They return as `idle` when their owner
-is loaded again.
+Owned Agents run independently of their owner's turns. When their owner goes offline, they go offline too, from the bottom of the tree up, and their unfinished inputs end as `aborted`. They return as `idle` when their owner is loaded again.
 
-On abort or when going offline, work that has not stopped within a timeout
-is abandoned: it no longer counts as live work and may keep running until
-the process exits; the timeout is reported.
+On abort or when going offline, work that has not stopped within a timeout is abandoned: it no longer counts as live work and may keep running until the process exits; the timeout is reported.
 
-A root Agent is `running` while it has a turn in progress or pending messages,
-or while its tree has live work (§7 Task panel); otherwise it is `idle`.
+A root Agent is `running` while it has a turn in progress or pending messages, or while its tree has live work (§7 Task panel); otherwise it is `idle`.
 
 ## 4. Visibility and limits
 
-An Agent sees every Agent in its own tree. A root Agent also sees other root
-Agents.
+An Agent sees every Agent in its own tree. A root Agent also sees other root Agents.
 
 Limits apply to owned Agents in each tree.
 
-An owned Agent needs a slot to run a turn. `maxConcurrent` (default 3) is
-the number of slots. An input that would start a turn waits for a free
-slot, and `spawn` or `send` reports that it is queued. A `steer` input to
-an Agent with a turn in progress joins it and needs no new slot. An Agent gives
-up its slot while it waits in `wait`, and takes one again before
-continuing, ahead of inputs that have not started.
+An owned Agent needs a slot to run a turn. `maxConcurrent` (default 3) is the number of slots. An input that would start a turn waits for a free slot, and `spawn` or `send` reports that it is queued. A `steer` input to an Agent with a turn in progress joins it and needs no new slot. An Agent gives up its slot while it waits in `wait`, and takes one again before continuing, ahead of inputs that have not started.
 
-An input is outstanding from acceptance until its turn ends or it is
-withdrawn. `maxOutstanding` (default 8) limits outstanding inputs; an input
-beyond it is rejected. Notifications (§5) do not count.
+An input is outstanding from acceptance until its turn ends or it is withdrawn. `maxOutstanding` (default 8) limits outstanding inputs; an input beyond it is rejected. Notifications (§5) do not count.
 
 ## 5. Results and notifications
 
-An input sent to an owned Agent ends as `completed` when its turn answers
-it, `failed` when its turn fails, or `aborted` when it is aborted or
-withdrawn. Its result is the answer or the error. Only inputs from the
-owner have results; the recipient replies to other senders with `send`.
+An input sent to an owned Agent ends as `completed` when its turn answers it, `failed` when its turn fails, or `aborted` when it is aborted or withdrawn. Its result is the answer or the error. Only inputs from the owner have results; the recipient replies to other senders with `send`.
 
-`wait` returns unread results in order and marks them read. On timeout, it
-returns the results so far and names the Agents still pending. A steer input
-to the waiting Agent, from any sender, ends `wait` the same way; a write does
-not. It can also return read results again.
+`wait` returns unread results in order and marks them read. On timeout, it returns the results so far and names the Agents still pending. A steer input to the waiting Agent, from any sender, ends `wait` the same way; a write does not. It can also return read results again.
 
-When an input ends and its owner is not waiting for that Agent, the owner
-receives a notification, unless the owner aborted it. The notification is an input delivered as `steer` (a write after the owner's turn is stopped, §2.2),
-and it names the Agent and how the input ended. It does not include the
-result; the owner reads the result with `wait`.
+When an input ends and its owner is not waiting for that Agent, the owner receives a notification, unless the owner aborted it. The notification is an input delivered as `steer` (a write after the owner's turn is stopped, §2.2), and it names the Agent and how the input ended. It does not include the result; the owner reads the result with `wait`.
 
 A recipient sees each message with its sender's name and ID.
 
@@ -133,17 +86,7 @@ A recipient sees each message with its sender's name and ID.
 
 description:
 
-Create, message, and coordinate Agents. `spawn` creates an owned Agent and
-sends its first input; `send` sends an input or a write to a visible Agent;
-`wait` waits for owned Agents and returns unread results; `list` finds
-visible Agents; `abort` stops an owned Agent's current turn and queued
-inputs while keeping it available. When an owned Agent finishes an input
-while its owner is not waiting for it, the owner receives a notification
-naming the Agent and outcome; `wait` returns the result. Owned Agents under
-the same root share `${maxConcurrent}` execution slots and a limit of
-`${maxOutstanding}` inputs that have not ended. Inputs that start a new
-turn queue when all slots are busy; new inputs are rejected at the input
-limit.
+Create, message, and coordinate Agents. `spawn` creates an owned Agent and sends its first input; `send` sends an input or a write to a visible Agent; `wait` waits for owned Agents and returns unread results; `list` finds visible Agents; `abort` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification naming the Agent and outcome; `wait` returns the result. Owned Agents under the same root share `${maxConcurrent}` execution slots and a limit of `${maxOutstanding}` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.
 
 promptSnippet:
 
@@ -151,13 +94,9 @@ Create, message, and coordinate Agents
 
 promptGuidelines:
 
-- Use `agent(action='spawn', name=..., message=...)` for concrete, bounded
-  work with a clear expected result. Keep the first message self-contained;
-  use `context='fork'` only when the Agent needs the caller's conversation.
-- For independent work, start the Agents before waiting and partition tasks
-  into non-overlapping responsibilities.
-- Use `agent(action='wait', ...)` when the next step depends on Agent
-  results. Prefer one longer wait over repeated short polling.
+- Use `agent(action='spawn', name=..., message=...)` for concrete, bounded work with a clear expected result. Keep the first message self-contained; use `context='fork'` only when the Agent needs the caller's conversation.
+- For independent work, start the Agents before waiting and partition tasks into non-overlapping responsibilities.
+- Use `agent(action='wait', ...)` when the next step depends on Agent results. Prefer one longer wait over repeated short polling.
 
 parameters:
 
@@ -179,8 +118,7 @@ parameters:
 
 results:
 
-In these formats, `<id>` is the Agent's short ID. Details use full IDs;
-arrays remain present when empty.
+In these formats, `<id>` is the Agent's short ID. Details use full IDs; arrays remain present when empty.
 
 `spawn`:
 
@@ -227,9 +165,7 @@ Still pending: <name> (<id>), ...
 Stopped waiting for a new message. Wait again to keep waiting.
 ```
 
-A result returned again through `history` adds `history="true"`. A single
-unread completed result, with nothing pending, is returned as the answer
-alone. When there are no results or pending inputs:
+A result returned again through `history` adds `history="true"`. A single unread completed result, with nothing pending, is returned as the answer alone. When there are no results or pending inputs:
 
 ```text
 No results.
@@ -241,12 +177,9 @@ Details:
 { results: [{ id, name, state, history, result? }], pending: [id], interrupted? }
 ```
 
-`state` is the input outcome (§5); `history` marks a previously read result;
-`interrupted` is `true` when a steer input ended the wait.
+`state` is the input outcome (§5); `history` marks a previously read result; `interrupted` is `true` when a steer input ended the wait.
 
-`list` returns one entry per Agent, followed by its latest request, if any,
-and its time. With a query, entries are ordered by their most recent match,
-and a matching summary or user message shows its latest excerpt instead:
+`list` returns one entry per Agent, followed by its latest request, if any, and its time. With a query, entries are ordered by their most recent match, and a matching summary or user message shows its latest excerpt instead:
 
 ```text
 <name> (<id>)  <state>  <cwd>
@@ -271,8 +204,7 @@ Details:
 { total, agents: [{ id, name?, ownerId?, state }] }
 ```
 
-`agents` is the current page; `total` counts all matches. `state` is the
-Agent's current state (§3).
+`agents` is the current page; `total` counts all matches. `state` is the Agent's current state (§3).
 
 `abort`:
 
@@ -291,8 +223,7 @@ For unnamed root Agents, show the ID without a name or parentheses.
 
 errors:
 
-Invalid calls fail with an error. Errors that need a follow-up say what to
-do:
+Invalid calls fail with an error. Errors that need a follow-up say what to do:
 
 ```text
 No visible Agent matches "<target>". Use list to find Agents.
@@ -318,8 +249,7 @@ Input rejected: <N> inputs have not ended. Wait for results or abort an Agent.
 <name> (<id>) is not owned by the caller.
 ```
 
-When an aborted turn does not stop within the timeout (§3), `abort` fails
-with the following; only restarting Pi stops it.
+When an aborted turn does not stop within the timeout (§3), `abort` fails with the following; only restarting Pi stops it.
 
 ```text
 Agent <name> (<id>) did not stop within the timeout and may still be running.
@@ -327,19 +257,13 @@ Agent <name> (<id>) did not stop within the timeout and may still be running.
 
 truncation:
 
-Text beyond Pi's output limits is truncated with Pi's native notice, and
-the full text is saved to a file whose path appears in the notice. `wait`
-adds results in order; the result that crosses the limit is truncated but
-keeps its closing tag, and later results are omitted. A truncated result
-counts as read. Omitted results stay unread, and the text ends with:
+Text beyond Pi's output limits is truncated with Pi's native notice, and the full text is saved to a file whose path appears in the notice. `wait` adds results in order; the result that crosses the limit is truncated but keeps its closing tag, and later results are omitted. A truncated result counts as read. Omitted results stay unread, and the text ends with:
 
 ```text
 [Results omitted: <name> (<id>), ... Use wait with fewer targets.]
 ```
 
-Details retain metadata, `truncation`, and `fullOutputPath`.
-`wait.results[].result` contains only retained text and is absent for
-omitted results.
+Details retain metadata, `truncation`, and `fullOutputPath`. `wait.results[].result` contains only retained text and is absent for omitted results.
 
 messages:
 
@@ -349,9 +273,7 @@ A notification to the owner:
 Agent <name> (<id>) <outcome>.
 ```
 
-A recipient sees each message in an `agent-message` element naming the
-sender. An input from a sender other than the owner also carries a note
-asking for a reply:
+A recipient sees each message in an `agent-message` element naming the sender. An input from a sender other than the owner also carries a note asking for a reply:
 
 ```text
 <agent-message from="<name>" id="<id>">
@@ -371,59 +293,40 @@ asking for a reply:
 
 A panel above the editor shows the current Agent's live work:
 
-    Tasks (<N> live, /tasks to view)
-      Agent <name> (<id>)  <state>  <time>  <cost>  <N> pending
-        Agent <name> (<id>)  <state>  <time>  <cost>
-      Program <id>  running  <time>  <cost>
-        Agent <name> (<id>)  <state>  <time>  <cost>
-      +<N> more
+```text
+Tasks (<N> live, /tasks to view)
+  Agent <name> (<id>)  <state>  <time>  <cost>  <N> pending
+    Agent <name> (<id>)  <state>  <time>  <cost>
+  Program <id>  running  <time>  <cost>
+    Agent <name> (<id>)  <state>  <time>  <cost>
+  +<N> more
+```
 
-The live work is the owned Agents that are not `idle`, and the running
-background Programs with their Agents that are not `idle`. The rows list
-them as a tree in the order they started, each
-under its owner and each Program under its caller, with the owners needed to
-keep the tree. Rows that do not fit are counted in the last row. The time is
-how long the Agent's current turn or the Program has run, and the cost what the
-replies in that turn have cost, or for a Program, those of all the Agents under
-it. When a reply has no price, the cost is the input and output tokens instead,
-like `7.3M tok`.
+The live work is the owned Agents that are not `idle`, and the running background Programs with their Agents that are not `idle`. The rows list them as a tree in the order they started, each under its owner and each Program under its caller, with the owners needed to keep the tree. Rows that do not fit are counted in the last row. The time is how long the Agent's current turn or the Program has run, and the cost what the replies in that turn have cost, or for a Program, those of all the Agents under it. When a reply has no price, the cost is the input and output tokens instead, like `7.3M tok`.
 
-The panel updates as states change, and its times each second. It is shown
-while it has a row.
-`/tasks panel` hides or shows it.
+The panel updates as states change, and its times each second. It is shown while it has a row. `/tasks panel` hides or shows it.
 
 ### Queued messages
 
-Messages from other Agents that wait in the Session's queue, as during a turn,
-are listed above the editor, below the user's queued messages, until the
-Session takes them in:
+Messages from other Agents that wait in the Session's queue, as during a turn, are listed above the editor, below the user's queued messages, until the Session takes them in:
 
-    Steering: [<sender>] <body>
-    Write: [<sender>] <body>
-    Follow-up: [<sender>] <body>
+```text
+Steering: [<sender>] <body>
+Write: [<sender>] <body>
+Follow-up: [<sender>] <body>
+```
 
 ### Task viewer
 
-`/tasks` lists the Agents in the current Agent's tree, including its Programs'
-Agents, and its background Programs, live ones first and newest first, with
-their state and latest activity, and opens the selected one in a viewer. An
-Agent not owned by the current Agent is named with its owners, as
-`<name> ‹ <owner> ‹ …`, where a Program is `Program <id>`. The viewer follows
-an Agent's conversation, or a Program as it shows in the foreground, while the
-current Session keeps running.
+`/tasks` lists the Agents in the current Agent's tree, including its Programs' Agents, and its background Programs, live ones first and newest first, with their state and latest activity, and opens the selected one in a viewer. An Agent not owned by the current Agent is named with its owners, as `<name> ‹ <owner> ‹ …`, where a Program is `Program <id>`. The viewer follows an Agent's conversation, or a Program as it shows in the foreground, while the current Session keeps running.
 
-Text entered in an Agent's viewer is the user's input to it, sent as in Pi's
-editor; a Program takes no input.
+Text entered in an Agent's viewer is the user's input to it, sent as in Pi's editor; a Program takes no input.
 
-`app.interrupt` stops an Agent's current turn, as `abort` does, or a Program,
-as `stop` does. `app.clear` clears the input, and closes the viewer when the
-input is empty.
+`app.interrupt` stops an Agent's current turn, as `abort` does, or a Program, as `stop` does. `app.clear` clears the input, and closes the viewer when the input is empty.
 
 ### Workbench
 
-`pd agents` opens the workbench, which lists every root Session on this
-machine and lets the user open and message them. Sessions started with `pd`
-keep running after their terminal closes. See [HOSTS.md](HOSTS.md).
+`pd agents` opens the workbench, which lists every root Session on this machine and lets the user open and message them. Sessions started with `pd` keep running after their terminal closes. See [HOSTS.md](HOSTS.md).
 
 ## 8. Configuration
 
@@ -439,26 +342,13 @@ Settings live under `"pi-agents"` in the global `settings.json`:
 }
 ```
 
-- `maxConcurrent`, `maxOutstanding`: limits from §4. Both are positive
-  integers with `maxConcurrent <= maxOutstanding`.
-- `extensions`: extension paths loaded by owned Agents, relative to Pi's
-  agent directory. An owned Agent can use only tools its owner can use.
+- `maxConcurrent`, `maxOutstanding`: limits from §4. Both are positive integers with `maxConcurrent <= maxOutstanding`.
+- `extensions`: extension paths loaded by owned Agents, relative to Pi's agent directory. An owned Agent can use only tools its owner can use.
 
 Invalid settings produce a startup warning, and the defaults are used.
 
 ## 9. Runtime
 
-Each Agent is a persistent Pi Session. A root Agent is an ordinary Session.
-An owned Agent is a child Session that records its owner and root, and runs
-in its owner's process.
+Each Agent is a persistent Pi Session. A root Agent is an ordinary Session. An owned Agent is a child Session that records its owner and root, and runs in its owner's process.
 
-A delivered message enters the recipient's current branch. An offline root
-Agent is started in a host, detached, with its saved working directory and
-model and the current configuration (HOSTS §4).
-If a root process cannot finish cleanup within a grace period on exit, it is
-forcibly terminated.
-Before shutting down an idle Session, another extension can emit
-`busy:query` on `pi.events` with `{ busy: false }`; it is set to `true`
-while the tree has live work.
-One runtime uses a Session at a time. If a Session is occupied at startup, Pi
-reports it and exits.
+A delivered message enters the recipient's current branch. An offline root Agent is started in a host, detached, with its saved working directory and model and the current configuration (HOSTS §4). If a root process cannot finish cleanup within a grace period on exit, it is forcibly terminated. Before shutting down an idle Session, another extension can emit `busy:query` on `pi.events` with `{ busy: false }`; it is set to `true` while the tree has live work. One runtime uses a Session at a time. If a Session is occupied at startup, Pi reports it and exits.
