@@ -195,8 +195,14 @@ test("stop and timeout stop background Programs", async () => {
 	await root.text({ action: "stop", target: stopped });
 	await root.text({ action: "stop", target: spinning });
 	await root.session.waitForIdle();
-	const results = await root.text({ action: "wait", target: [stopped, timedOut, spinning], timeout: 10 });
+	const waited = await root.call({ action: "wait", target: [stopped, timedOut, spinning], timeout: 10 });
+	const results = textOf(waited.content);
 	for (const id of [stopped, timedOut, spinning]) assert.match(results, new RegExp(`<program-result id="${id}" status="stopped">`));
+	// Collapsed, each result shows as a line with its output below; expanded, as the model received it.
+	pi.initTheme("dark");
+	const render = (expanded) => stripVTControlCharacters(root.session.getToolDefinition("program").renderResult(waited, { expanded, isPartial: false }, { fg: (_color, text) => text, bold: (text) => text }, { args: { action: "wait" }, state: {}, invalidate() {} }).render(10000).map((line) => line.trimEnd()).join("\n").trim());
+	assert.match(render(false), new RegExp(`^Program ${timedOut}  stopped  [\\d.]+s\n  Script error:\n`, "m"));
+	assert.equal(render(true), results);
 	assert.deepEqual(root.messages.filter((message) => /^Program \S+ stopped\.$/.test(message)), [`Program ${timedOut} stopped.`]);
 	await root.close();
 });

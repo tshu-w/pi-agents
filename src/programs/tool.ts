@@ -203,7 +203,7 @@ export function registerProgramTools(
 					const outcome = programs.running(selected) ? await self.agents.whileSuspended(waitFor, signal, true) : await waitFor();
 					const rendered = renderProgramWait(outcome, programs.ids());
 					programs.markReturned(rendered.returned);
-					return { content: rendered.content, details: { running: outcome.running.map((record) => record.id), ...(outcome.interrupted && { interrupted: true }) } };
+					return { content: rendered.content, details: { ...rendered.details, running: outcome.running.map((record) => record.id), ...(outcome.interrupted && { interrupted: true }) } };
 				}
 				case "list": {
 					rejectFields(params, "list", ["code", "background", "timeout", "target"]);

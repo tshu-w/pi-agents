@@ -26,6 +26,7 @@ import {
 	nodes,
 	resolveTarget,
 	scheduler,
+	sender,
 	shortId,
 	TREE_ENTRY,
 	trackTreeWork,
@@ -33,6 +34,7 @@ import {
 	visibleIds,
 	type AgentState,
 	type Delivery,
+	type Sender,
 	type Entry,
 	type Spend,
 	type TreeMetadata,
@@ -205,6 +207,8 @@ interface Input {
 	text: string;
 	/** The user's input from the task viewer. */
 	user?: boolean;
+	/** The Agent that sent it. */
+	from?: Sender;
 	record?: InputRecord;
 	permit?: symbol;
 	schema?: unknown;
@@ -214,7 +218,7 @@ interface Input {
 	silent?: boolean;
 }
 
-type Message = Pick<Input, "text" | "user">;
+type Message = Pick<Input, "text" | "user" | "from">;
 
 interface Turn {
 	inputs: Input[];
@@ -386,8 +390,9 @@ export class Agents {
 			scheduler.releaseOutstanding(this.self.rootId, permit);
 			throw error;
 		}
-		const text = messageText({ id: this.self.id, name: this.self.name() }, true, "followUp", request.message, this.ids());
-		const queued = this.enqueue(agent, { text, permit, record: this.newRecord(agent) });
+		const self = { id: this.self.id, name: this.self.name() };
+		const text = messageText(self, true, "followUp", request.message, this.ids());
+		const queued = this.enqueue(agent, { text, from: sender(self, this.ids()), permit, record: this.newRecord(agent) });
 		return { record: agent.record, queued };
 	}
 
@@ -415,13 +420,13 @@ export class Agents {
 	}
 
 	/**
-	 * Sends an input from the owner and resolves when it ends. With a schema, the Agent must call
+	 * Sends an input from the owner, `from` as its text names it, and resolves when it ends. With a schema, the Agent must call
 	 * `submit_result` with a matching value, which becomes the input's `value`; `text` tells it so.
 	 * An input not ended within `timeoutMs` is aborted alone, and `timedOut` is set.
 	 */
-	async request(id: string, text: string, delivery: "followUp" | "steer", schema?: unknown, timeoutMs?: number): Promise<{ record: InputRecord; timedOut: boolean }> {
+	async request(id: string, text: string, delivery: "followUp" | "steer", from: Sender, schema?: unknown, timeoutMs?: number): Promise<{ record: InputRecord; timedOut: boolean }> {
 		const agent = this.agent(id);
-		const input: Input = { text, permit: this.reserve(), record: this.newRecord(agent), done: deferred() };
+		const input: Input = { text, from, permit: this.reserve(), record: this.newRecord(agent), done: deferred() };
 		if (schema !== undefined) input.schema = schema;
 		this.add(agent, input, delivery);
 		let stopping: Promise<void> | undefined;
@@ -449,16 +454,16 @@ export class Agents {
 		input.submitted = { value: args.value };
 	}
 
-	accept(id: string, text: string, delivery: Delivery, options: { fromOwner: boolean; notification: boolean }): { queued: boolean } {
+	accept(id: string, text: string, delivery: Delivery, options: { fromOwner: boolean; notification: boolean; from?: Sender }): { queued: boolean } {
 		const agent = this.agent(id);
 		if (agent.stopped && !options.fromOwner) delivery = "write";
 		if (delivery === "write") {
-			this.write(agent, text);
+			this.write(agent, text, options.from);
 			return { queued: false };
 		}
 		// Notifications keep their owner informed even at the input limit.
 		const permit = options.notification ? undefined : this.reserve();
-		const input: Input = { text, permit, record: options.fromOwner && !options.notification ? this.newRecord(agent) : undefined };
+		const input: Input = { text, from: options.from, permit, record: options.fromOwner && !options.notification ? this.newRecord(agent) : undefined };
 		return { queued: this.add(agent, input, delivery) };
 	}
 
@@ -620,8 +625,8 @@ export class Agents {
 		if (errors.length > 0) throw new Error(errors.map((error) => error instanceof Error ? error.message : String(error)).join("\n"));
 	}
 
-	private write(agent: Owned, text: string): void {
-		const message = customMessage(text, "write");
+	private write(agent: Owned, text: string, from?: Sender): void {
+		const message = customMessage(text, "write", { from });
 		const session = agent.session;
 		if (session?.isStreaming) {
 			session.agent.steer({ role: "custom", ...message, timestamp: Date.now() });
@@ -663,9 +668,9 @@ export class Agents {
 		this.changed();
 		if (!turn.started) return;
 		if (agent.session?.isStreaming) {
-			agent.session.agent.steer({ role: "custom", ...customMessage(input.text, "steer", undefined, input.user), timestamp: Date.now() });
+			agent.session.agent.steer({ role: "custom", ...customMessage(input.text, "steer", { user: input.user, from: input.from }), timestamp: Date.now() });
 		} else {
-			turn.pending.push({ text: input.text, user: input.user });
+			turn.pending.push({ text: input.text, user: input.user, from: input.from });
 		}
 	}
 
@@ -691,11 +696,11 @@ export class Agents {
 			for (const input of turn.inputs) if (input.record) input.record.state = "running";
 			this.persist(agent);
 			this.changed();
-			let batch: Message[] = turn.inputs.map(({ text, user }) => ({ text, user }));
+			let batch: Message[] = turn.inputs.map(({ text, user, from }) => ({ text, user, from }));
 			while (batch.length > 0 && !turn.abort.signal.aborted) {
-				for (const { text, user } of batch.slice(0, -1)) await session.sendCustomMessage(customMessage(text, "steer", undefined, user), { triggerTurn: false });
-				const last = batch.at(-1)!;
-				await session.sendCustomMessage(customMessage(last.text, "steer", undefined, last.user), { triggerTurn: true });
+				for (const { text, ...rest } of batch.slice(0, -1)) await session.sendCustomMessage(customMessage(text, "steer", rest), { triggerTurn: false });
+				const { text, ...rest } = batch.at(-1)!;
+				await session.sendCustomMessage(customMessage(text, "steer", rest), { triggerTurn: true });
 				await session.waitForIdle();
 				const leftover = takeQueued(session.agent);
 				for (const message of leftover) {
@@ -703,7 +708,7 @@ export class Agents {
 				}
 				batch = [
 					...turn.pending.splice(0),
-					...leftover.flatMap(({ content, details }) => details.delivery === "write" ? [] : [{ text: content, user: details.user }]),
+					...leftover.flatMap(({ content, details }) => details.delivery === "write" ? [] : [{ text: content, user: details.user, from: details.from }]),
 				];
 			}
 			const last = lastAnswer(session, before);

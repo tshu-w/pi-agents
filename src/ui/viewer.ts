@@ -39,6 +39,7 @@ import { latestActivity } from "../agents/search.ts";
 import { PROGRAM_TOOL_NAME } from "../programs/execute.ts";
 import type { Programs } from "../programs/programs.ts";
 import { agentSession } from "../roots/rpc.ts";
+import { renderAgentMessage } from "./message.ts";
 import { execFileSync } from "node:child_process";
 
 type Message = AgentSession["messages"][number];
@@ -322,7 +323,7 @@ class AgentViewer implements Component, Focusable {
 				if (user && typeof message.content === "string") {
 					this.transcript.addChild(new UserMessageComponent(message.content, markdown));
 				} else {
-					const component = new CustomMessageComponent(message, undefined, markdown);
+					const component = new CustomMessageComponent(message, message.customType === MESSAGE_TYPE ? renderAgentMessage : undefined, markdown);
 					component.setExpanded(this.expanded);
 					this.transcript.addChild(component);
 				}

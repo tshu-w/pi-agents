@@ -327,23 +327,57 @@ function resultBlock(record: ProgramRecord, ids: string[]): string {
 	return `<program-result id="${shortId(record.id, ids)}" status="${record.state}">\n${textOf(record.content)}\n</program-result>`;
 }
 
-/** Renders wait results; returns the content and the results the caller has now received. */
-export function renderProgramWait({ results, running, interrupted }: ProgramWaitOutcome, ids: string[]): { content: Item[]; returned: ProgramRecord[]; isError?: boolean } {
+// The header codemode puts before a Program's output; a Program that ended before its run did has no wall time.
+const SCRIPT_HEADER = /^Script (?:completed|failed)\n(?:Wall time ([\d.]+) seconds\n)?Output:\n/;
+
+export interface ProgramResultDetails {
+	id: string;
+	state: ProgramState;
+	wallTimeSeconds?: number;
+	/** The output the result shows, without the header. */
+	output?: string;
+}
+
+/** A result's details, with the output in the first `available` characters of its text, if shown. */
+function resultDetails(record: ProgramRecord, available?: number): ProgramResultDetails {
+	const text = textOf(record.content);
+	const header = SCRIPT_HEADER.exec(text);
+	return {
+		id: record.id,
+		state: record.state,
+		...(header?.[1] !== undefined && { wallTimeSeconds: Number(header[1]) }),
+		...(available !== undefined && { output: text.slice(0, available).slice(header?.[0].length ?? 0) }),
+	};
+}
+
+/** Renders wait results; returns the content, its details, and the results the caller has now received. */
+export function renderProgramWait({ results, running, interrupted }: ProgramWaitOutcome, ids: string[]): { content: Item[]; details: { results: ProgramResultDetails[]; notes?: string[] }; returned: ProgramRecord[]; isError?: boolean } {
 	const runningLine = running.length > 0 ? `Still running: ${running.map((record) => shortId(record.id, ids)).join(", ")}${interrupted ? `\n${WAIT_INTERRUPTED}` : ""}` : "";
-	if (results.length === 0) return { content: [{ type: "text", text: runningLine || "No results." }], returned: [] };
+	if (results.length === 0) return { content: [{ type: "text", text: runningLine || "No results." }], details: { results: [] }, returned: [] };
 	const images = (shown: ProgramRecord[]) => shown.flatMap((record) => (record.content ?? []).filter((item) => item.type === "image"));
 	const only = results[0]!;
 	if (results.length === 1 && running.length === 0 && only.state === "completed") {
 		const bounded = boundText(textOf(only.content), "pi-agents-program-wait");
-		return { content: [{ type: "text", text: bounded.text }, ...images(results)], returned: results };
+		return { content: [{ type: "text", text: bounded.text }, ...images(results)], details: { results: [resultDetails(only)] }, returned: results };
 	}
-	const bounded = boundBlocks(results.map((record) => resultBlock(record, ids)), "program-result", "pi-agents-program-wait");
+	const blocks = results.map((record) => resultBlock(record, ids));
+	const bounded = boundBlocks(blocks, "program-result", "pi-agents-program-wait");
+	let offset = 0;
+	const details = results.map((record, index) => {
+		const block = blocks[index]!;
+		const available = Math.max(0, bounded.kept.length - offset - block.indexOf("\n") - 1);
+		offset += block.length + 2;
+		return resultDetails(record, index < bounded.shown ? available : undefined);
+	});
 	let text = bounded.text;
 	const returned = results.slice(0, bounded.shown);
 	const omitted = results.slice(bounded.shown);
-	if (omitted.length > 0) text += `\n\n[Results omitted: ${omitted.map((record) => shortId(record.id, ids)).join(", ")}. Use wait with fewer targets.]`;
+	const omittedLine = omitted.length > 0 ? `[Results omitted: ${omitted.map((record) => shortId(record.id, ids)).join(", ")}. Use wait with fewer targets.]` : "";
+	if (omittedLine) text += `\n\n${omittedLine}`;
 	if (runningLine) text += `\n\n${runningLine}`;
-	return { content: [{ type: "text", text }, ...images(returned)], returned };
+	// The lines after the results, which the collapsed view shows below them.
+	const notes = [bounded.notice ?? "", omittedLine, runningLine].filter(Boolean);
+	return { content: [{ type: "text", text }, ...images(returned)], details: { results: details, notes }, returned };
 }
 
 export function programListLine(record: ProgramRecord, ids: string[]): string {

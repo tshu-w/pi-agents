@@ -31,7 +31,7 @@ export interface AgentNode {
 	sessionFile(): string | undefined;
 	agents: Agents;
 	/** Delivers a message to this node; used only for root Agents. */
-	receive(text: string, delivery: Delivery, messageId?: string): void;
+	receive(text: string, delivery: Delivery, messageId?: string, from?: Sender): void;
 	/** A root Agent's turn was stopped: messages from other Agents become writes until the user's next input. */
 	stopped?: boolean;
 }
@@ -242,31 +242,51 @@ export function deliver(
 	const fromOwner = from !== undefined && target.ownerId === from.id;
 	const ids = recipientIds(target);
 	const text = from === undefined ? body : messageText(from, fromOwner, delivery, body, ids);
+	const by = from && sender(from, ids);
 	if (target.ownerId === undefined) {
 		const node = shared.nodes.get(target.id);
 		if (!node) throw new Error(`${label(target, ids)} is offline.`);
-		node.receive(text, delivery);
+		node.receive(text, delivery, undefined, by);
 		return { queued: false };
 	}
 	const owner = shared.nodes.get(target.ownerId);
 	if (!owner) throw new Error(`${label(target, ids)} is offline.`);
-	return owner.agents.accept(target.id, text, delivery, { fromOwner, notification: from === undefined });
+	return owner.agents.accept(target.id, text, delivery, { fromOwner, notification: from === undefined, from: by });
 }
 
 export const MESSAGE_TAG = "agent-message";
+const REPLY_NOTE = ' note="Reply with send"';
+
+/** The sender of a message as its element names it: its name and its short ID among the recipient's visible Agents. */
+export interface Sender {
+	id: string;
+	name?: string;
+}
+
+export function sender(from: { id: string; name?: string }, ids: Iterable<string>): Sender {
+	return { id: shortId(from.id, ids), ...(from.name === undefined ? {} : { name: from.name }) };
+}
 
 /** A message in an element naming its sender; an input from a sender other than the owner asks for a reply. */
 export function messageText(from: { id: string; name?: string }, fromOwner: boolean, delivery: Delivery, body: string, ids: Iterable<string>): string {
-	const note = !fromOwner && delivery !== "write" ? ' note="Reply with send"' : "";
+	const note = !fromOwner && delivery !== "write" ? REPLY_NOTE : "";
 	return `<${MESSAGE_TAG} from="${from.name ?? shortId(from.id, ids)}" id="${shortId(from.id, ids)}"${note}>\n${body}\n</${MESSAGE_TAG}>`;
+}
+
+/** The body of a message `messageText` made for `from`, or undefined if `text` is not one. */
+export function messageBody(text: string, from: Sender): string | undefined {
+	const open = `<${MESSAGE_TAG} from="${from.name ?? from.id}" id="${from.id}"`;
+	const close = `\n</${MESSAGE_TAG}>`;
+	const header = [`${open}>\n`, `${open}${REPLY_NOTE}>\n`].find((start) => text.startsWith(start));
+	return header && text.length >= header.length + close.length && text.endsWith(close) ? text.slice(header.length, -close.length) : undefined;
 }
 
 /**
  * `messageId` marks a message from a root Agent in another process, so it is added once; `user`
- * marks the user's input from the task viewer.
+ * marks the user's input from the task viewer, and `from` the Agent that sent it.
  */
-export function customMessage(text: string, delivery: Delivery, messageId?: string, user?: boolean) {
-	return { customType: MESSAGE_TYPE, content: text, display: true, details: { delivery, ...(messageId ? { messageId } : {}), ...(user ? { user } : {}) } };
+export function customMessage(text: string, delivery: Delivery, { messageId, user, from }: { messageId?: string; user?: boolean; from?: Sender } = {}) {
+	return { customType: MESSAGE_TYPE, content: text, display: true, details: { delivery, ...(messageId ? { messageId } : {}), ...(user ? { user } : {}), ...(from ? { from } : {}) } };
 }
 
 export function receivedMessageIds(ctx: ExtensionContext): string[] {

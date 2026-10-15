@@ -15,8 +15,10 @@ import { Agents, type Limits } from "./agents/agents.ts";
 import {
 	customMessage,
 	liveWork,
+	MESSAGE_TYPE,
 	messageText,
 	rememberRoots,
+	sender,
 	visibleIds,
 	nodes,
 	receivedMessageIds,
@@ -39,6 +41,7 @@ import { createReporter } from "./roots/report.ts";
 import { installQueuePatches } from "./roots/queue.ts";
 import { agentSession, installRpcPatches } from "./roots/rpc.ts";
 import { createRootRuntime } from "./roots/runtime.ts";
+import { renderAgentMessage } from "./ui/message.ts";
 import { createPanel } from "./ui/panel.ts";
 import { showQueue } from "./ui/queue.ts";
 import { openTaskViewer } from "./ui/viewer.ts";
@@ -105,7 +108,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			if (message.user) return pi.sendUserMessage(message.body, { deliverAs: delivery === "steer" ? "steer" : "followUp" });
 			// The header names the sender by a short ID unique among the roots this root sees.
 			rememberRoots((await roots.roots()).map((root) => root.id));
-			if (node) node.receive(messageText(message.sender!, false, delivery, message.body, visibleIds(node.scopeId, true)), delivery, message.id);
+			if (!node) return;
+			const ids = visibleIds(node.scopeId, true);
+			node.receive(messageText(message.sender!, false, delivery, message.body, ids), delivery, message.id, sender(message.sender!, ids));
 		},
 		treeIdle: () => node === undefined || treeIdle(node.rootId),
 		receivedIds: receivedMessageIds,
@@ -150,9 +155,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			cwd: () => ctx?.cwd ?? current.cwd,
 			busy: () => !(ctx?.isIdle() ?? true),
 			sessionFile: () => ctx?.sessionManager.getSessionFile(),
-			receive: (text, delivery, messageId) => {
+			receive: (text, delivery, messageId, from) => {
 				const as = created.stopped ? "write" : delivery;
-				pi.sendMessage(customMessage(text, as, messageId), as === "write"
+				pi.sendMessage(customMessage(text, as, { messageId, from }), as === "write"
 					? { deliverAs: "steer" }
 					: { deliverAs: as, triggerTurn: true });
 				queue.update();
@@ -209,6 +214,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
 	registerAgentTool(pi, { limits: settings, roots, requireNode });
 	registerProgramTools(pi, { agentDir, settings, piCodemode, requireNode, programs: () => programs });
+	pi.registerMessageRenderer(MESSAGE_TYPE, renderAgentMessage);
 
 	pi.registerCommand("tasks", {
 		description: "Watch an Agent or Program; `/tasks panel` toggles the panel",

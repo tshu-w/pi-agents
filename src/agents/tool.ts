@@ -3,7 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { boundBlocks, boundText } from "../output.ts";
 import { rejectFields } from "../params.ts";
-import { renderTextResult, renderToolCall, startDuration, type DurationState } from "../render-call.ts";
+import { renderResultList, renderTextResult, renderToolCall, startDuration, type DurationState } from "../render-call.ts";
 import { agentSession } from "../roots/rpc.ts";
 import type { RootRuntime } from "../roots/runtime.ts";
 import {
@@ -58,9 +58,12 @@ function renderWait(outcome: WaitOutcome, ids: string[]): { text: string; read: 
 	let text = bounded.text;
 	const read = results.slice(0, bounded.shown);
 	const omitted = results.slice(bounded.shown);
-	if (omitted.length > 0) text += `\n\n[Results omitted: ${omitted.map((result) => label(result.agent, ids)).join(", ")}. Use wait with fewer targets.]`;
+	const omittedLine = omitted.length > 0 ? `[Results omitted: ${omitted.map((result) => label(result.agent, ids)).join(", ")}. Use wait with fewer targets.]` : "";
+	if (omittedLine) text += `\n\n${omittedLine}`;
 	if (pendingLine) text += `\n\n${pendingLine}`;
-	return { text, read, details: { results: details, pending: pending.map((agent) => agent.id), ...flag, ...bounded.details } };
+	// The lines after the results, which the collapsed view shows below them.
+	const notes = [bounded.notice ?? "", omittedLine, pendingLine].filter(Boolean);
+	return { text, read, details: { results: details, pending: pending.map((agent) => agent.id), ...flag, ...bounded.details, notes } };
 }
 
 /** Registers the `agent` tool. */
@@ -89,8 +92,16 @@ export function registerAgentTool(
 			startDuration(context.state as DurationState, args.action === "wait", context.executionStarted);
 			return renderToolCall("agent", args, theme, context.lastComponent);
 		},
-		// `wait` shows how long it has waited.
-		renderResult: (result, options, theme, context) => renderTextResult(result, options, theme, context),
+		// `wait` shows how long it has waited, and when collapsed, each result as a line with the first lines of its body.
+		renderResult: (result, options, theme, context) => renderTextResult(result, options, theme, context, (context.args as { action?: string }).action === "wait"
+			? () => {
+				const { results = [], pending = [], notes } = (result.details ?? {}) as { results?: ReturnType<typeof resultDetails>[]; pending?: string[]; notes?: string[] };
+				// Only results in blocks have notes; a single completed result returned alone, or a result recorded before, shows as it is.
+				if (!notes) return undefined;
+				const ids = [...results.map((entry) => entry.id), ...pending];
+				return renderResultList(results.flatMap((entry) => entry.result === undefined ? [] : [{ line: `${label(entry, ids)}  ${entry.state}`, body: entry.result }]), notes, theme);
+			}
+			: undefined),
 		description: `Create, message, and coordinate Agents. \`spawn\` creates an owned Agent and sends its first input; \`send\` sends an input or a write to a visible Agent; \`wait\` waits for owned Agents and returns unread results; \`list\` finds visible Agents; \`abort\` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification naming the Agent and outcome; \`wait\` returns the result. Owned Agents under the same root share \`${maxConcurrent}\` execution slots and a limit of \`${maxOutstanding}\` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.`,
 		promptSnippet: "Create, message, and coordinate Agents",
 		promptGuidelines: [

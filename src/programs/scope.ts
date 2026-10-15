@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Agents, settlesBy, SUBMIT_RESULT_TOOL_NAME, THINKING_LEVELS, type Limits } from "../agents/agents.ts";
-import { label, messageText, nodes, treeChanged, visibleIds, type AgentNode } from "../agents/registry.ts";
+import { label, messageText, nodes, sender, treeChanged, visibleIds, type AgentNode } from "../agents/registry.ts";
 import { CLEANUP_TIMEOUT_MS } from "./execute.ts";
 import type { AgentOptions, ProgramAgentHost, SendOptions } from "./sandbox.ts";
 
@@ -70,12 +70,13 @@ export function programScope(
 			}
 			const agent = agents.ownedTarget(agentId).record;
 			const body = schema === undefined ? message : `${message}\n\nWhen done, call \`${SUBMIT_RESULT_TOOL_NAME}\` with a \`value\` that matches this JSON Schema:\n${JSON.stringify(schema)}`;
-			const text = messageText(from, true, delivery, body, visibleIds(agentId, false));
+			const ids = visibleIds(agentId, false);
+			const text = messageText(from, true, delivery, body, ids);
 			if (delivery === "write") {
-				agents.accept(agentId, text, "write", { fromOwner: true, notification: false });
+				agents.accept(agentId, text, "write", { fromOwner: true, notification: false, from: sender(from, ids) });
 				return undefined;
 			}
-			const { record, timedOut } = await agents.request(agentId, text, delivery, schema, timeout === undefined ? undefined : timeout * 1000);
+			const { record, timedOut } = await agents.request(agentId, text, delivery, sender(from, ids), schema, timeout === undefined ? undefined : timeout * 1000);
 			if (record.state === "completed") return schema === undefined ? record.result : record.value;
 			if (record.state === "failed") throw new Error(`Agent ${label(agent, agents.ids())} failed: ${record.result}`);
 			// An aborted input, timed out or not, shows as a cancelled call.

@@ -18,6 +18,8 @@ export interface BoundedText {
 	text: string;
 	/** The kept prefix of the text, without the notice. */
 	kept: string;
+	/** The notice naming the file with the full text. */
+	notice?: string;
 	details?: Truncation;
 }
 
@@ -30,9 +32,11 @@ export function boundText(text: string, prefix: string): BoundedText {
 	const summary = truncation.firstLineExceedsLimit
 		? `Line 1 is ${formatSize(Buffer.byteLength(text.split("\n")[0]!, "utf8"))}, exceeds ${formatSize(truncation.maxBytes)} limit.`
 		: `Showing lines 1-${truncation.outputLines} of ${truncation.totalLines}${truncation.truncatedBy === "bytes" ? ` (${formatSize(truncation.maxBytes)} limit)` : ""}.`;
+	const notice = `[${summary} Full output: ${fullOutputPath}]`;
 	return {
-		text: `${truncation.content}\n\n[${summary} Full output: ${fullOutputPath}]`,
+		text: `${truncation.content}\n\n${notice}`,
 		kept: truncation.content,
+		notice,
 		details: { truncation, fullOutputPath },
 	};
 }

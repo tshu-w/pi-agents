@@ -316,6 +316,27 @@ Write: [<sender>] <body>
 Follow-up: [<sender>] <body>
 ```
 
+### Messages and results
+
+A message from another Agent shows its sender after the label:
+
+```text
+[pi-agents] from <name> (<id>)
+
+<body>
+```
+
+The user's input from the task viewer shows as a user message. `wait` shows each result with the first lines of its body; a Program's body starts at its output:
+
+```text
+<name> (<id>)  <state>
+  <body>
+Program <id>  <state>  <time>
+  <body>
+```
+
+Expanding (`app.tools.expand`) shows them as Pi shows them by default.
+
 ### Task viewer
 
 `/tasks` lists the Agents in the current Agent's tree, including its Programs' Agents, and its background Programs, live ones first and newest first, with their state and latest activity, and opens the selected one in a viewer. An Agent not owned by the current Agent is named with its owners, as `<name> ‹ <owner> ‹ …`, where a Program is `Program <id>`. The viewer follows an Agent's conversation, or a Program as it shows in the foreground, while the current Session keeps running.

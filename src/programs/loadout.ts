@@ -2,7 +2,9 @@ import { highlightCode, type ExtensionAPI, type ToolDefinition } from "@earendil
 import { Text } from "@earendil-works/pi-tui";
 import { CODEMODE_TOOL_NAME, type PiCodemode } from "./codemode.ts";
 import { PROGRAM_TOOL_NAME } from "./execute.ts";
-import { formatToolCall, moreLines, renderTextResult, startDuration, type DurationState } from "../render-call.ts";
+import { shortId } from "../agents/registry.ts";
+import { formatDuration, formatToolCall, moreLines, renderResultList, renderTextResult, startDuration, type DurationState } from "../render-call.ts";
+import type { ProgramResultDetails } from "./programs.ts";
 
 /** The first line of the `codemode` description, which the `program` intro replaces. */
 const CODEMODE_FIRST_LINE = "Run JavaScript code to orchestrate/compose tool calls\n";
@@ -91,9 +93,19 @@ export function programRenderers(piCodemode: PiCodemode): Renderers {
 			component.setText(text);
 			return component;
 		},
-		// `wait` shows how long it has waited; the other results render like `codemode`.
+		// `wait` shows how long it has waited, and when collapsed, each result as a line with the first lines of its output;
+		// the other results render like `codemode`.
 		renderResult: (result, options, theme, context) => (context.args as { action?: string }).action === "wait"
-			? renderTextResult(result, options, theme, context)
+			? renderTextResult(result, options, theme, context, () => {
+				const { results = [], running = [], notes } = (result.details ?? {}) as { results?: ProgramResultDetails[]; running?: string[]; notes?: string[] };
+				// Only results in blocks have notes; a single completed result returned alone shows as it is.
+				if (!notes) return undefined;
+				const ids = [...results.map((entry) => entry.id), ...running];
+				return renderResultList(results.flatMap(({ id, state, wallTimeSeconds, output }) => output === undefined ? [] : [{
+					line: [`Program ${shortId(id, ids)}`, state, ...(wallTimeSeconds === undefined ? [] : [formatDuration(wallTimeSeconds * 1000)])].join("  "),
+					body: output,
+				}]), notes, theme);
+			})
 			: piCodemode.renderResult(result, options, theme, context) as Text,
 	};
 }

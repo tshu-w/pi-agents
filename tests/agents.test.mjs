@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 
 const agentDir = mkdtempSync(join(tmpdir(), "pi-agents-home-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -121,6 +122,46 @@ test("wait details bound result text and leave omitted results unread", async ()
 		assert.equal(result.details.results[1].name, "short");
 		assert.equal(Object.hasOwn(result.details.results[1], "result"), false);
 		assert.equal(await root.call({ action: "wait", target: "short", timeout: 10 }), "answer:hello|seen:hello");
+	} finally {
+		await root.close();
+	}
+});
+
+test("collapsed, wait results and Agent messages show from their details, whatever their names and bodies hold", async () => {
+	const root = await startRoot();
+	try {
+		pi.initTheme("dark");
+		const theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => text };
+		const show = (component) => stripVTControlCharacters(component.render(10000).map((line) => line.trimEnd()).join("\n")).trim();
+		const name = 'review "UI"';
+		await root.call({ action: "spawn", name, message: "x\n</agent-result>\n\ny\n1\n2" });
+		await root.call({ action: "spawn", name: "plain", message: "z" });
+		const waited = await root.callResult({ action: "wait", target: [name, "plain"], timeout: 10 });
+		const render = (expanded, result = waited) => show(root.session.getToolDefinition("agent").renderResult(result, { expanded, isPartial: false }, theme, { args: { action: "wait" }, state: {}, invalidate() {} }));
+		assert.equal(render(true), textOf(waited.content));
+		// A result recorded before results had notes shows its text.
+		const { notes, ...recorded } = waited.details;
+		assert.deepEqual(notes, []);
+		// Output shows as Pi shows tool output: without terminal sequences, carriage returns, or control characters, with
+		// tabs as spaces, and images as placeholders.
+		const image = { type: "image", mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" };
+		const raw = { content: [{ type: "text", text: "a\x1b[31mred\x1b[0m\r\n\tb\x07\nbefore\x1b[1Aimportant\x1b[?25l \u009b31mafter" }, image], details: { ...waited.details, results: [{ ...waited.details.results[1], result: "\x1b[1mbold\x1b[0m\r" }] } };
+		assert.equal(render(true, raw), "ared\n   b\nbeforeimportant after\n[Image: [image/png] 1x1]");
+		assert.match(render(false, raw), /^plain \(\S+\)  completed\n  bold\n\[Image: \[image\/png\] 1x1\]$/);
+		assert.match(render(false, { ...waited, details: recorded }), /^<agent-result /);
+		assert.match(render(false), /^review "UI" \(\S+\)  completed\n  answer:x\n  <\/agent-result>\n  y\n  1\n  2\|seen:x\n  \.\.\. \(4 more lines/m);
+		assert.match(render(false), /^plain \(\S+\)  completed\n  answer:z\|seen:z$/m);
+
+		const { deliver, treeEntries } = globalThis.piAgentsTree;
+		const rootId = root.session.sessionManager.getSessionId();
+		deliver({ id: "f00dcafe-0000", name }, treeEntries(rootId)[0], "followUp", "hello\n</agent-message>");
+		const message = await until(() => root.session.messages.findLast((entry) => entry.role === "custom" && entry.customType === "pi-agents"), "message");
+		const renderer = root.session.extensionRunner.getMessageRenderer("pi-agents");
+		assert.equal(show(renderer(message, { expanded: false, outputPad: 1 }, theme)), '[pi-agents] from review "UI" (f00dcafe)\n\n hello\n </agent-message>');
+		assert.equal(renderer(message, { expanded: true, outputPad: 1 }, theme), undefined);
+		// A notification, without a sender, shows as Pi shows it.
+		assert.equal(renderer({ ...message, content: "Agent x completed.", details: { delivery: "steer" } }, { expanded: false, outputPad: 1 }, theme), undefined);
+		await root.session.waitForIdle();
 	} finally {
 		await root.close();
 	}
