@@ -1,5 +1,7 @@
 import {
 	AssistantMessageComponent,
+	BashExecutionComponent,
+	BranchSummaryMessageComponent,
 	CompactionSummaryMessageComponent,
 	CustomEditor,
 	CustomMessageComponent,
@@ -9,6 +11,8 @@ import {
 	getSelectListTheme,
 	keyHint,
 	keyText,
+	parseSkillBlock,
+	SkillInvocationMessageComponent,
 	ToolExecutionComponent,
 	UserMessageComponent,
 	type AgentSession,
@@ -39,7 +43,6 @@ import { latestActivity } from "../agents/search.ts";
 import { PROGRAM_TOOL_NAME } from "../programs/execute.ts";
 import type { Programs } from "../programs/programs.ts";
 import { agentSession } from "../roots/rpc.ts";
-import { renderAgentMessage } from "./message.ts";
 import { execFileSync } from "node:child_process";
 
 type Message = AgentSession["messages"][number];
@@ -235,7 +238,7 @@ class AgentViewer implements Component, Focusable {
 			if (!this.live || event.message.role !== "assistant") return false;
 			const calls = event.message.content.flatMap((part) => part.type === "toolCall" ? [part] : []);
 			if (calls.map((call) => call.id).join("\n") !== this.live.calls) return false;
-			this.live.component.updateContent(event.message);
+			this.live.component.updateContent(event.message, true);
 			for (const call of calls) this.tools.get(call.id)?.updateArgs(call.arguments);
 			return true;
 		}
@@ -286,23 +289,33 @@ class AgentViewer implements Component, Focusable {
 		this.outbox = this.outbox.filter(({ text, after }) => working && !messages.slice(after).some((message) =>
 			message.role === "custom" && message.content === text && (message.details as { user?: boolean } | undefined)?.user));
 		if (this.streaming && !messages.includes(this.streaming)) messages.push(this.streaming);
-		const markdown = getMarkdownTheme();
+		// As Pi's chat shows them, with the display settings of the Session the viewer is in.
+		const current = agentSession(this.ctx.sessionManager);
+		const settings = current?.settingsManager;
+		const markdown = settings ? { ...getMarkdownTheme(), codeBlockIndent: settings.getCodeBlockIndent() } : getMarkdownTheme();
+		const transformers = current?.extensionRunner.getMarkdownTransformers();
+		const pad = settings?.getOutputPad() ?? 1;
+		const runner = (conversation.session ?? current)?.extensionRunner;
+		const images = { showImages: settings?.getShowImages() ?? false, imageWidthCells: settings?.getImageWidthCells(), outputPad: pad };
 		for (const message of messages) {
 			if (message.role === "assistant") {
-				const component = new AssistantMessageComponent(message, false, markdown);
+				const component = new AssistantMessageComponent(message, settings?.getHideThinkingBlock() ?? false, markdown, undefined, pad, transformers);
 				if (message === this.streaming) {
+					// As Pi does, so Markdown transformers know the message is still streaming.
+					component.updateContent(message, true);
 					const calls = message.content.flatMap((part) => part.type === "toolCall" ? [part.id] : []);
 					this.live = { component, calls: calls.join("\n") };
 				}
 				this.transcript.addChild(component);
 				for (const part of message.content) {
 					if (part.type !== "toolCall") continue;
-					const tool = new ToolExecutionComponent(part.name, part.id, part.arguments, { showImages: false },
+					const tool = new ToolExecutionComponent(part.name, part.id, part.arguments, images,
 						conversation.session?.getToolDefinition(part.name), this.tui, conversation.cwd);
 					tool.setExpanded(this.expanded);
 					this.transcript.addChild(tool);
 					if (message.stopReason === "aborted" || message.stopReason === "error") {
-						tool.updateResult({ content: [{ type: "text", text: message.errorMessage || "Operation aborted" }], isError: true });
+						const text = message.stopReason === "aborted" ? "Operation aborted" : message.errorMessage || "Error";
+						tool.updateResult({ content: [{ type: "text", text }], isError: true });
 					} else {
 						this.tools.set(part.id, tool);
 					}
@@ -313,23 +326,45 @@ class AgentViewer implements Component, Focusable {
 			} else if (message.role === "user") {
 				const text = typeof message.content === "string"
 					? message.content
-					: message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
+					: message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("");
 				if (!text) continue;
 				this.transcript.addChild(new Spacer(1));
-				this.transcript.addChild(new UserMessageComponent(text, markdown));
+				const skill = parseSkillBlock(text);
+				if (skill) {
+					const component = new SkillInvocationMessageComponent(skill, markdown, pad);
+					component.setExpanded(this.expanded);
+					this.transcript.addChild(component);
+					if (skill.userMessage) {
+						this.transcript.addChild(new Spacer(1));
+						this.transcript.addChild(new UserMessageComponent(skill.userMessage, markdown, pad, transformers));
+					}
+				} else {
+					this.transcript.addChild(new UserMessageComponent(text, markdown, pad, transformers));
+				}
 			} else if (message.role === "custom" && message.display) {
 				const user = message.customType === MESSAGE_TYPE && (message.details as { user?: boolean } | undefined)?.user;
-				this.transcript.addChild(new Spacer(1));
 				if (user && typeof message.content === "string") {
-					this.transcript.addChild(new UserMessageComponent(message.content, markdown));
+					this.transcript.addChild(new Spacer(1));
+					this.transcript.addChild(new UserMessageComponent(message.content, markdown, pad, transformers));
 				} else {
-					const component = new CustomMessageComponent(message, message.customType === MESSAGE_TYPE ? renderAgentMessage : undefined, markdown);
+					// The component starts with its own blank line.
+					const component = new CustomMessageComponent(message, runner?.getMessageRenderer(message.customType), markdown, pad);
 					component.setExpanded(this.expanded);
 					this.transcript.addChild(component);
 				}
-			} else if (message.role === "compactionSummary") {
+			} else if (message.role === "bashExecution") {
+				const component = new BashExecutionComponent(message.command, this.tui, message.excludeFromContext, pad);
+				if (message.output) component.appendOutput(message.output);
+				component.setComplete(message.exitCode, message.cancelled, message.truncated ? { truncated: true } as never : undefined, message.fullOutputPath);
+				component.setExpanded(this.expanded);
+				this.transcript.addChild(component);
+			} else if (message.role === "compactionSummary" || message.role === "branchSummary") {
 				this.transcript.addChild(new Spacer(1));
-				this.transcript.addChild(new CompactionSummaryMessageComponent(message, markdown));
+				const component = message.role === "compactionSummary"
+					? new CompactionSummaryMessageComponent(message, markdown, pad)
+					: new BranchSummaryMessageComponent(message, markdown, pad);
+				component.setExpanded(this.expanded);
+				this.transcript.addChild(component);
 			}
 		}
 		for (const [id, tool] of this.tools) {
@@ -360,8 +395,10 @@ class ProgramViewer implements Component, Focusable {
 		private done: () => void,
 	) {
 		const code = programs.view(id)?.code;
-		this.tool = new ToolExecutionComponent(PROGRAM_TOOL_NAME, `program-${id}`, { action: "run", background: true, ...(code !== undefined && { code }) }, { showImages: false },
-			agentSession(ctx.sessionManager)?.getToolDefinition(PROGRAM_TOOL_NAME), tui, ctx.cwd);
+		const settings = agentSession(ctx.sessionManager)?.settingsManager;
+		this.tool = new ToolExecutionComponent(PROGRAM_TOOL_NAME, `program-${id}`, { action: "run", background: true, ...(code !== undefined && { code }) }, {
+			showImages: settings?.getShowImages() ?? false, imageWidthCells: settings?.getImageWidthCells(), outputPad: settings?.getOutputPad(),
+		}, agentSession(ctx.sessionManager)?.getToolDefinition(PROGRAM_TOOL_NAME), tui, ctx.cwd);
 		this.tool.markExecutionStarted();
 		this.sync();
 		this.disposers.push(programs.onView(() => {

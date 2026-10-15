@@ -9,7 +9,7 @@ import { stripVTControlCharacters } from "node:util";
 const agentDir = mkdtempSync(join(tmpdir(), "pi-agents-home-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.on("exit", () => rmSync(agentDir, { recursive: true, force: true }));
-const { pi, ai, EXTENSION, textOf, gate, until, createSession } = await import("./pi.mjs");
+const { pi, ai, EXTENSION, PI_PACKAGE, textOf, gate, until, createSession } = await import("./pi.mjs");
 
 const bodyOf = (text) => text.startsWith("<agent-message ") ? text.split("\n").slice(1, -1).join("\n") : text;
 
@@ -189,6 +189,29 @@ test("the user's input from the viewer reaches the Agent without a sender header
 	await root.session.waitForIdle();
 	assert.ok(!root.state.rootMessages.some((text) => text.startsWith("Agent worker")), root.state.rootMessages.join("\n"));
 	assert.equal(await root.call({ action: "wait", target: id, timeout: 10 }), "No results.");
+
+	// The viewer shows the conversation as Pi's chat does: messages through their renderers, and `!` commands.
+	owner.agents.conversation(fullId).session.recordBashResult("echo hi", { output: "hi\n", exitCode: 0, cancelled: false, truncated: false });
+	pi.initTheme();
+	const { theme } = await import(join(PI_PACKAGE, "dist/modes/interactive/theme/theme.js"));
+	const noop = () => {};
+	let lines;
+	const custom = async (factory) => {
+		if (lines === undefined) return (lines = "", fullId);
+		const viewer = factory({ terminal: { rows: 60, columns: 100 }, requestRender: noop }, theme, { matches: () => false, getKeys: () => [] }, noop);
+		lines = viewer.render(100).map((line) => stripVTControlCharacters(line).trimEnd()).join("\n");
+		// A reply still streaming renders as streaming, as Pi tells Markdown transformers.
+		viewer.streaming = { role: "assistant", content: [{ type: "text", text: "partial" }], timestamp: 0 };
+		viewer.invalidate();
+		viewer.render(100);
+		assert.equal(viewer.live.component.isStreaming, true);
+		viewer.dispose();
+	};
+	const runner = root.session.extensionRunner;
+	await runner.getCommand("tasks").handler("", { ...runner.createCommandContext(), ui: { notify: noop, custom } });
+	assert.match(lines, /\[pi-agents\] from \S+\n\n one\n/);
+	assert.match(lines, /\n two\n/);
+	assert.match(lines, /\$ echo hi\n[\s\S]*\bhi\n/);
 	await root.close();
 });
 
