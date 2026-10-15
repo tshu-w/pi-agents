@@ -343,7 +343,7 @@ Expanding (`app.tools.expand`) shows them as Pi shows them by default.
 
 Text entered in an Agent's viewer is the user's input to it, sent as in Pi's editor; a Program takes no input.
 
-`app.interrupt` stops an Agent's current turn, as `abort` does, or a Program, as `stop` does. `app.clear` clears the input, and closes the viewer when the input is empty.
+Keys act as in Pi's editor, on the viewed Agent or Program; on an empty input, `Ctrl+C` (`app.clear`) closes the viewer. The viewer scrolls as fullscreen mode does.
 
 ### Workbench
 

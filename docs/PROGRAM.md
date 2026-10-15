@@ -228,7 +228,7 @@ Program <id> <outcome>.
 
 The task panel (SPEC §7) lists running background Programs. `/tasks` opens a background Program in the task viewer (SPEC §7).
 
-`/program <path> [args]` runs the script in a file as a foreground Program of the current Agent, with the text after the path as the global `args`. Esc stops it. Like a `!` command, it and its result join the context without starting a turn. With `pi -p`, the result is printed, and Pi exits with status 1 if the run fails.
+`/program <path> [args]` runs the script in a file as a foreground Program of the current Agent, with the text after the path as the global `args`. Like a `!` command, it and its result join the context without starting a turn. With `pi -p`, the result is printed, and Pi exits with status 1 if the run fails.
 
 ## 8. Configuration
 
