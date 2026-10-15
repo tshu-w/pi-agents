@@ -174,7 +174,7 @@ No results.
 Details:
 
 ```text
-{ results: [{ id, name, state, history, result? }], pending: [id], interrupted? }
+{ results: [{ id, name, state, history, result? }], pending: [{ id, name }], interrupted? }
 ```
 
 `state` is the input outcome (§5); `history` marks a previously read result; `interrupted` is `true` when a steer input ended the wait.

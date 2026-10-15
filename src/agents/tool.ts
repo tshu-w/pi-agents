@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { boundBlocks, boundText } from "../output.ts";
+import { boundBlocks, boundText, type Truncation } from "../output.ts";
 import { rejectFields } from "../params.ts";
 import { renderResultList, renderTextResult, renderToolCall, startDuration, type DurationState } from "../render-call.ts";
 import { agentSession } from "../roots/rpc.ts";
@@ -35,12 +35,25 @@ function resultDetails({ agent, input, history }: WaitResult, result?: string) {
 	return { id: agent.id, name: agent.name, state: input.state, history, ...(result === undefined ? {} : { result }) };
 }
 
+type Named = { id: string; name?: string };
+
+/** The line naming the results left out to keep within Pi's output limits. */
+function omittedLine(omitted: Named[], ids: string[]): string {
+	return omitted.length > 0 ? `[Results omitted: ${omitted.map((agent) => label(agent, ids)).join(", ")}. Use wait with fewer targets.]` : "";
+}
+
+/** The line naming the Agents still pending, and that a steer ended the wait if one did. */
+function pendingLine(pending: Named[], interrupted: boolean | undefined, ids: string[]): string {
+	return pending.length > 0 ? `Still pending: ${pending.map((agent) => label(agent, ids)).join(", ")}${interrupted ? `\n${WAIT_INTERRUPTED}` : ""}` : "";
+}
+
 /** Renders wait results; returns the text and the results the caller has now read. */
 function renderWait(outcome: WaitOutcome, ids: string[]): { text: string; read: WaitResult[]; details: Record<string, unknown> } {
 	const { results, pending, interrupted } = outcome;
-	const pendingLine = pending.length > 0 ? `Still pending: ${pending.map((agent) => label(agent, ids)).join(", ")}${interrupted ? `\n${WAIT_INTERRUPTED}` : ""}` : "";
+	const pendingText = pendingLine(pending, interrupted, ids);
 	const flag = interrupted ? { interrupted } : {};
-	if (results.length === 0) return { text: pendingLine || "No results.", read: [], details: { results: [], pending: pending.map((agent) => agent.id), ...flag } };
+	const named = pending.map(({ id, name }) => ({ id, name }));
+	if (results.length === 0) return { text: pendingText || "No results.", read: [], details: { results: [], pending: named, ...flag } };
 	const only = results[0]!;
 	if (results.length === 1 && pending.length === 0 && !only.history && only.input.state === "completed") {
 		const bounded = boundText(only.input.result ?? "", "pi-agents-wait");
@@ -57,13 +70,10 @@ function renderWait(outcome: WaitOutcome, ids: string[]): { text: string; read: 
 	});
 	let text = bounded.text;
 	const read = results.slice(0, bounded.shown);
-	const omitted = results.slice(bounded.shown);
-	const omittedLine = omitted.length > 0 ? `[Results omitted: ${omitted.map((result) => label(result.agent, ids)).join(", ")}. Use wait with fewer targets.]` : "";
-	if (omittedLine) text += `\n\n${omittedLine}`;
-	if (pendingLine) text += `\n\n${pendingLine}`;
-	// The lines after the results, which the collapsed view shows below them.
-	const notes = [bounded.notice ?? "", omittedLine, pendingLine].filter(Boolean);
-	return { text, read, details: { results: details, pending: pending.map((agent) => agent.id), ...flag, ...bounded.details, notes } };
+	const omittedText = omittedLine(results.slice(bounded.shown).map((result) => result.agent), ids);
+	if (omittedText) text += `\n\n${omittedText}`;
+	if (pendingText) text += `\n\n${pendingText}`;
+	return { text, read, details: { results: details, pending: named, ...flag, ...bounded.details } };
 }
 
 /** Registers the `agent` tool. */
@@ -95,11 +105,13 @@ export function registerAgentTool(
 		// `wait` shows how long it has waited, and when collapsed, each result as a line with the first lines of its body.
 		renderResult: (result, options, theme, context) => renderTextResult(result, options, theme, context, (context.args as { action?: string }).action === "wait"
 			? () => {
-				const { results = [], pending = [], notes } = (result.details ?? {}) as { results?: ReturnType<typeof resultDetails>[]; pending?: string[]; notes?: string[] };
-				// Only results in blocks have notes; a single completed result returned alone, or a result recorded before, shows as it is.
-				if (!notes) return undefined;
-				const ids = [...results.map((entry) => entry.id), ...pending];
-				return renderResultList(results.flatMap((entry) => entry.result === undefined ? [] : [{ line: `${label(entry, ids)}  ${entry.state}`, body: entry.result }]), notes, theme);
+				const { results = [], pending = [], interrupted, ...truncated } = (result.details ?? {}) as { results?: ReturnType<typeof resultDetails>[]; pending?: Named[]; interrupted?: boolean } & Partial<Truncation>;
+				const only = results[0];
+				// As `renderWait` returns them, no results, or a single completed result alone, show as they are.
+				if (!only || (results.length === 1 && pending.length === 0 && !only.history && only.state === "completed")) return undefined;
+				const ids = [...results.map((entry) => entry.id), ...pending.map((agent) => agent.id)];
+				const notes = [omittedLine(results.filter((entry) => entry.result === undefined), ids), pendingLine(pending, interrupted, ids)];
+				return renderResultList(results.flatMap((entry) => entry.result === undefined ? [] : [{ line: `${label(entry, ids)}  ${entry.state}`, body: entry.result }]), notes, truncated, theme);
 			}
 			: undefined),
 		description: `Create, message, and coordinate Agents. \`spawn\` creates an owned Agent and sends its first input; \`send\` sends an input or a write to a visible Agent; \`wait\` waits for owned Agents and returns unread results; \`list\` finds visible Agents; \`abort\` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification naming the Agent and outcome; \`wait\` returns the result. Owned Agents under the same root share \`${maxConcurrent}\` execution slots and a limit of \`${maxOutstanding}\` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.`,

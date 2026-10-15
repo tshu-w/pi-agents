@@ -1,4 +1,4 @@
-import { keyHint, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_MAX_BYTES, formatSize, keyHint, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
 	Container,
@@ -9,6 +9,7 @@ import {
 	Text,
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
+import type { Truncation } from "./output.ts";
 
 type ToolCallTheme = {
 	bold(text: string): string;
@@ -70,7 +71,7 @@ function updateDuration(state: DurationState, isPartial: boolean, durationMs: nu
 }
 
 interface ResultTheme {
-	fg(color: "toolOutput" | "muted", text: string): string;
+	fg(color: "toolOutput" | "muted" | "warning", text: string): string;
 	bold(text: string): string;
 }
 
@@ -102,12 +103,25 @@ function outputText(text: string, theme: ResultTheme): string {
 	return displayText(text).split("\n").filter((line) => line.trim()).map((line) => theme.fg("toolOutput", line)).join("\n");
 }
 
+/** The warning Pi's bash renderer shows for truncated output. */
+function truncationWarning({ truncation, fullOutputPath }: Partial<Truncation>, theme: ResultTheme): string | undefined {
+	const warnings: string[] = [];
+	if (fullOutputPath) warnings.push(`Full output: ${fullOutputPath}`);
+	if (truncation?.truncated) {
+		warnings.push(truncation.truncatedBy === "lines"
+			? `Truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines`
+			: `Truncated: ${truncation.outputLines} lines shown (${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit)`);
+	}
+	return warnings.length > 0 ? theme.fg("warning", `[${warnings.join(". ")}]`) : undefined;
+}
+
 /**
  * The collapsed view of `wait` results: each result as its line in bold, then the first visual lines of its body without
- * blank lines, indented, and the number of lines after them; then the lines of the notes, without blank lines.
- * Like Pi's `codemode` output preview, it counts wrapped lines and caches its lines per width.
+ * blank lines, indented, and the number of lines after them; then the notes, without blank lines, and the truncation
+ * warning as Pi's bash renderer shows it. Like Pi's `codemode` output preview, it counts wrapped lines and caches its
+ * lines per width.
  */
-export function renderResultList(results: { line: string; body: string }[], notes: string[], theme: ResultTheme): Component {
+export function renderResultList(results: { line: string; body: string }[], notes: string[], truncated: Partial<Truncation>, theme: ResultTheme): Component {
 	let cached: { width: number; lines: string[] } | undefined;
 	return {
 		render(width) {
@@ -120,6 +134,8 @@ export function renderResultList(results: { line: string; body: string }[], note
 					if (preview.skippedCount > 0) lines.push(truncateToWidth(`  ${moreLines(preview.skippedCount, theme)}`, width, "..."));
 				}
 				lines.push(...new Text(outputText(notes.join("\n"), theme), 0, 0).render(width));
+				const warning = truncationWarning(truncated, theme);
+				if (warning) lines.push(...new Text(warning, 0, 0).render(width));
 				cached = { width, lines };
 			}
 			return cached.lines;

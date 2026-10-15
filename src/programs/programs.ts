@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deferred, settlesBy, STEER_POLL_MS, WAIT_INTERRUPTED, waitForChange, type Deferred } from "../agents/agents.ts";
 import { shortId, trackTreeWork } from "../agents/registry.ts";
-import { boundBlocks, boundText } from "../output.ts";
+import { boundBlocks, boundText, type Truncation } from "../output.ts";
 import { CLEANUP_TIMEOUT_MS, PROGRAM_TOOL_NAME, type ProgramFiles, type ProgramOutcome, type ProgramRunResult } from "./execute.ts";
 
 const PROGRAM_ENTRY = "pi-agents-program";
@@ -351,14 +351,24 @@ function resultDetails(record: ProgramRecord, available?: number): ProgramResult
 }
 
 /** Renders wait results; returns the content, its details, and the results the caller has now received. */
-export function renderProgramWait({ results, running, interrupted }: ProgramWaitOutcome, ids: string[]): { content: Item[]; details: { results: ProgramResultDetails[]; notes?: string[] }; returned: ProgramRecord[]; isError?: boolean } {
-	const runningLine = running.length > 0 ? `Still running: ${running.map((record) => shortId(record.id, ids)).join(", ")}${interrupted ? `\n${WAIT_INTERRUPTED}` : ""}` : "";
-	if (results.length === 0) return { content: [{ type: "text", text: runningLine || "No results." }], details: { results: [] }, returned: [] };
+/** The line naming the results left out to keep within Pi's output limits. */
+export function omittedLine(omitted: string[], ids: string[]): string {
+	return omitted.length > 0 ? `[Results omitted: ${omitted.map((id) => shortId(id, ids)).join(", ")}. Use wait with fewer targets.]` : "";
+}
+
+/** The line naming the Programs still running, and that a steer ended the wait if one did. */
+export function runningLine(running: string[], interrupted: boolean | undefined, ids: string[]): string {
+	return running.length > 0 ? `Still running: ${running.map((id) => shortId(id, ids)).join(", ")}${interrupted ? `\n${WAIT_INTERRUPTED}` : ""}` : "";
+}
+
+export function renderProgramWait({ results, running, interrupted }: ProgramWaitOutcome, ids: string[]): { content: Item[]; details: { results: ProgramResultDetails[] } & Partial<Truncation>; returned: ProgramRecord[]; isError?: boolean } {
+	const runningText = runningLine(running.map((record) => record.id), interrupted, ids);
+	if (results.length === 0) return { content: [{ type: "text", text: runningText || "No results." }], details: { results: [] }, returned: [] };
 	const images = (shown: ProgramRecord[]) => shown.flatMap((record) => (record.content ?? []).filter((item) => item.type === "image"));
 	const only = results[0]!;
 	if (results.length === 1 && running.length === 0 && only.state === "completed") {
 		const bounded = boundText(textOf(only.content), "pi-agents-program-wait");
-		return { content: [{ type: "text", text: bounded.text }, ...images(results)], details: { results: [resultDetails(only)] }, returned: results };
+		return { content: [{ type: "text", text: bounded.text }, ...images(results)], details: { results: [resultDetails(only)], ...bounded.details }, returned: results };
 	}
 	const blocks = results.map((record) => resultBlock(record, ids));
 	const bounded = boundBlocks(blocks, "program-result", "pi-agents-program-wait");
@@ -371,13 +381,10 @@ export function renderProgramWait({ results, running, interrupted }: ProgramWait
 	});
 	let text = bounded.text;
 	const returned = results.slice(0, bounded.shown);
-	const omitted = results.slice(bounded.shown);
-	const omittedLine = omitted.length > 0 ? `[Results omitted: ${omitted.map((record) => shortId(record.id, ids)).join(", ")}. Use wait with fewer targets.]` : "";
-	if (omittedLine) text += `\n\n${omittedLine}`;
-	if (runningLine) text += `\n\n${runningLine}`;
-	// The lines after the results, which the collapsed view shows below them.
-	const notes = [bounded.notice ?? "", omittedLine, runningLine].filter(Boolean);
-	return { content: [{ type: "text", text }, ...images(returned)], details: { results: details, notes }, returned };
+	const omittedText = omittedLine(results.slice(bounded.shown).map((record) => record.id), ids);
+	if (omittedText) text += `\n\n${omittedText}`;
+	if (runningText) text += `\n\n${runningText}`;
+	return { content: [{ type: "text", text }, ...images(returned)], details: { results: details, ...bounded.details }, returned };
 }
 
 export function programListLine(record: ProgramRecord, ids: string[]): string {
