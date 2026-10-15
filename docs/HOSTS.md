@@ -83,7 +83,7 @@ A turn counts as seen once it has been shown in an attached terminal or a previe
 Keys:
 
 - `Enter` (`tui.select.confirm`) attaches; detaching returns here.
-- `Space` previews the selected Session below the list: the conversation since the last compaction, with thinking left out and each run of tool calls folded to one line, such as `... (6 tool calls: bash, read, edit)`. The preview follows the Session as it works. The input keeps `@<session>` at its start, so a message goes to the previewed Session. In the preview:
+- `Space` previews the selected Session below the list: the conversation since the last compaction, with thinking left out, and each run of tool calls, branch summary, and custom message folded to one line, such as `... (6 tool calls: bash, read, edit)`. The preview follows the Session as it works. The input keeps `@<session>` at its start, so a message goes to the previewed Session. In the preview:
   - With no message typed, `Enter` attaches, as `Ctrl+O` (`app.tools.expand`) always does.
   - It scrolls as fullscreen mode does; with no message typed, `↑`/`↓` (`tui.select.up`/`tui.select.down`) scroll too.
   - `Esc` (`tui.select.cancel`) clears a typed message; with none typed, it or `Space` closes the preview, as `Ctrl+Z` always does.

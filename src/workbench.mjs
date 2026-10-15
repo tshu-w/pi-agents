@@ -38,23 +38,21 @@ function textOf(content) {
   return Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text).join('\n') : '';
 }
 
-/** The messages on the Session's active branch since its last compaction, oldest first. */
-async function branchMessages(file) {
-  const entries = new Map();
+/** The messages on the Session's active branch since its last compaction, oldest first, read as Pi reads the Session. */
+async function branchMessages(pi, file) {
+  const entries = pi.parseSessionEntries(await readFile(file, 'utf8'));
+  // Older Sessions take Pi's current form.
+  pi.migrateSessionEntries(entries);
+  const byId = new Map();
   let leaf;
-  for (const line of (await readFile(file, 'utf8')).split('\n')) {
-    let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
+  for (const entry of entries) {
     if (typeof entry?.id !== 'string' || entry.type === 'session') continue;
-    entries.set(entry.id, entry);
+    byId.set(entry.id, entry);
     leaf = entry;
   }
-  const messages = [];
-  for (let entry = leaf; entry && entry.type !== 'compaction'; entry = entries.get(entry.parentId)) {
-    if (entry.type === 'message' && entry.message) messages.push(entry.message);
-    else if (entry.type === 'custom_message') messages.push({ role: 'custom', ...entry });
-  }
-  return messages.reverse();
+  const branch = [];
+  for (let entry = leaf; entry && entry.type !== 'compaction'; entry = byId.get(entry.parentId)) branch.push(entry);
+  return branch.reverse().flatMap(entry => pi.sessionEntryToContextMessages(entry));
 }
 
 function age(ms) {
@@ -425,7 +423,7 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
   async function preview(session) {
     if (!session?.sessionFile) return;
     let messages;
-    try { messages = await branchMessages(session.sessionFile); }
+    try { messages = await branchMessages(pi, session.sessionFile); }
     catch (error) { return say(error.message, 'error'); }
     let body = conversation(messages);
     const border = themes.getEditorTheme().borderColor;
@@ -437,7 +435,7 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     const watcher = watch(session.sessionFile, () => {
       clearTimeout(timer);
       timer = setTimeout(async () => {
-        try { body = conversation(await branchMessages(session.sessionFile)); }
+        try { body = conversation(await branchMessages(pi, session.sessionFile)); }
         catch (error) { return say(error.message, 'error'); }
         see();
         ui.requestRender();
@@ -514,20 +512,27 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     ui.requestRender(true);
   }
 
-  /** Messages and replies as Pi shows them; thinking is left out and each run of tool calls folds to one line. */
+  /**
+   * Messages and replies as Pi shows them; thinking is left out, and each run of tool calls, branch summary, and custom
+   * message other than the user's input folds to one line.
+   */
   function conversation(messages) {
     const markdown = themes.getMarkdownTheme();
     const view = new T.Container();
     let tools = [];
+    // Pi's hint for folded output: "... (36 more lines, …)".
+    const summarize = summary => {
+      view.addChild(new T.Spacer(1));
+      view.addChild(new T.Text(theme.fg('muted', `... (${summary})`), 1, 0));
+    };
     const fold = () => {
       if (!tools.length) return;
-      // Pi's hint for folded output: "... (36 more lines, …)".
-      const names = [...new Set(tools)].join(', ');
-      view.addChild(new T.Spacer(1));
-      view.addChild(new T.Text(theme.fg('muted', `... (${tools.length} tool call${tools.length > 1 ? 's' : ''}: ${names})`), 1, 0));
+      summarize(`${tools.length} tool call${tools.length > 1 ? 's' : ''}: ${[...new Set(tools)].join(', ')}`);
       tools = [];
     };
     for (const message of messages) {
+      // As in Pi's chat, a custom message not for display is skipped.
+      if (message.role === 'custom' && !message.display) continue;
       const user = message.role === 'user' || (message.role === 'custom' && message.customType === 'pi-agents' && message.details?.user);
       if (user) {
         const text = textOf(message.content).trim();
@@ -542,6 +547,13 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
           view.addChild(new pi.AssistantMessageComponent({ ...message, content }, true, markdown));
         }
         tools.push(...message.content.flatMap(part => part.type === 'toolCall' ? [part.name] : []));
+      } else if (message.role === 'branchSummary') {
+        fold();
+        summarize('branch summary');
+      } else if (message.role === 'custom') {
+        const from = message.customType === 'pi-agents' ? message.details?.from?.name ?? message.details?.from?.id : undefined;
+        fold();
+        summarize(from ? `message from ${from}` : `${message.customType} message`);
       }
     }
     fold();
