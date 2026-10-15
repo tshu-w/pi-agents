@@ -10,7 +10,6 @@ import {
 	getMarkdownTheme,
 	getSelectListTheme,
 	keyHint,
-	keyText,
 	parseSkillBlock,
 	SkillInvocationMessageComponent,
 	ToolExecutionComponent,
@@ -100,7 +99,7 @@ class AgentViewer implements Component, Focusable {
 	private live?: { component: AssistantMessageComponent; calls: string };
 	/** Tool components without a result from the last rebuild. */
 	private tools = new Map<string, ToolExecutionComponent>();
-	private running = new Map<string, { name: string; partial?: ToolResult }>();
+	private running = new Map<string, { partial?: ToolResult }>();
 	private expanded = false;
 	/** Lines scrolled up from the end. */
 	private scroll = 0;
@@ -221,7 +220,7 @@ class AgentViewer implements Component, Focusable {
 		this.disposers.push(session.subscribe((event) => {
 			if (event.type === "message_start" || event.type === "message_update") this.streaming = event.message;
 			else if (event.type === "message_end") this.streaming = undefined;
-			else if (event.type === "tool_execution_start") this.running.set(event.toolCallId, { name: event.toolName });
+			else if (event.type === "tool_execution_start") this.running.set(event.toolCallId, {});
 			else if (event.type === "tool_execution_update") {
 				const tool = this.running.get(event.toolCallId);
 				if (tool) tool.partial = event.partialResult as ToolResult;
@@ -258,20 +257,19 @@ class AgentViewer implements Component, Focusable {
 		this.tui.requestRender();
 	}
 
-	/** The working status in the editor's border, and its color from the Agent's thinking level, as in Pi. */
+	/**
+	 * The working status in the editor's border, and its color from the Agent's thinking level, as in Pi: `Working`,
+	 * spinner and text in the border's color.
+	 */
 	private syncStatus(conversation: ReturnType<AgentNode["agents"]["conversation"]>): void {
 		this.editor.borderColor = this.theme.getThinkingBorderColor((conversation?.thinkingLevel ?? "off") as never);
 		const state = this.owner.agents.counts(this.entry.id)?.state;
-		const busy = state === "running" || state === "waiting";
-		const tool = [...this.running.values()].at(-1);
-		const abort = `${keyText("app.interrupt")} to abort`;
-		const text = !busy ? "" : tool ? `Running ${tool.name}... (${abort})` : `Working... (${abort})`;
+		const text = state === "running" || state === "waiting" ? "Working" : "";
 		if (text === this.status) return;
 		this.status = text;
 		this.indicator?.dispose();
-		this.indicator = text
-			? new WorkingStatus(this.tui, (part) => this.editor.borderColor(part), (part) => this.theme.fg("muted", part), text)
-			: undefined;
+		const color = (part: string) => this.editor.borderColor(part);
+		this.indicator = text ? new WorkingStatus(this.tui, color, color, text) : undefined;
 		this.editor.setWorkingStatusIndicator(this.indicator as unknown as StatusIndicator);
 	}
 
