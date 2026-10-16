@@ -6,7 +6,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { CodemodeResult, CodemodeTool } from "@earendil-works/pi-codemode";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
-import { loadCodemode, loadPiCodemode } from "./codemode.ts";
+import { loadCodemode, loadPiCodemode, loadPiWorkerSource } from "./codemode.ts";
 import type { DetachedCallOptions } from "./host-patches.ts";
 
 export const PROGRAM_TOOL_NAME = "program";
@@ -104,20 +104,67 @@ interface SandboxExtras {
 const sandboxExtras = new AsyncLocalStorage<SandboxExtras>();
 let sandboxPatch: Promise<void> | undefined;
 
+/**
+ * Since Pi 1.3.0, its executor admits at most two codemode workers per process, which background
+ * Programs waiting on Agents use up. A Program's worker is admitted on its own terms instead: any
+ * number may run, and none starts while this many are still exiting after their scripts ended.
+ */
+const MAX_EXITING_WORKERS = 2;
+const exitingWorkers = new Set<{ exited: boolean }>();
+
+/** A launcher for one Program's worker, from where Pi's executor starts its own. */
+function programWorker(codemode: Awaited<ReturnType<typeof loadCodemode>>, wasmPath: string, workerUrl: string | URL | undefined) {
+	let worker: { exited: boolean } | undefined;
+	let ended = false;
+	const options = {
+		wasm: codemode.loadQuickJSWasm(wasmPath),
+		workerUrl,
+		acquireWorker: () => {
+			// The script can end while the QuickJS module loads, before its worker starts.
+			if (ended) throw new Error("The Program ended before its worker started.");
+			if (exitingWorkers.size >= MAX_EXITING_WORKERS) {
+				throw new Error(`${exitingWorkers.size} workers of ended Programs are still shutting down. Retry after they exit.`);
+			}
+			const started = { exited: false };
+			worker = started;
+			return () => {
+				started.exited = true;
+				exitingWorkers.delete(started);
+			};
+		},
+	};
+	const sandbox = new codemode.CodemodeSandbox(options) as unknown as Record<string, unknown>;
+	return {
+		launch: sandbox.launch,
+		ended() {
+			ended = true;
+			if (worker && !worker.exited) exitingWorkers.add(worker);
+		},
+	};
+}
+
 async function patchSandbox(): Promise<void> {
-	const proto = (await loadCodemode()).CodemodeSandbox.prototype as unknown as Record<string, any>;
+	const [codemode, source] = await Promise.all([loadCodemode(), loadPiWorkerSource()]);
+	const wasmPath = source.getQuickJSWasmPath();
+	const workerUrl = source.getCodemodeWorkerSpecifier();
+	const proto = codemode.CodemodeSandbox.prototype as unknown as Record<string, any>;
 	const execute = proto.execute;
 	proto.execute = function (this: Record<string, any>, code: string, options: Record<string, unknown> = {}) {
 		const current = sandboxExtras.getStore();
 		if (!current || current.used) return execute.call(this, code, options);
 		current.used = true;
 		for (const global of current.globals) this.globalsByName.set(global.name, global);
+		// Before Pi 1.2.0, the sandbox starts its worker itself, with no limit.
+		const worker = typeof this.launch === "function" ? programWorker(codemode, wasmPath, workerUrl) : undefined;
+		if (worker) this.launch = worker.launch;
 		const timeoutMs = Math.min(current.timeoutMs, (options.timeoutMs as number | undefined) ?? this.timeoutMs);
 		return execute.call(this, current.prepare(code), { ...options, timeoutMs }).then((result: CodemodeResult) => {
+			worker?.ended();
 			current.result = result;
 			current.ended();
 			return result;
 		}, (error: unknown) => {
+			worker?.ended();
 			current.ended();
 			throw error;
 		});

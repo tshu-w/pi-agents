@@ -25,6 +25,20 @@ export function loadCodemode(): Promise<Codemode> {
 	return loaded;
 }
 
+/** Where Pi's executor starts codemode workers from. */
+export interface PiWorkerSource {
+	getQuickJSWasmPath(): string;
+	getCodemodeWorkerSpecifier(): string | URL | undefined;
+}
+
+let workerSource: Promise<PiWorkerSource> | undefined;
+
+/** Loads Pi's `dist/config.js`, the module its executor reads them from. */
+export function loadPiWorkerSource(): Promise<PiWorkerSource> {
+	workerSource ??= import(pathToFileURL(join(getPackageDir(), "dist", "config.js")).href);
+	return workerSource;
+}
+
 /** Parts of Pi's `codemode` tool that its package entry does not export. */
 export interface PiCodemode {
 	/** Pi's `codemode` tool definition; `program` reuses its `prepareLoadout` and, since Pi 1.2.0, `reachesTools`. */
