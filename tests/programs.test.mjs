@@ -388,9 +388,9 @@ test("a background Program keeps its caller's tree busy until it ends, and the u
 	await root.close();
 });
 
-test("a child Agent's Programs show under it: in the panel while they have live work, and in the task viewer when they run in the background", async () => {
+test("a child Agent's Programs show under it: in the panel while they have live work, and in the task viewer while they run in the background", async () => {
 	const root = await startRoot(undefined, undefined, {}, {}, [fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))]);
-	const { nodes, panelLines } = globalThis.piAgentsTree;
+	const { nodes, panelLines, ownedEntries } = globalThis.piAgentsTree;
 	const self = nodes.get(root.session.sessionManager.getSessionId());
 	const spawn = (name, background) => root.text({ action: "spawn", name, message: `program:${JSON.stringify({ action: "run", background, code: "await agent({ name: 'inner' }).send('hold')" })}` }, "agent");
 	await spawn("fore", false);
@@ -408,11 +408,17 @@ test("a child Agent's Programs show under it: in the panel while they have live 
 		labels = factory(undefined, { fg: (_color, text) => text, bold: (text) => text }, { matches: () => false }, () => {}).items.map((item) => item.label);
 	};
 	const runner = root.session.extensionRunner;
-	await runner.getCommand("tasks").handler("", { ...runner.createCommandContext(), ui: { notify: () => {}, custom } });
+	const openTasks = () => runner.getCommand("tasks").handler("", { ...runner.createCommandContext(), ui: { notify: () => {}, custom } });
+	await openTasks();
 	assert.ok(labels.some((label) => /^Program \S+ ‹ back$/.test(label)), labels.join("\n"));
 	assert.ok(!labels.some((label) => /^Program \S+ ‹ fore$/.test(label)), labels.join("\n"));
 	root.state.hold.open();
 	await root.text({ action: "wait", target: "fore", timeout: 10 }, "agent");
+	// An ended Program of another Agent is no longer listed.
+	const back = nodes.get(ownedEntries(self).find((entry) => entry.name === "back").id);
+	await until(() => back.programs.list()[0].state !== "running", "back's Program ended");
+	await openTasks();
+	assert.ok(!labels.some((label) => label.startsWith("Program ")), labels.join("\n"));
 	await root.close();
 });
 

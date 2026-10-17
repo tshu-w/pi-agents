@@ -339,7 +339,7 @@ Expanding (`app.tools.expand`) shows them as Pi shows them by default.
 
 ### Task viewer
 
-`/tasks` lists the Agents and background Programs under the current Agent, including Programs' Agents, live ones first and newest first, with their state and latest activity, and opens the selected one in a viewer. A foreground Program is watched in its caller's conversation. An Agent or Program not owned by the current Agent is named with its owners, as `<name> ‹ <owner> ‹ …`, where a Program is `Program <id>`. The viewer follows an Agent's conversation as Pi's chat shows it, or a Program as it shows in the foreground, while the current Session keeps running.
+`/tasks` lists the Agents under the current Agent, including Programs' Agents, its background Programs, and the running ones of those Agents, live ones first and newest first, with their state and latest activity, and opens the selected one in a viewer. A foreground Program is watched in its caller's conversation. An Agent or Program not owned by the current Agent is named with its owners, as `<name> ‹ <owner> ‹ …`, where a Program is `Program <id>`. The viewer follows an Agent's conversation as Pi's chat shows it, or a Program as it shows in the foreground, while the current Session keeps running.
 
 Text entered in an Agent's viewer is the user's input to it, sent as in Pi's editor; a Program takes no input.
 

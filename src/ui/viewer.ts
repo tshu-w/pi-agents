@@ -527,13 +527,15 @@ export function ownedEntries(self: AgentNode): Entry[] {
 const PROGRAM_ITEM = "program:";
 
 /**
- * `/tasks`: picks an Agent in the tree or a background Program of one, live ones first and newest first, and opens
+ * `/tasks`: picks an Agent in the tree, a background Program of the current Agent, or a running one of another Agent, live ones first and newest first, and opens
  * it in the viewer. `paddingX` is Pi's editor padding, so the viewer's editor lines up as Pi's does.
  */
 export async function openTaskViewer(ctx: ExtensionContext, self: AgentNode, paddingX: number): Promise<void> {
 	const entries = ownedEntries(self);
 	const records = [self, ...entries.flatMap((entry) => nodes.get(entry.id) ?? [])]
-		.flatMap((caller) => caller.programs?.list().map((record) => ({ caller, programs: caller.programs!, record })) ?? []);
+		.flatMap((caller) => caller.programs?.list().map((record) => ({ caller, programs: caller.programs!, record })) ?? [])
+		// Another Agent's ended Programs show in its conversation; its Session may not be loaded to list them.
+		.filter(({ caller, record }) => caller === self || record.state === "running");
 	if (entries.length === 0 && records.length === 0) {
 		ctx.ui.notify("No tasks.", "info");
 		return;
