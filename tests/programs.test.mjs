@@ -388,6 +388,34 @@ test("a background Program keeps its caller's tree busy until it ends, and the u
 	await root.close();
 });
 
+test("a child Agent's Programs show under it: in the panel while they have live work, and in the task viewer when they run in the background", async () => {
+	const root = await startRoot(undefined, undefined, {}, {}, [fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))]);
+	const { nodes, panelLines } = globalThis.piAgentsTree;
+	const self = nodes.get(root.session.sessionManager.getSessionId());
+	const spawn = (name, background) => root.text({ action: "spawn", name, message: `program:${JSON.stringify({ action: "run", background, code: "await agent({ name: 'inner' }).send('hold')" })}` }, "agent");
+	await spawn("fore", false);
+	await until(() => root.state.busy === 1, "inner Agent busy");
+	const [header, fore, program, inner] = panelLines(self);
+	assert.equal(header, "Tasks (2 live, /tasks to view)");
+	assert.match(fore, /^  Agent fore \(\S+\)  (running|waiting)/);
+	assert.match(program, /^ {4}Program \S+  running/);
+	assert.match(inner, /^ {6}Agent inner \(\S+\)  running/);
+	await spawn("back", true);
+	await until(() => root.state.busy === 2, "second inner Agent busy");
+	pi.initTheme("dark");
+	let labels;
+	const custom = async (factory) => {
+		labels = factory(undefined, { fg: (_color, text) => text, bold: (text) => text }, { matches: () => false }, () => {}).items.map((item) => item.label);
+	};
+	const runner = root.session.extensionRunner;
+	await runner.getCommand("tasks").handler("", { ...runner.createCommandContext(), ui: { notify: () => {}, custom } });
+	assert.ok(labels.some((label) => /^Program \S+ ‹ back$/.test(label)), labels.join("\n"));
+	assert.ok(!labels.some((label) => /^Program \S+ ‹ fore$/.test(label)), labels.join("\n"));
+	root.state.hold.open();
+	await root.text({ action: "wait", target: "fore", timeout: 10 }, "agent");
+	await root.close();
+});
+
 test("an owned Agent is waiting while its wait blocks on its own Agent, and the viewer's list shows each Agent's latest activity", async () => {
 	const root = await startRoot(undefined, undefined, {}, {}, [fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))]);
 	const { nodes, ownedEntries, latestActivity } = globalThis.piAgentsTree;

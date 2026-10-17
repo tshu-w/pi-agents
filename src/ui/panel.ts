@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, TruncatedText } from "@earendil-works/pi-tui";
-import { label, nodes, onTreeChange, programLabel, programsOf, type AgentNode, type Spend } from "../agents/registry.ts";
+import { label, liveWork, onTreeChange, programLabel, taskLive, tasksOf, type AgentNode, type Spend, type Task } from "../agents/registry.ts";
 
 const WIDGET_KEY = "pi-agents";
 
@@ -24,52 +24,32 @@ function cost({ cost, tokens, unpriced }: Spend): string {
 }
 
 /**
- * The task panel: the Agent's live owned Agents and running background Programs as a tree, in the
- * order they started, with their Programs' live Agents under them, and how long each has run and what
- * it has cost. Empty when none.
+ * The task panel: the Agent's live work as a tree, in the order it started, with how long each has run
+ * and what it has cost. Empty when none.
  */
 export function panelLines(self: AgentNode, now = Date.now()): string[] {
-	const rows: Array<{ line: string; parent?: number; shown: boolean }> = [];
 	const ids = self.agents.ids();
-	let live = 0;
-	// A live row is listed with its owners, so the tree stays readable.
-	const show = (index: number | undefined) => {
-		for (let row = index === undefined ? undefined : rows[index]; row && !row.shown; row = row.parent === undefined ? undefined : rows[row.parent]) row.shown = true;
-	};
-	const visit = (node: AgentNode, level: number, parent?: number) => {
-		const children = [
-			...node.agents.owned().map((entry) => ({ at: entry.createdAt ?? "", entry })),
-			...programsOf(node).filter((program) => program.background).map((program) => ({ at: program.createdAt ?? "", program })),
-		].sort((a, b) => a.at.localeCompare(b.at));
-		for (const child of children) {
-			const index = rows.length;
-			if ("program" in child) {
-				const since = Date.parse(child.program.createdAt ?? "");
-				const time = since ? [elapsed(since, now), ...(child.program.spent ? [cost(child.program.spent)] : [])] : [];
-				rows.push({ line: `${"  ".repeat(level)}${[programLabel(child.program), "running", ...time].join("  ")}`, parent, shown: false });
-				live += 1;
-				show(index);
-				visit(child.program, level + 1, index);
-				continue;
-			}
-			const { entry } = child;
-			const own = node.agents.counts(entry.id);
-			const pending = own?.pending ? [`${own.pending} pending`] : [];
-			const time = own?.since ? [elapsed(own.since, now), ...(own.spent ? [cost(own.spent)] : [])] : [];
-			rows.push({ line: `${"  ".repeat(level)}Agent ${[label(entry, ids), entry.state, ...time, ...pending].join("  ")}`, parent, shown: false });
-			if (entry.state !== "idle") {
-				live += 1;
-				show(index);
-			}
-			const loaded = nodes.get(entry.id);
-			if (loaded) visit(loaded, level + 1, index);
+	const line = (task: Task): string => {
+		if ("program" in task) {
+			const since = Date.parse(task.program.createdAt ?? "");
+			const time = since ? [elapsed(since, now), ...(task.program.spent ? [cost(task.program.spent)] : [])] : [];
+			return [programLabel(task.program), "running", ...time].join("  ");
 		}
+		const { entry, owner } = task;
+		const own = owner.agents.counts(entry.id);
+		const pending = own?.pending ? [`${own.pending} pending`] : [];
+		const time = own?.since ? [elapsed(own.since, now), ...(own.spent ? [cost(own.spent)] : [])] : [];
+		return `Agent ${[label(entry, ids), entry.state, ...time, ...pending].join("  ")}`;
 	};
-	visit(self, 0);
-	const lines = rows.filter((row) => row.shown).map((row) => row.line);
+	// A row is listed while it is live or has live work under it, so the tree stays readable.
+	const rows = (tasks: Task[], level: number): string[] => tasks.flatMap((task) => {
+		const under = rows(task.tasks, level + 1);
+		return taskLive(task) || under.length > 0 ? [`${"  ".repeat(level)}${line(task)}`, ...under] : [];
+	});
+	const lines = rows(tasksOf(self), 0);
 	if (lines.length === 0) return [];
 	if (lines.length > MAX_LINES - 1) lines.splice(MAX_LINES - 2, Infinity, `+${lines.length - (MAX_LINES - 2)} more`);
-	return [`Tasks (${live} live, /tasks to view)`, ...lines.map((line) => `  ${line}`)];
+	return [`Tasks (${liveWork(self)} live, /tasks to view)`, ...lines.map((line) => `  ${line}`)];
 }
 
 /**

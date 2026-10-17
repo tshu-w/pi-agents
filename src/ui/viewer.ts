@@ -36,7 +36,7 @@ import {
 	type SelectItem,
 	type TUI,
 } from "@earendil-works/pi-tui";
-import { MESSAGE_TYPE, nodes, onTreeChange, programLabel, programsOf, type AgentNode, type Entry } from "../agents/registry.ts";
+import { MESSAGE_TYPE, nodes, onTreeChange, programLabel, tasksOf, type AgentNode, type Entry, type Task } from "../agents/registry.ts";
 import { latestActivity } from "../agents/search.ts";
 import { PROGRAM_TOOL_NAME } from "../programs/execute.ts";
 import type { Programs } from "../programs/programs.ts";
@@ -514,27 +514,26 @@ class ListSelector extends Container implements Focusable {
 /** The Agents in the current Agent's tree, including Programs' Agents, those not idle first and newest first within each group. */
 export function ownedEntries(self: AgentNode): Entry[] {
 	const entries: Entry[] = [];
-	const visit = (node: AgentNode) => {
-		for (const agent of node.agents.owned()) {
-			entries.push({ ...agent, ownerId: node.id });
-			const loaded = nodes.get(agent.id);
-			if (loaded) visit(loaded);
+	const visit = (tasks: Task[]) => {
+		for (const task of tasks) {
+			if ("entry" in task) entries.push(task.entry);
+			visit(task.tasks);
 		}
-		for (const program of programsOf(node)) visit(program);
 	};
-	visit(self);
+	visit(tasksOf(self));
 	return entries.sort((a, b) => Number(b.state !== "idle") - Number(a.state !== "idle") || (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
 }
 
 const PROGRAM_ITEM = "program:";
 
 /**
- * `/tasks`: picks an Agent in the tree or a background Program, live ones first and newest first, and opens it in
- * the viewer. `paddingX` is Pi's editor padding, so the viewer's editor lines up as Pi's does.
+ * `/tasks`: picks an Agent in the tree or a background Program of one, live ones first and newest first, and opens
+ * it in the viewer. `paddingX` is Pi's editor padding, so the viewer's editor lines up as Pi's does.
  */
-export async function openTaskViewer(ctx: ExtensionContext, self: AgentNode, programs: Programs | undefined, paddingX: number): Promise<void> {
+export async function openTaskViewer(ctx: ExtensionContext, self: AgentNode, paddingX: number): Promise<void> {
 	const entries = ownedEntries(self);
-	const records = programs?.list() ?? [];
+	const records = [self, ...entries.flatMap((entry) => nodes.get(entry.id) ?? [])]
+		.flatMap((caller) => caller.programs?.list().map((record) => ({ caller, programs: caller.programs!, record })) ?? []);
 	if (entries.length === 0 && records.length === 0) {
 		ctx.ui.notify("No tasks.", "info");
 		return;
@@ -554,9 +553,9 @@ export async function openTaskViewer(ctx: ExtensionContext, self: AgentNode, pro
 			label: path(entry),
 			description: [entry.state, latestActivity(entry.sessionFile) ?? ""].filter(Boolean).join("  "),
 		} })),
-		...records.map((record) => ({ live: record.state === "running", at: new Date(record.startedAt).toISOString(), item: {
+		...records.map(({ caller, programs, record }) => ({ live: record.state === "running", at: new Date(record.startedAt).toISOString(), item: {
 			value: PROGRAM_ITEM + record.id,
-			label: `Program ${programs!.label(record)}`,
+			label: `Program ${programs.label(record)}${caller === self ? "" : ` ‹ ${path(byId.get(caller.id)!)}`}`,
 			description: record.state,
 		} })),
 	];
@@ -565,9 +564,10 @@ export async function openTaskViewer(ctx: ExtensionContext, self: AgentNode, pro
 		.map((task) => task.item);
 	const id = await ctx.ui.custom<string | undefined>((_tui, theme, keys, done) =>
 		new ListSelector("Open task:", items, theme, keys, (value) => done(value), () => done(undefined)));
-	if (id?.startsWith(PROGRAM_ITEM) && programs) {
+	const program = id?.startsWith(PROGRAM_ITEM) ? records.find(({ record }) => record.id === id.slice(PROGRAM_ITEM.length)) : undefined;
+	if (program) {
 		await ctx.ui.custom<void>(
-			(tui, theme, keys, done) => new ProgramViewer(tui, theme, keys, ctx, programs, id.slice(PROGRAM_ITEM.length), () => done()),
+			(tui, theme, keys, done) => new ProgramViewer(tui, theme, keys, ctx, program.programs, program.record.id, () => done()),
 			{ overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "bottom-center" } },
 		);
 		return;

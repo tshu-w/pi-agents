@@ -170,6 +170,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			notify: (text) => agents.notify(text),
 			changed: () => panel.update(),
 		});
+		created.programs = programs;
 		programs.restore(current);
 		panel.start(current);
 	});
@@ -227,7 +228,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			if (!node) return;
 			browsing = true;
 			try {
-				await openTaskViewer(current, requireNode(current), programs, pi.getSettings().editorPaddingX ?? 0);
+				await openTaskViewer(current, requireNode(current), pi.getSettings().editorPaddingX ?? 0);
 			} finally {
 				browsing = false;
 			}

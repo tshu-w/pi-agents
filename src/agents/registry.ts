@@ -1,6 +1,7 @@
 /** The Agents loaded in this process, shared across trees: who sees whom, how targets resolve, and how messages are addressed. */
 import type { Usage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Programs } from "../programs/programs.ts";
 import type { Agents } from "./agents.ts";
 import { TreeScheduler } from "./scheduler.ts";
 
@@ -30,6 +31,8 @@ export interface AgentNode {
 	busy(): boolean;
 	sessionFile(): string | undefined;
 	agents: Agents;
+	/** An Agent's background Programs, which the task viewer lists. */
+	programs?: Programs;
 	/** Delivers a message to this node; used only for root Agents. */
 	receive(text: string, delivery: Delivery, messageId?: string, sender?: Sender): void;
 	/** A root Agent's turn was stopped: messages from other Agents become writes until the user's next input. */
@@ -118,19 +121,35 @@ export function programsOf(node: AgentNode): AgentNode[] {
 		.sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
 }
 
-/** The node's running owned Agents and background Programs, with those under them. */
-export function liveWork(node: AgentNode): number {
-	let count = 0;
-	for (const entry of node.agents.owned()) {
-		if (entry.state !== "idle") count += 1;
+/** An owned Agent or a Program in the user's view of a tree, with the work under it. */
+export type Task = { entry: Entry; owner: AgentNode; tasks: Task[] } | { program: AgentNode; tasks: Task[] };
+
+/**
+ * The work under a node as the task panel and the task viewer show it, oldest first: its owned Agents, and
+ * its Programs that run in the background or have Agents. A foreground Program without Agents shows only in
+ * its caller's conversation.
+ */
+export function tasksOf(node: AgentNode): Task[] {
+	const tasks: Array<{ at: string; task: Task }> = node.agents.owned().map((entry) => {
 		const loaded = shared.nodes.get(entry.id);
-		if (loaded) count += liveWork(loaded);
-	}
+		return { at: entry.createdAt ?? "", task: { entry: { ...entry, ownerId: node.id }, owner: node, tasks: loaded ? tasksOf(loaded) : [] } };
+	});
 	for (const program of programsOf(node)) {
-		if (program.background) count += 1;
-		count += liveWork(program);
+		const under = tasksOf(program);
+		if (program.background || under.length > 0) tasks.push({ at: program.createdAt ?? "", task: { program, tasks: under } });
 	}
-	return count;
+	return tasks.sort((a, b) => a.at.localeCompare(b.at)).map(({ task }) => task);
+}
+
+/** Whether a task is live work: an Agent that is not idle, or a background Program. */
+export function taskLive(task: Task): boolean {
+	return "program" in task ? task.program.background === true : task.entry.state !== "idle";
+}
+
+/** The node's live work, with that under it. */
+export function liveWork(node: AgentNode): number {
+	const count = (tasks: Task[]): number => tasks.reduce((sum, task) => sum + Number(taskLive(task)) + count(task.tasks), 0);
+	return count(tasksOf(node));
 }
 
 /** `Program <short ID>`, unique among its caller's running Programs. */

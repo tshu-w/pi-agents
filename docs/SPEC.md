@@ -302,7 +302,7 @@ Tasks (<N> live, /tasks to view)
   +<N> more
 ```
 
-The live work is the owned Agents that are not `idle`, and the running background Programs with their Agents that are not `idle`. The rows list them as a tree in the order they started, each under its owner and each Program under its caller, with the owners needed to keep the tree. Rows that do not fit are counted in the last row. The time is how long the Agent's current turn or the Program has run, and the cost what the replies in that turn have cost, or for a Program, those of all the Agents under it. When a reply has no price, the cost is the input and output tokens instead, like `7.3M tok`.
+The live work is the Agents under the current Agent that are not `idle`, including Programs' Agents, and the running background Programs. The rows list them as a tree in the order they started, each under its owner and each Program under its caller, with the owners needed to keep the tree. Rows that do not fit are counted in the last row. The time is how long the Agent's current turn or the Program has run, and the cost what the replies in that turn have cost, or for a Program, those of all the Agents under it. When a reply has no price, the cost is the input and output tokens instead, like `7.3M tok`.
 
 The panel updates as states change, and its times each second. It is shown while it has a row. `/tasks panel` hides or shows it.
 
@@ -339,7 +339,7 @@ Expanding (`app.tools.expand`) shows them as Pi shows them by default.
 
 ### Task viewer
 
-`/tasks` lists the Agents in the current Agent's tree, including its Programs' Agents, and its background Programs, live ones first and newest first, with their state and latest activity, and opens the selected one in a viewer. An Agent not owned by the current Agent is named with its owners, as `<name> ‹ <owner> ‹ …`, where a Program is `Program <id>`. The viewer follows an Agent's conversation as Pi's chat shows it, or a Program as it shows in the foreground, while the current Session keeps running.
+`/tasks` lists the Agents and background Programs under the current Agent, including Programs' Agents, live ones first and newest first, with their state and latest activity, and opens the selected one in a viewer. A foreground Program is watched in its caller's conversation. An Agent or Program not owned by the current Agent is named with its owners, as `<name> ‹ <owner> ‹ …`, where a Program is `Program <id>`. The viewer follows an Agent's conversation as Pi's chat shows it, or a Program as it shows in the foreground, while the current Session keeps running.
 
 Text entered in an Agent's viewer is the user's input to it, sent as in Pi's editor; a Program takes no input.
 
