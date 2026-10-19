@@ -196,9 +196,9 @@ test("the user's input from the viewer reaches the Agent without a sender header
 		if (lines === undefined) return (lines = "", fullId);
 		const viewer = factory({ terminal: { rows: 60, columns: 100 }, requestRender: noop }, theme, { matches: () => false, getKeys: () => [] }, noop);
 		lines = viewer.render(100).map((line) => stripVTControlCharacters(line).trimEnd()).join("\n");
+		assert.match(lines, /• worker .*back\n/);
 		// A reply still streaming renders as streaming, as Pi tells Markdown transformers.
 		viewer.streaming = { role: "assistant", content: [{ type: "text", text: "partial" }], timestamp: 0 };
-		viewer.invalidate();
 		viewer.render(100);
 		assert.equal(viewer.live.component.isStreaming, true);
 		viewer.dispose();

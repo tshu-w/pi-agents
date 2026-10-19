@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const agentDir = mkdtempSync(join(tmpdir(), "pi-agents-home-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.on("exit", () => rmSync(agentDir, { recursive: true, force: true }));
-const { pi, ai, EXTENSION, textOf, gate, until, createSession } = await import("./pi.mjs");
+const { pi, ai, EXTENSION, PI_PACKAGE, textOf, gate, until, createSession } = await import("./pi.mjs");
 
 /** The text an Agent received from its owner, without the header and the schema instruction. */
 const bodyOf = (text) => text.split("\n").slice(1, -1).join("\n").split("\n\nWhen done, call")[0];
@@ -137,6 +137,7 @@ test("/tasks opens a background Program as its tool call shows in the foreground
 	const { details } = await root.call({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' }); return 'done'" });
 	await until(() => root.messages.some((message) => /^Program \S+ completed\.$/.test(message)), "notification");
 	pi.initTheme();
+	const { theme } = await import(join(PI_PACKAGE, "dist/modes/interactive/theme/theme.js"));
 	const noop = () => {};
 	// The list picks the Program, whose viewer is rendered once.
 	const view = async (session) => {
@@ -144,7 +145,7 @@ test("/tasks opens a background Program as its tool call shows in the foreground
 		let lines;
 		const custom = async (factory) => {
 			if (lines === undefined) return (lines = "", `program:${details.id}`);
-			const viewer = factory({ terminal: { rows: 40 }, requestRender: noop }, pi.theme, { matches: () => false }, noop);
+			const viewer = factory({ terminal: { rows: 40 }, requestRender: noop }, theme, { matches: () => false }, noop);
 			lines = stripVTControlCharacters(viewer.render(100).join("\n"));
 			viewer.dispose();
 		};
@@ -405,7 +406,7 @@ test("a child Agent's Programs show under it: in the panel while they have live 
 	pi.initTheme("dark");
 	let labels;
 	const custom = async (factory) => {
-		labels = factory(undefined, { fg: (_color, text) => text, bold: (text) => text }, { matches: () => false }, () => {}).items.map((item) => item.label);
+		labels = factory({}, { fg: (_color, text) => text, bold: (text) => text }, { matches: () => false }, () => {}).items.map((item) => item.label);
 	};
 	const runner = root.session.extensionRunner;
 	const openTasks = () => runner.getCommand("tasks").handler("", { ...runner.createCommandContext(), ui: { notify: () => {}, custom } });
