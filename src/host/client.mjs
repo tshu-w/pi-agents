@@ -15,6 +15,35 @@ const RESET = '\x1b[<u\x1b[>4;0m\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b
 const ALT_SCREEN = /\x1b\[\?1049([hl])/g;
 // Splits terminal input into key sequences: CSI and SS3 sequences, Alt+key, or a single character.
 const KEYS = /\x1b\[[0-?]*[ -/]*[@-~]|\x1bO[\s\S]|\x1b?[\s\S]/g;
+// The terminal's reply to the device status query (`\x1b[5n`), which pi-tui does not send, unlike `\x1b[c`.
+const STATUS_QUERY = '\x1b[5n';
+const STATUS_OK = /\x1b\[0n/;
+const DRAIN_TIMEOUT_MS = 1000;
+
+/**
+ * Reads and drops the input the terminal sent before it took the output written so far, such as the release of the
+ * detach key in Pi's keyboard mode, so the shell does not get it. Over a slow link, such as SSH, it arrives late; the
+ * terminal answers a query after it, or the wait ends after `DRAIN_TIMEOUT_MS`.
+ */
+export function drain(stdin, stdout) {
+  return new Promise(resolve => {
+    let input = '';
+    const done = () => {
+      clearTimeout(timer);
+      stdin.off('data', onData);
+      resolve();
+    };
+    const onData = data => {
+      input += data.toString('latin1');
+      if (STATUS_OK.test(input)) done();
+      // A reply split across chunks starts in the kept tail.
+      else input = input.slice(-64);
+    };
+    const timer = setTimeout(done, DRAIN_TIMEOUT_MS);
+    stdin.on('data', onData);
+    stdout.write(STATUS_QUERY);
+  });
+}
 
 export function hostStatus(path) {
   return new Promise((resolve, reject) => {
@@ -107,9 +136,10 @@ export async function startHost(paths, { pi, args, cwd, cols = 120, rows = 40, e
  * Attaches this process's terminal to a host until the host detaches it or Pi exits.
  * The detach key detaches here, before Pi sees it, so it works whatever Pi shows.
  * `onAttach` runs once the host has attached the terminal and told Pi.
+ * With `drainInput`, late input is dropped before returning (see `drain`); a caller that reads the terminal next turns it off.
  * Resolves to { reason: 'detach' | 'takeover' | 'exited' | 'closed', session }.
  */
-export function attach(socketPath, { isDetach, onAttach, stdin = process.stdin, stdout = process.stdout }) {
+export function attach(socketPath, { isDetach, onAttach, drainInput = true, stdin = process.stdin, stdout = process.stdout }) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(socketPath);
     const size = () => ({ cols: stdout.columns, rows: stdout.rows });
@@ -124,16 +154,19 @@ export function attach(socketPath, { isDetach, onAttach, stdin = process.stdin, 
       socket.write(frame(FRAME.detached));
     };
     let result, connected = false, altScreen = false, attached = false;
-    function finish() {
+    async function finish() {
       stdout.off('resize', onResize);
       stdin.off('data', onInput);
       if (connected) {
-        stdin.setRawMode(false);
-        stdin.pause();
         // An exiting Pi restores the terminal itself.
         // Leaving the alternate screen returns the cursor to the line below the command; otherwise it ends a line.
         // Terminals keep a keyboard mode stack per screen, so the reset comes before leaving it.
-        if (result?.reason !== 'exited') stdout.write(altScreen ? `${RESET}\x1b[?1049l` : `${RESET}\r\n`);
+        // The drain comes before leaving, so the screen changes once, when it ends.
+        if (result?.reason !== 'exited') stdout.write(RESET);
+        if (drainInput) await drain(stdin, stdout);
+        if (result?.reason !== 'exited') stdout.write(altScreen ? '\x1b[?1049l' : '\r\n');
+        stdin.setRawMode(false);
+        stdin.pause();
       }
       resolve(result ?? { reason: 'closed' });
     }

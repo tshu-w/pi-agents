@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { styleText } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
-import { alive, attach, listHosts, settledHosts, startHost } from './host/client.mjs';
+import { alive, attach, drain, listHosts, settledHosts, startHost } from './host/client.mjs';
 import { detachKey, detachMatcher } from './host/keys.mjs';
 import { piPackage } from './pi.mjs';
 import { ensureDaemon, sendViaDaemon } from './daemon/client.mjs';
@@ -351,7 +351,8 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
   async function attachTo(socket) {
     ui.stop();
     let result;
-    try { result = await attach(socket, { isDetach }); }
+    // The list reads the terminal again at once, and skips late key releases itself.
+    try { result = await attach(socket, { isDetach, drainInput: false }); }
     finally {
       process.stdout.write(ALT_SCREEN);
       ui.start();
@@ -622,10 +623,14 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     if (quitting) return;
     quitting = true;
     stream?.close();
-    // Late key releases would otherwise leak into the shell, as Pi avoids on exit.
     themeSync.disableAutoSync();
-    await terminal.drainInput(1000);
     ui.stop();
+    // Late key releases would otherwise leak into the shell, as when detaching from a Session.
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    await drain(process.stdin, process.stdout);
+    process.stdin.setRawMode(false);
+    process.stdin.pause();
     process.stdout.write(`${MAIN_SCREEN}${styleText('dim', 'Sessions keep running. To reopen:')} pd agents\n`);
     finish();
   }
