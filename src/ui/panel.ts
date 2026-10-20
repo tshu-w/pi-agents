@@ -23,6 +23,11 @@ function cost({ cost, tokens, unpriced }: Spend): string {
 	return tokens < 10_000_000 ? `${(tokens / 1_000_000).toFixed(1)}M tok` : `${Math.round(tokens / 1_000_000)}M tok`;
 }
 
+/** The cost of `spent`, once there is any. */
+function spend(spent: Spend | undefined): string[] {
+	return spent && (spent.cost > 0 || spent.tokens > 0) ? [cost(spent)] : [];
+}
+
 /**
  * The task panel: the Agent's live work as a tree, in the order it started, with how long each has run
  * and what it has cost. Empty when none.
@@ -32,13 +37,13 @@ export function panelLines(self: AgentNode, now = Date.now()): string[] {
 	const line = (task: Task): string => {
 		if ("program" in task) {
 			const since = Date.parse(task.program.createdAt ?? "");
-			const time = since ? [elapsed(since, now), ...(task.program.spent ? [cost(task.program.spent)] : [])] : [];
+			const time = since ? [elapsed(since, now), ...spend(task.program.spent)] : [];
 			return [programLabel(task.program), "running", ...time].join("  ");
 		}
 		const { entry, owner } = task;
 		const own = owner.agents.counts(entry.id);
 		const pending = own?.pending ? [`${own.pending} pending`] : [];
-		const time = own?.since ? [elapsed(own.since, now), ...(own.spent ? [cost(own.spent)] : [])] : [];
+		const time = own?.since ? [elapsed(own.since, now), ...spend(own.spent)] : [];
 		return `Agent ${[label(entry, ids), entry.state, ...time, ...pending].join("  ")}`;
 	};
 	// A row is listed while it is live or has live work under it, so the tree stays readable.

@@ -373,7 +373,8 @@ test("a background Program keeps its caller's tree busy until it ends, and the u
 	` }));
 	await until(() => root.state.busy === 1, "inner Agent busy");
 	const [program, inner] = panelLines(self).slice(1);
-	assert.match(program, new RegExp(`Program ${id}  running`));
+	// Before any reply, the Program has no cost to show.
+	assert.match(program, new RegExp(`Program ${id}  running  \\d+s$`));
 	assert.match(inner, /^ {4}Agent inner \(\S+\)  running/);
 	assert.deepEqual(ownedEntries(self).map((entry) => entry.name), ["inner"]);
 	// After its Agent answers, the Program only calls tools, and the tree stays busy.
