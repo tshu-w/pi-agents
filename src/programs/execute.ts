@@ -105,9 +105,9 @@ const sandboxExtras = new AsyncLocalStorage<SandboxExtras>();
 let sandboxPatch: Promise<void> | undefined;
 
 /**
- * Since Pi 1.3.0, its executor admits at most two codemode workers per process, which background
- * Programs waiting on Agents use up. A Program's worker is admitted on its own terms instead: any
- * number may run, and none starts while this many are still exiting after their scripts ended.
+ * Since Pi 1.3.0, its executor admits a limited number of codemode workers per process (two by default),
+ * which background Programs waiting on Agents use up. A Program's worker is admitted on its own terms
+ * instead: any number may run, and none starts while this many are still exiting after their scripts ended.
  */
 const MAX_EXITING_WORKERS = 2;
 const exitingWorkers = new Set<{ exited: boolean }>();
@@ -141,6 +141,26 @@ function programWorker(codemode: Awaited<ReturnType<typeof loadCodemode>>, wasmP
 			if (worker && !worker.exited) exitingWorkers.add(worker);
 		},
 	};
+}
+
+const WORKER_LIMIT_ENV = "PI_CODEMODE_MAX_WORKERS";
+
+/**
+ * Since Pi 1.4.0, its executor also reserves one of its worker slots before a script starts and holds
+ * it until the script ends, so Programs waiting on Agents make later Programs wait. Its limit is raised
+ * while `start` calls the executor, which reserves before its first `await`, and restored as soon as the
+ * call returns. The Program still holds its slot, which only Programs share unless the host runs scripts
+ * through the same executor, as Pi from source or an SDK host does.
+ */
+function admitAtOnce<T>(start: () => T): T {
+	const limit = process.env[WORKER_LIMIT_ENV];
+	process.env[WORKER_LIMIT_ENV] = String(Number.MAX_SAFE_INTEGER);
+	try {
+		return start();
+	} finally {
+		if (limit === undefined) delete process.env[WORKER_LIMIT_ENV];
+		else process.env[WORKER_LIMIT_ENV] = limit;
+	}
 }
 
 async function patchSandbox(): Promise<void> {
@@ -269,11 +289,11 @@ export async function executeProgram(
 	};
 	let result: Awaited<ReturnType<typeof executeCodemode>>;
 	try {
-		result = await withSandboxExtras(extras, () => executeCodemode(toolCallId, { code: source }, signal, onUpdate, programCtx, {
+		result = await withSandboxExtras(extras, () => admitAtOnce(() => executeCodemode(toolCallId, { code: source }, signal, onUpdate, programCtx, {
 			models: true,
 			appendEntry: options.appendEntry,
 			getToolNamespace: options.getToolNamespace,
-		}));
+		})));
 	} finally {
 		if (!scriptEnded) extras.ended();
 	}

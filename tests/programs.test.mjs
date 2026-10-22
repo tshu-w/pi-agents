@@ -132,6 +132,27 @@ test("a background Program runs on after run returns, notifies its caller, and w
 	await root.close();
 });
 
+test("a Program starts while two others wait on Agents, and the codemode worker limit stays as set", async () => {
+	const root = await startRoot();
+	const limit = process.env.PI_CODEMODE_MAX_WORKERS;
+	try {
+		for (let i = 0; i < 2; i++) await root.text({ action: "run", background: true, code: "return await agent().send('hold')" });
+		await until(() => root.state.busy === 2, "held Agents");
+		process.env.PI_CODEMODE_MAX_WORKERS = "2";
+		const third = root.text({ action: "run", code: "return 'started'" });
+		let settled = false;
+		third.then(() => { settled = true; }, () => { settled = true; });
+		await until(() => settled, "the third Program", 10000);
+		assert.match(await third, /started$/);
+		assert.equal(process.env.PI_CODEMODE_MAX_WORKERS, "2");
+	} finally {
+		if (limit === undefined) delete process.env.PI_CODEMODE_MAX_WORKERS;
+		else process.env.PI_CODEMODE_MAX_WORKERS = limit;
+		root.state.hold.open();
+		await root.close();
+	}
+});
+
 test("/tasks opens a background Program as its tool call shows in the foreground, also after the Session reopens", async () => {
 	const root = await startRoot();
 	const { details } = await root.call({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' }); return 'done'" });
