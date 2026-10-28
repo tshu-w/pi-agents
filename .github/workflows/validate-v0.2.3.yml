@@ -30,19 +30,11 @@ jobs:
           fs.writeFileSync('tsconfig.validation.json', JSON.stringify(config));
           JS
           ./node_modules/.bin/tsc -p tsconfig.validation.json
+      - name: Repeat lock contention
+        run: |
+          for attempt in 1 2 3 4 5; do
+            node --test --test-timeout=30000 tests/locks.test.mjs
+          done
       - name: Program concurrency regressions
         run: node --test --test-timeout=30000 tests/programs.test.mjs
-      - name: Diagnose lock contention
-        run: |
-          node --test --test-timeout=30000 tests/locks.test.mjs
-      - name: Full suite with lock diagnostics
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("tests/locks.test.mjs")
-          s = p.read_text().replace('const file = join(dir,', 'setInterval(() => console.error("LOCK SNAPSHOT", readdirSync(dir)), 5000).unref();\nconst file = join(dir,')
-          s = s.replace('lock.release();\\n\\t', 'if (completed === 0) console.error("ACQUIRED", process.pid);\\n\\t\\tlock.release();\\n\\t')
-          p.write_text(s)
-          PY
-          npm test
-
+      - run: npm test
