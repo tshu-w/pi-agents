@@ -67,13 +67,14 @@ test("contenders and a pruner never let two processes hold a lock at once", asyn
 	const contend = `
 		let lock;
 		try { lock = reserve(${JSON.stringify(dir)}, ${JSON.stringify(file)}, "lock-a"); }
-		catch (error) { if (error.code !== "SESSION_OCCUPIED") throw error; pause(1); continue; }
+		// Avoid keeping all six contenders in the same retry rhythm on a busy runner.
+		catch (error) { if (error.code !== "SESSION_OCCUPIED") throw error; pause(25 + Math.random() * 100); continue; }
 		appendFileSync(${JSON.stringify(log)}, "+");
 		pause(5);
 		appendFileSync(${JSON.stringify(log)}, "-");
 		lock.release();
 	`;
-	await Promise.all([...Array.from({ length: 6 }, () => run(contend)), run(`pruneLocks(${JSON.stringify(dir)});`)]);
+	await Promise.all([...Array.from({ length: 6 }, () => run(contend)), run(`pruneLocks(${JSON.stringify(dir)}); pause(5);`)]);
 	const events = readFileSync(log, "utf8");
 	assert.match(events, /^(\+-)+$/);
 	assert.ok(events.length >= 12, "each of the six contenders acquired the lock at least once");
