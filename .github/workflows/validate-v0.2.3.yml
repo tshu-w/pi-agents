@@ -1,0 +1,35 @@
+name: Validate v0.2.3 candidate
+on:
+  push:
+    branches: ["codex/validate-v0.2.3"]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: npm install -g @earendil-works/pi-coding-agent@1.4.0
+      - run: npm ci
+      - name: TypeScript check against installed Pi
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { execFileSync } from 'node:child_process';
+          const config = JSON.parse(fs.readFileSync('tsconfig.json', 'utf8'));
+          const pi = path.join(execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim(), '@earendil-works/pi-coding-agent');
+          config.compilerOptions.typeRoots = [path.join(pi, 'node_modules/@types')];
+          for (const [name, paths] of Object.entries(config.compilerOptions.paths)) {
+            config.compilerOptions.paths[name] = paths.map(p => p.replace('/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@earendil-works/pi-coding-agent', pi));
+          }
+          fs.writeFileSync('tsconfig.validation.json', JSON.stringify(config));
+          JS
+          ./node_modules/.bin/tsc -p tsconfig.validation.json
+      - name: Program concurrency regressions
+        run: node --test --test-timeout=30000 tests/programs.test.mjs
+      - run: npm test
