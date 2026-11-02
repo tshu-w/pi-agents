@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -121,6 +121,35 @@ process.stdin.setRawMode = function (mode) {
 	asking.child.write("\x1a");
 	assert.equal((await asking.exited).exitCode, 0);
 	process.kill(host.pid, "SIGTERM");
+	await until(async () => (await listHosts(paths)).length === 0, "host exit");
+});
+
+test("pd main opens the one main Agent, named main, in a directory whose AGENTS.md holds its instructions", async () => {
+	const first = terminal(["main"]);
+	const host = await until(async () => (await listHosts(paths)).find((entry) => entry.session), "host");
+	assert.equal(host.session.cwd, realpathSync(paths.main));
+	assert.equal(host.session.name, "main");
+	assert.equal(readlinkSync(join(paths.main, "AGENTS.md")), fileURLToPath(new URL("../src/main-agent.md", import.meta.url)));
+	first.child.write("\x1a");
+	assert.equal((await first.exited).exitCode, 0);
+	// Opened again, it is the same Session, even before it has a file.
+	const second = terminal(["main"]);
+	await until(() => second.text().includes("main"), "attached");
+	assert.deepEqual((await listHosts(paths)).map((entry) => entry.session.id), [host.session.id]);
+	second.child.write("hello\r");
+	await until(() => second.text().includes("answer:hello"), "answer");
+	second.child.write("\x1a");
+	assert.equal((await second.exited).exitCode, 0);
+	process.kill(host.pid, "SIGTERM");
+	await until(async () => (await listHosts(paths)).length === 0, "host exit");
+	// Once it stopped, it continues from its file.
+	const third = terminal(["main"]);
+	await until(() => third.text().includes("answer:hello"), "continued");
+	const continued = await until(async () => (await listHosts(paths)).find((entry) => entry.session), "continued host");
+	assert.deepEqual([continued.session.id, continued.session.name], [host.session.id, "main"]);
+	third.child.write("\x1a");
+	assert.equal((await third.exited).exitCode, 0);
+	process.kill(continued.pid, "SIGTERM");
 	await until(async () => (await listHosts(paths)).length === 0, "host exit");
 });
 

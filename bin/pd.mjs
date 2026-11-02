@@ -2,15 +2,15 @@
 // The `pd` command: runs Pi in a host, attaching this terminal to interactive Pi and connecting
 // non-interactive Pi to the hosted Session; `--no-session` and package commands run Pi directly.
 import { spawn } from 'node:child_process';
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, readlinkSync, symlinkSync, unlinkSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { styleText } from 'node:util';
 import { attach, hostSessionFile, settledHosts, startHost } from '../src/host/client.mjs';
 import { detachKey, detachMatcher } from '../src/host/keys.mjs';
 import { discoverRoots, findRoot } from '../src/roots/discovery.mjs';
-import { defaultSessionDir, resolvePath, sessionDir, statePaths } from '../src/roots/paths.mjs';
+import { defaultSessionDir, prepareDirectory, resolvePath, sessionDir, statePaths } from '../src/roots/paths.mjs';
 import { piPackage } from '../src/pi.mjs';
 import { markedFiles } from '../src/daemon/sessions.mjs';
 import { argGroups } from '../src/host/rpc-client.mjs';
@@ -22,13 +22,13 @@ if (!real) {
   process.stderr.write(`${error('pd needs Pi: install it so that pi is on PATH.')}\n`);
   process.exit(1);
 }
-const args = process.argv.slice(2);
+let args = process.argv.slice(2);
 const paths = statePaths();
 const dist = file => import(pathToFileURL(join(piPackage(real), 'dist', file)).href);
 // Pi's own parsing, so that `pd` reads every argument as `pi` does.
 const { parseArgs } = await dist('cli/args.js');
 const { ENV_SESSION_DIR, getAgentDir } = await dist('config.js');
-const parsed = parseArgs(args);
+let parsed = parseArgs(args);
 
 const COMMANDS = new Set(['install', 'remove', 'uninstall', 'update', 'list', 'config', 'auth', 'mcp']);
 
@@ -154,6 +154,40 @@ function headlessMode() {
   if (!interactive || parsed.print) return 'text';
 }
 
+/** Prepares the main Agent's directory, whose `AGENTS.md` links to the main Agent's instructions, and continues its Session there. */
+async function openMain() {
+  await prepareDirectory(paths.main);
+  const link = join(paths.main, 'AGENTS.md');
+  const instructions = fileURLToPath(new URL('../src/main-agent.md', import.meta.url));
+  let target;
+  try { target = readlinkSync(link); }
+  catch (failure) {
+    // A file put in place of the link stays.
+    if (failure.code !== 'ENOENT' && failure.code !== 'EINVAL') throw failure;
+    target = failure.code === 'EINVAL' ? instructions : undefined;
+  }
+  // The link follows this copy of pi-agents; another `pd main` may be making it at the same time.
+  if (target !== instructions) {
+    try { if (target !== undefined) unlinkSync(link); }
+    catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
+    try { symlinkSync(instructions, link); }
+    catch (failure) { if (failure.code !== 'EEXIST') throw failure; }
+  }
+  process.chdir(paths.main);
+  const options = args.slice(1);
+  // A running main Agent may have no file yet for `-c` to find.
+  const here = host => host.session?.cwd === process.cwd();
+  const running = (await settledHosts(paths, here)).filter(here);
+  args = running.length === 1 ? ['--session', hostSessionFile(running[0]), ...options] : ['-c', ...options];
+  parsed = parseArgs(args);
+  // A new main Agent is named, so other Agents can address it; options go first, as messages may follow `--`.
+  if (!running.length && parsed.name === undefined && !(await recentSession())) {
+    args.unshift('--name', 'main');
+    parsed = parseArgs(args);
+  }
+}
+
+if (args[0] === 'main') await openMain();
 const interactive = process.stdin.isTTY && process.stdout.isTTY;
 if (args[0] === 'attach' && interactive) await attachCommand(args[1]);
 else if (args[0] === 'agents' && interactive) {

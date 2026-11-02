@@ -16,6 +16,7 @@ Files live in `${XDG_STATE_HOME:-~/.local/state}/pi/agents/`:
 
 - `workbench.json`: seen marks and which Sessions are listed.
 - `host.log`, `daemon.log`: logs.
+- `main/`: the main Agent's working directory. Its `AGENTS.md` links to the main Agent's instructions in pi-agents.
 
 Sockets and Session locks go in `$XDG_RUNTIME_DIR/pi-agents/`. macOS has no `XDG_RUNTIME_DIR`, so there they go in `runtime/` under the state directory.
 
@@ -35,6 +36,7 @@ pi install "$(npm root -g)/@tshu-w/pi-agents"
 - `pd [pi options]` starts Pi interactively in a new host and attaches the terminal. If the Session is already running in a host, `pd` attaches to it instead, sending it the messages as follow-ups and ignoring other options.
 - `pd agents` opens the workbench.
 - `pd attach <session>` attaches to a Session, starting it first if it is not running.
+- `pd main [pi options]` opens the main Agent, which hands work to other Agents: it runs `pd -c [pi options]` in `main/`, named `main`.
 - Non-interactive starts (`-p`, `--mode json`, `--mode rpc`, piped stdin) work as in Pi, on the Session in a host, so several of them and an attached terminal can use one Session at once. Their commands act on that Session, as `abort` stops whichever turn is running. Unlike Pi:
   - Dialogs are not sent to them. A dialog waits while a terminal is attached and is cancelled otherwise.
   - Extensions see interactive mode, so what an extension writes to stdout does not reach them; `/program` prints as with `pi -p`.

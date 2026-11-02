@@ -21,7 +21,7 @@ https://github.com/user-attachments/assets/52dd1de6-bf26-45ea-8775-2b1a1a187f4f
 - **Async agents**: Agents run in parallel in the background and notify their parent when done.
 - **Dynamic workflows**: Extends Pi's [codemode](https://pi.dev/docs/latest/codemode) to recursively split long-horizon tasks into calls the model handles well, as in [RLM](https://alexzhang13.github.io/blog/2026/harness/).
 - **Inter-agent messaging**: Agents message each other, even in other Pi instances.
-- **Persistent agents**: Agents keep running after the terminal closes, with a workbench to manage them.
+- **Persistent agents**: Agents keep running after the terminal closes, with a workbench to manage them and a main Agent to talk to.
 
 ## Install
 
@@ -55,6 +55,7 @@ Ask Pi in plain words; it starts Agents and Programs when the work calls for the
 | `/tasks panel` | Hides or shows the task panel |
 | `Ctrl+Z`, `/detach` | Leaves a Session running and returns to the shell |
 | `pd agents` | Opens the workbench |
+| `pd main` | Opens the main Agent, which hands your work to other Agents |
 | `pd attach <session>` | Attaches to a Session, starting it if needed |
 
 ## Configuration
