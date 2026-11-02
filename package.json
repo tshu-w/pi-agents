@@ -16,7 +16,8 @@
   "files": [
     "bin",
     "src",
-    "docs"
+    "docs",
+    "CHANGELOG.md"
   ],
   "keywords": [
     "pi",

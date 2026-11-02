@@ -20,10 +20,14 @@ jobs:
           package-manager-cache: false
       - name: Check that the tag matches the version
         run: test "$GITHUB_REF_NAME" = "v$(node -p 'require("./package.json").version')"
+      - name: Take the release notes from the version's CHANGELOG.md section
+        run: |
+          awk -v version="${GITHUB_REF_NAME#v}" '/^## /{found = $2 == version || $2 == "[" version "]"; next} found' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"
       - run: npm install -g @earendil-works/pi-coding-agent
       - run: npm ci
       - run: npm test
       - run: npm publish --access public
-      - run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+      - run: gh release create "$GITHUB_REF_NAME" --verify-tag --notes-file "$RUNNER_TEMP/notes.md"
         env:
           GH_TOKEN: ${{ github.token }}
