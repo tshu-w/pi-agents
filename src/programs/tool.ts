@@ -232,9 +232,9 @@ export function registerProgramTools(
 	});
 
 	/** A run as Pi shows a `run` call: the script, then its calls and output. */
-	const renderRun = (call: ProgramCall, result: { content: unknown[]; details?: unknown }, isPartial: boolean, isError: boolean, expanded: boolean, outputPad: number, theme: Theme) => {
+	const renderRun = (call: ProgramCall, result: { content: unknown[]; details?: unknown }, isPartial: boolean, isError: boolean, expanded: boolean, outputPad: number, theme: Theme, state = {}) => {
 		const component = new Box(outputPad, 1, (text) => theme.bg(isPartial ? "toolPendingBg" : isError ? "toolErrorBg" : "toolSuccessBg", text));
-		const context = { args: call, state: {}, executionStarted: true, expanded, isError, showImages: false, isPartial } as never;
+		const context = { args: call, state, executionStarted: true, expanded, isError, showImages: false, isPartial } as never;
 		component.addChild(renderers.renderCall!(call, theme, context));
 		component.addChild(renderers.renderResult!(result as never, { expanded, isPartial }, theme, context));
 		return component;
@@ -263,7 +263,9 @@ export function registerProgramTools(
 			current.ui.setWidget(widget, (ui, theme) => {
 				tui = ui;
 				const outputPad = pi.getSettings().outputPad === 0 ? 0 : 1;
-				return { render: (width: number) => renderRun(call, partial, !ended, partial.isError === true, current.ui.getToolsExpanded(), outputPad, theme).render(width), invalidate() {} };
+				// The widget redraws on each update, so it keeps its state as a tool row does.
+				const state = {};
+				return { render: (width: number) => renderRun(call, partial, !ended, partial.isError === true, current.ui.getToolsExpanded(), outputPad, theme, state).render(width), invalidate() {} };
 			});
 		}
 		let run: Awaited<ReturnType<typeof runProgram>>;

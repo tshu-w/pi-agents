@@ -17,6 +17,11 @@ type Changes = ReturnType<NonNullable<ToolDefinition["prepareLoadout"]>>;
 type Renderers = Pick<ToolDefinition, "renderCall" | "renderResult">;
 
 const CODE_PREVIEW_LINES = 10;
+// The colors Pi highlights JavaScript with; renderers get the same theme object after a theme change, so these tell it apart.
+const SYNTAX_COLORS = ["text", "muted", "syntaxComment", "syntaxKeyword", "syntaxFunction", "syntaxVariable", "syntaxString", "syntaxNumber", "syntaxType", "syntaxOperator", "syntaxPunctuation"] as const;
+
+/** A call row's state: its duration, and its script's highlighting, kept across redraws. */
+type CallState = DurationState & { script?: { code: string; colors: string; lines: string[] } };
 
 export const PROGRAM_ONLY_FLAG = "program-only";
 // Owned Agents run in their owner's process without its CLI flags, so the flag holds for the process.
@@ -82,10 +87,14 @@ export function programRenderers(piCodemode: PiCodemode): Renderers {
 	return {
 		renderCall(args, theme, context) {
 			const { code, ...rest } = (args ?? {}) as Record<string, unknown>;
-			startDuration(context.state as DurationState, rest.action === "wait", context.executionStarted);
+			const state = context.state as CallState;
+			startDuration(state, rest.action === "wait", context.executionStarted);
 			let text = formatToolCall(PROGRAM_TOOL_NAME, rest, theme);
 			if (typeof code === "string" && code) {
-				const lines = highlightCode(code.replace(/\r/g, "").replace(/\t/g, "   ").trimEnd(), "javascript");
+				const source = code.replace(/\r/g, "").replace(/\t/g, "   ").trimEnd();
+				const colors = SYNTAX_COLORS.map((color) => theme.fg(color, "")).join("");
+				if (state.script?.code !== source || state.script.colors !== colors) state.script = { code: source, colors, lines: highlightCode(source, "javascript") };
+				const { lines } = state.script;
 				const shown = context.expanded ? lines : lines.slice(0, CODE_PREVIEW_LINES);
 				text += `\n${shown.join("\n")}`;
 				if (shown.length < lines.length) text += `\n${moreLines(lines.length - shown.length, theme)}`;
