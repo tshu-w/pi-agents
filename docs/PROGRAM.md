@@ -117,7 +117,7 @@ promptGuidelines:
 
 - Use `program(action='run', code=...)` to call tools or Agents several times without a model turn between the calls, for example to read many files, filter large tool output, fan out Agents, or loop until a condition holds.
 - Use `Promise.allSettled` for independent calls. Return only what the caller needs; use `text()` for progress worth reading.
-- Use `background=true` for long Programs, and `program(action='wait', ...)` when the next step depends on their results.
+- Use `background=true` for long Programs, and `program(action='wait', ...)` when your next step or answer depends on their results.
 
 parameters:
 

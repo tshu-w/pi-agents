@@ -96,7 +96,7 @@ promptGuidelines:
 
 - Use `agent(action='spawn', name=..., message=...)` for concrete, bounded work with a clear expected result. Keep the first message self-contained; use `context='fork'` only when the Agent needs the caller's conversation.
 - For independent work, start the Agents before waiting and partition tasks into non-overlapping responsibilities.
-- Use `agent(action='wait', ...)` when the next step depends on Agent results. Prefer one longer wait over repeated short polling.
+- Use `agent(action='wait', ...)` when your next step or answer depends on Agent results. Prefer one longer wait over repeated short polling.
 
 parameters:
 
