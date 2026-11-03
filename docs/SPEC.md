@@ -76,7 +76,7 @@ An input sent to an owned Agent ends as `completed` when its turn answers it, `f
 
 `wait` returns unread results in order and marks them read. On timeout, it returns the results so far and names the Agents still pending. A steer input to the waiting Agent, from any sender, ends `wait` the same way; a write does not. It can also return read results again.
 
-When an input ends and its owner is not waiting for that Agent, the owner receives a notification, unless the owner aborted it. The notification is an input delivered as `steer` (a write after the owner's turn is stopped, §2.2), and it names the Agent and how the input ended. It does not include the result; the owner reads the result with `wait`.
+When an input ends and its owner is not waiting for that Agent, the owner receives a notification, unless the owner aborted it. The notification is an input delivered as `steer` (a write after the owner's turn is stopped, §2.2), and it carries the result, which then counts as read.
 
 A recipient sees each message with its sender's name and ID.
 
@@ -86,7 +86,7 @@ A recipient sees each message with its sender's name and ID.
 
 description:
 
-Create, message, and coordinate Agents. `spawn` creates an owned Agent and sends its first input; `send` sends an input or a write to a visible Agent; `wait` waits for owned Agents and returns unread results; `list` finds visible Agents; `abort` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification naming the Agent and outcome; `wait` returns the result. Owned Agents under the same root share `${maxConcurrent}` execution slots and a limit of `${maxOutstanding}` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.
+Create, message, and coordinate Agents. `spawn` creates an owned Agent and sends its first input; `send` sends an input or a write to a visible Agent; `wait` waits for owned Agents and returns unread results; `list` finds visible Agents; `abort` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification with the result. Owned Agents under the same root share `${maxConcurrent}` execution slots and a limit of `${maxOutstanding}` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.
 
 promptSnippet:
 
@@ -257,7 +257,7 @@ Agent <name> (<id>) did not stop within the timeout and may still be running.
 
 truncation:
 
-Text beyond Pi's output limits is truncated with Pi's native notice, and the full text is saved to a file whose path appears in the notice. `wait` adds results in order; the result that crosses the limit is truncated but keeps its closing tag, and later results are omitted. A truncated result counts as read. Omitted results stay unread, and the text ends with:
+Text beyond Pi's output limits is truncated with Pi's native notice, and the full text is saved to a file whose path appears in the notice. A notification's result is truncated the same way and keeps its closing tag. `wait` adds results in order; the result that crosses the limit is truncated but keeps its closing tag, and later results are omitted. A truncated result counts as read. Omitted results stay unread, and the text ends with:
 
 ```text
 [Results omitted: <name> (<id>), ... Use wait with fewer targets.]
@@ -270,7 +270,9 @@ messages:
 A notification to the owner:
 
 ```text
-Agent <name> (<id>) <outcome>.
+<agent-result name="<name>" id="<id>" status="<outcome>">
+<answer or error>
+</agent-result>
 ```
 
 A recipient sees each message in an `agent-message` element naming the sender. An input from a sender other than the owner also carries a note asking for a reply:
@@ -326,7 +328,7 @@ A message from another Agent shows its sender after the label:
 <body>
 ```
 
-The user's input from the task viewer shows as a user message. `wait` shows each result with the first lines of its body; a Program's body starts at its output:
+The user's input from the task viewer shows as a user message. `wait` and notifications show each result with the first lines of its body; a Program's body starts at its output:
 
 ```text
 <name> (<id>)  <state>

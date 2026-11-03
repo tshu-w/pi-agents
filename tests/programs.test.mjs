@@ -346,7 +346,7 @@ test("an aborted Agent is not woken when its own Agent ends", async () => {
 	root.state.hold.open();
 	await until(async () => (await states()).b === "idle", "b ends");
 	await new Promise((resolve) => setTimeout(resolve, 500));
-	assert.deepEqual(root.state.inputs.filter((input) => /^Agent b \(\S+\) completed\.$/.test(input)), []);
+	assert.deepEqual(root.state.inputs.filter((input) => input.startsWith('<agent-result name="b" ')), []);
 	assert.equal((await states()).a, "idle");
 	await root.close();
 });

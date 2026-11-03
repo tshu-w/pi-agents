@@ -155,8 +155,9 @@ test("collapsed, wait results and Agent messages show from their details, whatev
 		const renderer = root.session.extensionRunner.getMessageRenderer("pi-agents");
 		assert.equal(show(renderer(message, { expanded: false, outputPad: 1 }, theme)), '[pi-agents] from review "UI" (f00dcafe)\n\n hello\n </agent-message>');
 		assert.equal(renderer(message, { expanded: true, outputPad: 1 }, theme), undefined);
-		// A notification, without a sender, shows as Pi shows it.
-		assert.equal(renderer({ ...message, content: "Agent x completed.", details: { delivery: "steer" } }, { expanded: false, outputPad: 1 }, theme), undefined);
+		// A notification, without a sender, shows its result as `wait` does.
+		const notification = { ...message, content: '<agent-result name="x" id="x1" status="completed">\nanswer\n</agent-result>', details: { delivery: "steer" } };
+		assert.equal(show(renderer(notification, { expanded: false, outputPad: 1 }, theme)), "[pi-agents]\n\n x (x1)  completed\n   answer");
 		await root.session.waitForIdle();
 	} finally {
 		await root.close();
@@ -166,8 +167,9 @@ test("collapsed, wait results and Agent messages show from their details, whatev
 test("the owner is notified when an input ends while it is not waiting", async () => {
 	const root = await startRoot();
 	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "hello" }));
-	await until(() => root.state.rootMessages.includes(`Agent worker (${id}) completed.`), "notification");
-	assert.equal(await root.call({ action: "wait", target: id, timeout: 10 }), "answer:hello|seen:hello");
+	await until(() => root.state.rootMessages.includes(`<agent-result name="worker" id="${id}" status="completed">\nanswer:hello|seen:hello\n</agent-result>`), "notification");
+	// The notification carried the result, so `wait` does not return it again.
+	assert.equal(await root.call({ action: "wait", target: id, timeout: 10 }), "No results.");
 	await root.close();
 });
 

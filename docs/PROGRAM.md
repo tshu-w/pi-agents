@@ -27,7 +27,7 @@ A Program is `running` until it ends in one of three ways:
 - `list` lists the caller's background Programs.
 - `stop` stops a running Program.
 
-When a background Program ends and its caller is not waiting for it, the caller gets a notification, as in SPEC §5. A steer input ends `wait` early, as in SPEC §5.
+When a background Program ends and its caller is not waiting for it, the caller gets a notification delivered as in SPEC §5, naming the Program and how it ended; `wait` returns the result. A steer input ends `wait` early, as in SPEC §5.
 
 ## 3. Program API
 

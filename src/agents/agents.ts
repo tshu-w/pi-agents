@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { boundBlocks } from "../output.ts";
 import {
 	customMessage,
 	deliver,
@@ -148,6 +149,11 @@ export function steerQueued(agent: AgentSession["agent"] | undefined): boolean {
 export const STEER_POLL_MS = 250;
 
 export const WAIT_INTERRUPTED = "Stopped waiting for a new message. Wait again to keep waiting.";
+export const RESULT_TAG = "agent-result";
+
+export function resultBlock({ agent, input, history }: WaitResult, ids: string[]): string {
+	return `<${RESULT_TAG} name="${agent.name}" id="${shortId(agent.id, ids)}" status="${input.state}"${history ? ' history="true"' : ""}>\n${input.result ?? ""}\n</${RESULT_TAG}>`;
+}
 
 export interface Deferred {
 	promise: Promise<void>;
@@ -758,20 +764,23 @@ export class Agents {
 			try {
 				if (this.closing || record.notified || agent.waiters > 0) return;
 				record.notified = true;
+				// A delivered notification carries the result, so `wait` does not return it again.
+				if (this.notify(boundBlocks([resultBlock({ agent: agent.record, input: record, history: false }, this.ids())], RESULT_TAG, "pi-agents-notification").text)) record.read = true;
 				this.persist(agent);
-				this.notify(`Agent ${label(agent.record, this.ids())} ${record.state}.`);
 			} finally {
 				release();
 			}
 		});
 	}
 
-	/** Delivers a notification to this Agent as a steer. */
-	notify(text: string): void {
+	/** Delivers a notification to this Agent as a steer; returns whether it was delivered. */
+	notify(text: string): boolean {
 		try {
 			deliver(undefined, { id: this.self.id, name: this.self.name(), ownerId: this.self.ownerId, cwd: "", state: "running" }, "steer", text);
+			return true;
 		} catch (error) {
 			console.warn(`[pi-agents] notification failed: ${error instanceof Error ? error.message : String(error)}`);
+			return false;
 		}
 	}
 

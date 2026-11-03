@@ -7,6 +7,8 @@ import { renderResultList, renderTextResult, renderToolCall, startDuration, type
 import { agentSession } from "../roots/rpc.ts";
 import type { RootRuntime } from "../roots/runtime.ts";
 import {
+	resultBlock,
+	RESULT_TAG,
 	steerQueued,
 	THINKING_LEVELS,
 	WAIT_INTERRUPTED,
@@ -19,17 +21,12 @@ import {
 	label,
 	nodes,
 	rememberRoots,
-	shortId,
 	resolveIn,
 	treeEntries,
 	type AgentNode,
 	type Entry,
 } from "./registry.ts";
 import { listLine, searchEntries } from "./search.ts";
-
-function resultBlock({ agent, input, history }: WaitResult, ids: string[]): string {
-	return `<agent-result name="${agent.name}" id="${shortId(agent.id, ids)}" status="${input.state}"${history ? ' history="true"' : ""}>\n${input.result ?? ""}\n</agent-result>`;
-}
 
 function resultDetails({ agent, input, history }: WaitResult, result?: string) {
 	return { id: agent.id, name: agent.name, state: input.state, history, ...(result === undefined ? {} : { result }) };
@@ -60,7 +57,7 @@ function renderWait(outcome: WaitOutcome, ids: string[]): { text: string; read: 
 		return { text: bounded.text, read: results, details: { results: [resultDetails(only, bounded.kept)], pending: [], ...bounded.details } };
 	}
 	const blocks = results.map((result) => resultBlock(result, ids));
-	const bounded = boundBlocks(blocks, "agent-result", "pi-agents-wait");
+	const bounded = boundBlocks(blocks, RESULT_TAG, "pi-agents-wait");
 	let offset = 0;
 	const details = results.map((result, index) => {
 		const block = blocks[index]!;
@@ -114,7 +111,7 @@ export function registerAgentTool(
 				return renderResultList(results.flatMap((entry) => entry.result === undefined ? [] : [{ line: `${label(entry, ids)}  ${entry.state}`, body: entry.result }]), notes, truncated, theme);
 			}
 			: undefined),
-		description: `Create, message, and coordinate Agents. \`spawn\` creates an owned Agent and sends its first input; \`send\` sends an input or a write to a visible Agent; \`wait\` waits for owned Agents and returns unread results; \`list\` finds visible Agents; \`abort\` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification naming the Agent and outcome; \`wait\` returns the result. Owned Agents under the same root share \`${maxConcurrent}\` execution slots and a limit of \`${maxOutstanding}\` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.`,
+		description: `Create, message, and coordinate Agents. \`spawn\` creates an owned Agent and sends its first input; \`send\` sends an input or a write to a visible Agent; \`wait\` waits for owned Agents and returns unread results; \`list\` finds visible Agents; \`abort\` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification with the result. Owned Agents under the same root share \`${maxConcurrent}\` execution slots and a limit of \`${maxOutstanding}\` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.`,
 		promptSnippet: "Create, message, and coordinate Agents",
 		promptGuidelines: [
 			"Use `agent(action='spawn', name=..., message=...)` for concrete, bounded work with a clear expected result. Keep the first message self-contained; use `context='fork'` only when the Agent needs the caller's conversation.",
