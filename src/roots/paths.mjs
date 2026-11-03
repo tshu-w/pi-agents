@@ -26,7 +26,7 @@ export function statePaths(env = process.env) {
     workbench: join(state, 'workbench.json'),
     hostLog: join(state, 'host.log'),
     daemonLog: join(state, 'daemon.log'),
-    main: join(state, 'main'),
+    mainSession: join(state, 'main.json'),
     host(pid) { return join(runtime, `h-${pid}.sock`); },
     locks: join(runtime, 'locks'),
     daemon: join(runtime, 'daemon.sock'),

@@ -41,6 +41,7 @@ import { createReporter } from "./roots/report.ts";
 import { installQueuePatches } from "./roots/queue.ts";
 import { agentSession, installRpcPatches } from "./roots/rpc.ts";
 import { createRootRuntime } from "./roots/runtime.ts";
+import { registerMainAgent } from "./main-agent.ts";
 import { renderAgentMessage } from "./ui/message.ts";
 import { createPanel } from "./ui/panel.ts";
 import { showQueue } from "./ui/queue.ts";
@@ -134,6 +135,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	};
 
 	pi.registerFlag(PROGRAM_ONLY_FLAG, { type: "boolean", description: "Present tools as with codemode.mode \"only\": scripts reach them through program" });
+	registerMainAgent(pi);
 
 	let warnedBothScriptTools = false;
 	pi.on("session_start", (_event, current) => {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -39,7 +40,7 @@ Object.assign(process.env, {
 });
 const { until, PI_PACKAGE } = await import("./pi.mjs");
 const { statePaths } = await import("../src/roots/paths.mjs");
-const { listHosts } = await import("../src/host/client.mjs");
+const { hostSessionFile, listHosts } = await import("../src/host/client.mjs");
 const { request } = await import("../src/roots/transport.mjs");
 const paths = statePaths();
 const client = fileURLToPath(new URL("../bin/pd.mjs", import.meta.url));
@@ -124,12 +125,12 @@ process.stdin.setRawMode = function (mode) {
 	await until(async () => (await listHosts(paths)).length === 0, "host exit");
 });
 
-test("pd main opens the one main Agent, named main, in a directory whose AGENTS.md holds its instructions", async () => {
+test("pd main opens the one main Agent, named main and started in ~, from any directory", async () => {
 	const first = terminal(["main"]);
 	const host = await until(async () => (await listHosts(paths)).find((entry) => entry.session), "host");
-	assert.equal(host.session.cwd, realpathSync(paths.main));
+	assert.equal(host.session.cwd, realpathSync(homedir()));
 	assert.equal(host.session.name, "main");
-	assert.equal(readlinkSync(join(paths.main, "AGENTS.md")), fileURLToPath(new URL("../src/main-agent.md", import.meta.url)));
+	assert.equal(JSON.parse(readFileSync(paths.mainSession, "utf8")).sessionFile, hostSessionFile(host));
 	first.child.write("\x1a");
 	assert.equal((await first.exited).exitCode, 0);
 	// Opened again, it is the same Session, even before it has a file.
@@ -138,6 +139,8 @@ test("pd main opens the one main Agent, named main, in a directory whose AGENTS.
 	assert.deepEqual((await listHosts(paths)).map((entry) => entry.session.id), [host.session.id]);
 	second.child.write("hello\r");
 	await until(() => second.text().includes("answer:hello"), "answer");
+	// Its prompt carries the main Agent's instructions.
+	assert.match(readFileSync(hostSessionFile(host), "utf8"), /"main-agent":"<main-agent>\\nYou are the user's main Agent\./);
 	second.child.write("\x1a");
 	assert.equal((await second.exited).exitCode, 0);
 	process.kill(host.pid, "SIGTERM");

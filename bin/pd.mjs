@@ -2,15 +2,16 @@
 // The `pd` command: runs Pi in a host, attaching this terminal to interactive Pi and connecting
 // non-interactive Pi to the hosted Session; `--no-session` and package commands run Pi directly.
 import { spawn } from 'node:child_process';
-import { accessSync, constants, readlinkSync, symlinkSync, unlinkSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { styleText } from 'node:util';
 import { attach, hostSessionFile, settledHosts, startHost } from '../src/host/client.mjs';
 import { detachKey, detachMatcher } from '../src/host/keys.mjs';
 import { discoverRoots, findRoot } from '../src/roots/discovery.mjs';
-import { defaultSessionDir, prepareDirectory, resolvePath, sessionDir, statePaths } from '../src/roots/paths.mjs';
+import { defaultSessionDir, resolvePath, sessionDir, statePaths } from '../src/roots/paths.mjs';
 import { piPackage } from '../src/pi.mjs';
 import { markedFiles } from '../src/daemon/sessions.mjs';
 import { argGroups } from '../src/host/rpc-client.mjs';
@@ -154,37 +155,22 @@ function headlessMode() {
   if (!interactive || parsed.print) return 'text';
 }
 
-/** Prepares the main Agent's directory, whose `AGENTS.md` links to the main Agent's instructions, and continues its Session there. */
+/** Opens the main Agent that `main.json` names, from any directory, or starts one in `~` if there is none. */
 async function openMain() {
-  await prepareDirectory(paths.main);
-  const link = join(paths.main, 'AGENTS.md');
-  const instructions = fileURLToPath(new URL('../src/main-agent.md', import.meta.url));
-  let target;
-  try { target = readlinkSync(link); }
-  catch (failure) {
-    // A file put in place of the link stays.
-    if (failure.code !== 'ENOENT' && failure.code !== 'EINVAL') throw failure;
-    target = failure.code === 'EINVAL' ? instructions : undefined;
-  }
-  // The link follows this copy of pi-agents; another `pd main` may be making it at the same time.
-  if (target !== instructions) {
-    try { if (target !== undefined) unlinkSync(link); }
-    catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
-    try { symlinkSync(instructions, link); }
-    catch (failure) { if (failure.code !== 'EEXIST') throw failure; }
-  }
-  process.chdir(paths.main);
   const options = args.slice(1);
-  // A running main Agent may have no file yet for `-c` to find.
-  const here = host => host.session?.cwd === process.cwd();
-  const running = (await settledHosts(paths, here)).filter(here);
-  args = running.length === 1 ? ['--session', hostSessionFile(running[0]), ...options] : ['-c', ...options];
-  parsed = parseArgs(args);
-  // A new main Agent is named, so other Agents can address it; options go first, as messages may follow `--`.
-  if (!running.length && parsed.name === undefined && !(await recentSession())) {
-    args.unshift('--name', 'main');
-    parsed = parseArgs(args);
+  let file;
+  try { file = JSON.parse(readFileSync(paths.mainSession, 'utf8')).sessionFile; }
+  catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
+  // A main Agent without messages has no file yet, but its host may be running.
+  const holds = host => hostSessionFile(host) === file;
+  if (file && (existsSync(file) || (await settledHosts(paths, holds)).some(holds))) args = ['--session', file, ...options];
+  else {
+    process.chdir(homedir());
+    // These go first, as messages may follow `--`, and `--main` before a message would take it as its value.
+    // A `--name` among the options comes later and wins.
+    args = ['--main', '--name', 'main', ...options];
   }
+  parsed = parseArgs(args);
 }
 
 if (args[0] === 'main') await openMain();
