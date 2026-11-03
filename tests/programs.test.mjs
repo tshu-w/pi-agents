@@ -125,8 +125,8 @@ test("/program runs a saved script before the Session has a reply, and adds the 
 test("a background Program runs on after run returns, notifies its caller, and wait returns its result once", async () => {
 	const root = await startRoot();
 	const id = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' }); return 'done'" }));
-	await until(() => root.messages.includes(`Program ${id} completed.`), "notification");
-	assert.match(await root.text({ action: "wait", timeout: 10 }), /done$/);
+	await until(() => root.messages.some((message) => message.startsWith(`<program-result id="${id}" status="completed">`) && message.includes("done")), "notification");
+	// The notification carried the result, so `wait` does not return it again.
 	assert.equal(await root.text({ action: "wait", timeout: 10 }), "No results.");
 	assert.match(await root.text({ action: "list" }), new RegExp(`^${id}  completed$`));
 	await root.close();
@@ -156,7 +156,7 @@ test("a Program starts while two others wait on Agents, and the codemode worker 
 test("/tasks opens a background Program as its tool call shows in the foreground, also after the Session reopens", async () => {
 	const root = await startRoot();
 	const { details } = await root.call({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' }); return 'done'" });
-	await until(() => root.messages.some((message) => /^Program \S+ completed\.$/.test(message)), "notification");
+	await until(() => root.messages.some((message) => message.startsWith("<program-result ")), "notification");
 	pi.initTheme();
 	const { theme } = await import(join(PI_PACKAGE, "dist/modes/interactive/theme/theme.js"));
 	const noop = () => {};
@@ -213,7 +213,8 @@ test("stop and timeout stop background Programs", async () => {
 	const timedOut = idOf(await root.text({ action: "run", background: true, code: loop, timeout: 0.2 }));
 	const spinning = idOf(await root.text({ action: "run", background: true, code: "while (true) {}" }));
 	// Only the Program that timed out notifies its caller.
-	await until(() => root.messages.includes(`Program ${timedOut} stopped.`), "timeout notification");
+	const notified = (message) => message.startsWith("<program-result ");
+	await until(() => root.messages.some((message) => message.startsWith(`<program-result id="${timedOut}" status="stopped">`)), "timeout notification");
 	await root.text({ action: "stop", target: stopped });
 	await root.text({ action: "stop", target: spinning });
 	await root.session.waitForIdle();
@@ -225,7 +226,7 @@ test("stop and timeout stop background Programs", async () => {
 	const render = (expanded) => stripVTControlCharacters(root.session.getToolDefinition("program").renderResult(waited, { expanded, isPartial: false }, { fg: (_color, text) => text, bold: (text) => text }, { args: { action: "wait" }, state: {}, invalidate() {} }).render(10000).map((line) => line.trimEnd()).join("\n").trim());
 	assert.match(render(false), new RegExp(`^Program ${timedOut}  stopped  [\\d.]+s\n  Script error:\n`, "m"));
 	assert.equal(render(true), results);
-	assert.deepEqual(root.messages.filter((message) => /^Program \S+ stopped\.$/.test(message)), [`Program ${timedOut} stopped.`]);
+	assert.deepEqual(root.messages.filter(notified).map((message) => message.split('"')[1]), [timedOut]);
 	await root.close();
 });
 

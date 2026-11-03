@@ -27,7 +27,7 @@ A Program is `running` until it ends in one of three ways:
 - `list` lists the caller's background Programs.
 - `stop` stops a running Program.
 
-When a background Program ends and its caller is not waiting for it, the caller gets a notification delivered as in SPEC §5, naming the Program and how it ended; `wait` returns the result. A steer input ends `wait` early, as in SPEC §5.
+When a background Program ends and its caller is not waiting for it, the caller gets a notification with the result, as in SPEC §5, and the result then counts as returned. A steer input ends `wait` early, as in SPEC §5.
 
 ## 3. Program API
 
@@ -61,7 +61,7 @@ An owned caller gives up its slot while a foreground Program runs or while it wa
 
 description:
 
-Run JavaScript that composes tool calls and Agents; only its output and return value reach the caller. `run` runs a Program in the foreground, or in the background with `background`; `wait` waits for background Programs and returns their results; `list` lists background Programs; `stop` stops a running Program. When a background Program ends while its caller is not waiting for it, the caller receives a notification; `wait` returns the result.
+Run JavaScript that composes tool calls and Agents; only its output and return value reach the caller. `run` runs a Program in the foreground, or in the background with `background`; `wait` waits for background Programs and returns their results; `list` lists background Programs; `stop` stops a running Program. When a background Program ends while its caller is not waiting for it, the caller receives a notification with the result.
 
 Program code is the body of an async function. It calls the caller's tools through `tools.*`, which excludes `program`, and creates Agents through `agent()`. These Agents belong to the Program, are isolated from other Agents, and go offline when it ends.
 
@@ -210,7 +210,7 @@ No Program matches "<target>". Use list to find Programs.
 
 truncation:
 
-`wait` text beyond Pi's output limits is truncated as in SPEC §6. `wait` adds results in order; the result that crosses the limit is truncated but keeps its closing tag, and later results are omitted. A truncated result counts as returned. Omitted results stay unreturned, and the text ends with:
+`wait` text beyond Pi's output limits is truncated as in SPEC §6, and so is a notification's result, which keeps its closing tag. `wait` adds results in order; the result that crosses the limit is truncated but keeps its closing tag, and later results are omitted. A truncated result counts as returned. Omitted results stay unreturned, and the text ends with:
 
 ```text
 [Results omitted: <id>, ... Use wait with fewer targets.]
@@ -221,7 +221,9 @@ messages:
 A notification to the caller:
 
 ```text
-Program <id> <outcome>.
+<program-result id="<id>" status="<outcome>">
+<result>
+</program-result>
 ```
 
 ## 7. Human interface

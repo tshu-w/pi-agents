@@ -77,7 +77,8 @@ export class Programs {
 		private rootId: string,
 		private hooks: {
 			appendEntry(customType: string, data: unknown): void;
-			notify(text: string): void;
+			/** Returns whether the notification was delivered. */
+			notify(text: string): boolean;
 			/** Called when a Program starts, ends, or has its result returned. */
 			changed?(): void;
 		},
@@ -292,8 +293,10 @@ export class Programs {
 	private notify(record: ProgramRecord): void {
 		if (this.closing || record.notified) return;
 		record.notified = true;
+		// A delivered notification carries the result, so `wait` does not return it again.
+		if (this.hooks.notify(boundBlocks([resultBlock(record, this.ids())], PROGRAM_RESULT_TAG, "pi-agents-program-notification").text)) record.returned = true;
 		this.persist(record);
-		this.hooks.notify(`Program ${this.label(record)} ${record.state}.`);
+		this.hooks.changed?.();
 	}
 
 	private persist(record: ProgramRecord): void {
@@ -323,12 +326,14 @@ export function addProgramFiles(
 	}
 }
 
+export const PROGRAM_RESULT_TAG = "program-result";
+
 function resultBlock(record: ProgramRecord, ids: string[]): string {
-	return `<program-result id="${shortId(record.id, ids)}" status="${record.state}">\n${textOf(record.content)}\n</program-result>`;
+	return `<${PROGRAM_RESULT_TAG} id="${shortId(record.id, ids)}" status="${record.state}">\n${textOf(record.content)}\n</${PROGRAM_RESULT_TAG}>`;
 }
 
 // The header codemode puts before a Program's output; a Program that ended before its run did has no wall time.
-const SCRIPT_HEADER = /^Script (?:completed|failed)\n(?:Wall time ([\d.]+) seconds\n)?Output:\n/;
+export const SCRIPT_HEADER = /^Script (?:completed|failed)\n(?:Wall time ([\d.]+) seconds\n)?Output:\n/;
 
 export interface ProgramResultDetails {
 	id: string;
@@ -371,7 +376,7 @@ export function renderProgramWait({ results, running, interrupted }: ProgramWait
 		return { content: [{ type: "text", text: bounded.text }, ...images(results)], details: { results: [resultDetails(only)], ...bounded.details }, returned: results };
 	}
 	const blocks = results.map((record) => resultBlock(record, ids));
-	const bounded = boundBlocks(blocks, "program-result", "pi-agents-program-wait");
+	const bounded = boundBlocks(blocks, PROGRAM_RESULT_TAG, "pi-agents-program-wait");
 	let offset = 0;
 	const details = results.map((record, index) => {
 		const block = blocks[index]!;
