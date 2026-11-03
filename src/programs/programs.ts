@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { deferred, settlesBy, STEER_POLL_MS, WAIT_INTERRUPTED, waitForChange, type Deferred } from "../agents/agents.ts";
-import { shortId, trackTreeWork } from "../agents/registry.ts";
-import { boundBlocks, boundText, type Truncation } from "../output.ts";
+import { deferred, hold, release, settlesBy, STEER_POLL_MS, waitForChange, type Deferred, type Held, type WaitEnd } from "../agents/agents.ts";
+import { shortId, trackTreeWork, type Notice } from "../agents/registry.ts";
+import { boundText } from "../output.ts";
 import { CLEANUP_TIMEOUT_MS, PROGRAM_TOOL_NAME, type ProgramFiles, type ProgramOutcome, type ProgramRunResult } from "./execute.ts";
 
 const PROGRAM_ENTRY = "pi-agents-program";
@@ -23,9 +23,6 @@ export interface ProgramRecord {
 	files?: ProgramFiles;
 	/** The tool calls its result lists, which the task viewer shows after a restart. */
 	calls?: unknown[];
-	/** Whether `wait` has returned the result. */
-	returned: boolean;
-	notified: boolean;
 }
 
 /** What the task viewer shows of a Program, as its tool call shows in the foreground. */
@@ -46,14 +43,13 @@ interface Running {
 	release?: () => void;
 	/** Whether some of its work did not stop. */
 	abandoned?: boolean;
-	waiters: number;
+	/** Stopped by the caller, which is not notified. */
+	silent?: boolean;
 }
 
 export interface ProgramWaitOutcome {
-	results: ProgramRecord[];
+	end: WaitEnd;
 	running: ProgramRecord[];
-	/** A steer ended the wait. */
-	interrupted?: boolean;
 }
 
 function ended(record: ProgramRecord): boolean {
@@ -72,14 +68,15 @@ export class Programs {
 	private change: Deferred = deferred();
 	private closing = false;
 	private viewers = new Set<() => void>();
+	private held: Held[] = [];
 
 	constructor(
 		private rootId: string,
 		private hooks: {
 			appendEntry(customType: string, data: unknown): void;
-			/** Returns whether the notification was delivered. */
-			notify(text: string): boolean;
-			/** Called when a Program starts, ends, or has its result returned. */
+			/** Delivers a notification with Programs' results and their images. */
+			notify(text: string, notice: Notice): void;
+			/** Called when a Program starts or ends. */
 			changed?(): void;
 		},
 	) {}
@@ -100,7 +97,7 @@ export class Programs {
 			}
 			if (entry.type !== "custom" || entry.customType !== PROGRAM_ENTRY) continue;
 			const record = entry.data as ProgramRecord;
-			this.programs.set(record.id, { record, waiters: 0 });
+			this.programs.set(record.id, { record });
 		}
 		for (const program of this.programs.values()) {
 			const callId = callIds.get(program.record.id);
@@ -112,16 +109,15 @@ export class Programs {
 			record.state = "stopped";
 			record.content = [{ type: "text", text: "Script failed\nOutput:\nScript error:\nScript aborted: the caller went offline" }];
 			record.isError = true;
-			record.notified = true;
 			this.persist(record);
 		}
 	}
 
 	/** Starts a background Program, which `run` executes with its ID and reports its partial results to `update`, and returns its record. */
 	start(code: string, run: (id: string, signal: AbortSignal, abort: () => void, update: (result: unknown) => void) => Promise<ProgramRunResult>): ProgramRecord {
-		const record: ProgramRecord = { id: randomUUID(), state: "running", startedAt: Date.now(), returned: false, notified: false };
+		const record: ProgramRecord = { id: randomUUID(), state: "running", startedAt: Date.now() };
 		const controller = new AbortController();
-		const program: Running = { record, code, controller, waiters: 0 };
+		const program: Running = { record, code, controller };
 		const update = (result: unknown) => {
 			if (ended(record)) return;
 			program.result = result as Running["result"];
@@ -190,7 +186,7 @@ export class Programs {
 	async stop(program: Running, reason = "Program stopped"): Promise<boolean> {
 		if (ended(program.record)) return false;
 		// As with `abort`, the caller that stops a Program is not notified.
-		program.record.notified = true;
+		program.silent = true;
 		program.controller?.abort(new Error(reason));
 		if (!await settlesBy(program.done!, Date.now() + CLEANUP_TIMEOUT_MS)) {
 			program.abandoned = true;
@@ -201,20 +197,23 @@ export class Programs {
 		return true;
 	}
 
-	/** The given Programs, or running Programs and ended ones whose result has not been returned. */
+	/** The given Programs, or the running ones. */
 	select(ids: string[] | undefined): Running[] {
-		return [...new Set(ids?.map((id) => this.target(id)) ?? [...this.programs.values()].filter(({ record }) => !ended(record) || !record.returned))];
+		return [...new Set(ids?.map((id) => this.target(id)) ?? this.programs.values())];
 	}
 
 	running(programs: Running[]): boolean {
 		return programs.some(({ record }) => !ended(record));
 	}
 
-	async wait(unique: Running[], timeoutSeconds: number, signal?: AbortSignal, steered?: () => boolean): Promise<ProgramWaitOutcome> {
-		for (const program of unique) program.waiters += 1;
-		let returned = false;
-		let interrupted = false;
+	/** Waits until the Programs have ended; a steer ends it early. Their notifications are held until it ends, then delivered as one. */
+	async wait(programs: Running[], timeoutSeconds: number, signal?: AbortSignal, steered?: () => boolean): Promise<ProgramWaitOutcome> {
+		const unique = programs.filter(({ record }) => !ended(record));
+		if (unique.length === 0) return { end: "nothing", running: [] };
+		const held: Held = { ids: new Set(unique.map(({ record }) => record.id)), notices: [] };
+		this.held.push(held);
 		try {
+			let interrupted = false;
 			const deadline = Date.now() + timeoutSeconds * 1000;
 			while (unique.some(({ record }) => !ended(record))) {
 				const remaining = deadline - Date.now();
@@ -227,34 +226,13 @@ export class Programs {
 				await waitForChange(this.change.promise, steered ? Math.min(remaining, STEER_POLL_MS) : remaining, signal);
 			}
 			signal?.throwIfAborted();
-			returned = true;
-			return {
-				results: unique.filter(({ record }) => ended(record)).map(({ record }) => record),
-				running: unique.filter(({ record }) => !ended(record)).map(({ record }) => record),
-				...(interrupted && { interrupted }),
-			};
+			const running = unique.filter(({ record }) => !ended(record)).map(({ record }) => record);
+			return { end: running.length === 0 ? "completed" : interrupted ? "interrupted" : "timedOut", running };
 		} finally {
-			for (const program of unique) {
-				program.waiters -= 1;
-				const { record } = program;
-				if (!ended(record) || record.notified) continue;
-				if (returned) {
-					record.notified = true;
-					this.persist(record);
-				} else if (program.waiters === 0) {
-					this.notify(record);
-				}
-			}
+			this.held.splice(this.held.indexOf(held), 1);
+			const released = this.closing ? undefined : release(held);
+			if (released) this.hooks.notify(released.text, released.notice);
 		}
-	}
-
-	markReturned(records: ProgramRecord[]): void {
-		for (const record of records) {
-			if (record.returned) continue;
-			record.returned = true;
-			this.persist(record);
-		}
-		this.hooks.changed?.();
 	}
 
 	async shutdown(): Promise<void> {
@@ -278,7 +256,7 @@ export class Programs {
 		if (files && (files.read.length > 0 || files.written.length > 0 || files.edited.length > 0)) record.files = files;
 		program.controller = undefined;
 		this.persist(record);
-		if (program.waiters === 0) this.notify(record);
+		if (!program.silent) this.notify(record);
 		const previous = this.change;
 		this.change = deferred();
 		previous.resolve();
@@ -291,12 +269,14 @@ export class Programs {
 	}
 
 	private notify(record: ProgramRecord): void {
-		if (this.closing || record.notified) return;
-		record.notified = true;
-		// A delivered notification carries the result, so `wait` does not return it again.
-		if (this.hooks.notify(boundBlocks([resultBlock(record, this.ids())], PROGRAM_RESULT_TAG, "pi-agents-program-notification").text)) record.returned = true;
-		this.persist(record);
-		this.hooks.changed?.();
+		if (this.closing) return;
+		const images = (record.content ?? []).filter((item): item is Extract<Item, { type: "image" }> => item.type === "image");
+		const { kept, notice } = boundText(textOf(record.content), "pi-agents-program-notification");
+		const id = this.label(record);
+		const header = SCRIPT_HEADER.exec(kept);
+		const text = `<${PROGRAM_RESULT_TAG} id="${id}" status="${record.state}">\n${kept}\n</${PROGRAM_RESULT_TAG}>${notice ? `\n\n${notice}` : ""}`;
+		const result = { id, status: record.state, ...(header?.[1] !== undefined && { seconds: Number(header[1]) }), body: kept.slice(header?.[0].length ?? 0), ...(notice && { notice }) };
+		if (!hold(this.held, record.id, { text, result, ...(images.length ? { images } : {}) })) this.hooks.notify(text, { results: [result], ...(images.length ? { images } : {}) });
 	}
 
 	private persist(record: ProgramRecord): void {
@@ -328,69 +308,8 @@ export function addProgramFiles(
 
 export const PROGRAM_RESULT_TAG = "program-result";
 
-function resultBlock(record: ProgramRecord, ids: string[]): string {
-	return `<${PROGRAM_RESULT_TAG} id="${shortId(record.id, ids)}" status="${record.state}">\n${textOf(record.content)}\n</${PROGRAM_RESULT_TAG}>`;
-}
-
 // The header codemode puts before a Program's output; a Program that ended before its run did has no wall time.
 export const SCRIPT_HEADER = /^Script (?:completed|failed)\n(?:Wall time ([\d.]+) seconds\n)?Output:\n/;
-
-export interface ProgramResultDetails {
-	id: string;
-	state: ProgramState;
-	wallTimeSeconds?: number;
-	/** The output the result shows, without the header. */
-	output?: string;
-}
-
-/** A result's details, with the output in the first `available` characters of its text, if shown. */
-function resultDetails(record: ProgramRecord, available?: number): ProgramResultDetails {
-	const text = textOf(record.content);
-	const header = SCRIPT_HEADER.exec(text);
-	return {
-		id: record.id,
-		state: record.state,
-		...(header?.[1] !== undefined && { wallTimeSeconds: Number(header[1]) }),
-		...(available !== undefined && { output: text.slice(0, available).slice(header?.[0].length ?? 0) }),
-	};
-}
-
-/** Renders wait results; returns the content, its details, and the results the caller has now received. */
-/** The line naming the results left out to keep within Pi's output limits. */
-export function omittedLine(omitted: string[], ids: string[]): string {
-	return omitted.length > 0 ? `[Results omitted: ${omitted.map((id) => shortId(id, ids)).join(", ")}. Use wait with fewer targets.]` : "";
-}
-
-/** The line naming the Programs still running, and that a steer ended the wait if one did. */
-export function runningLine(running: string[], interrupted: boolean | undefined, ids: string[]): string {
-	return running.length > 0 ? `Still running: ${running.map((id) => shortId(id, ids)).join(", ")}${interrupted ? `\n${WAIT_INTERRUPTED}` : ""}` : "";
-}
-
-export function renderProgramWait({ results, running, interrupted }: ProgramWaitOutcome, ids: string[]): { content: Item[]; details: { results: ProgramResultDetails[] } & Partial<Truncation>; returned: ProgramRecord[]; isError?: boolean } {
-	const runningText = runningLine(running.map((record) => record.id), interrupted, ids);
-	if (results.length === 0) return { content: [{ type: "text", text: runningText || "No results." }], details: { results: [] }, returned: [] };
-	const images = (shown: ProgramRecord[]) => shown.flatMap((record) => (record.content ?? []).filter((item) => item.type === "image"));
-	const only = results[0]!;
-	if (results.length === 1 && running.length === 0 && only.state === "completed") {
-		const bounded = boundText(textOf(only.content), "pi-agents-program-wait");
-		return { content: [{ type: "text", text: bounded.text }, ...images(results)], details: { results: [resultDetails(only)], ...bounded.details }, returned: results };
-	}
-	const blocks = results.map((record) => resultBlock(record, ids));
-	const bounded = boundBlocks(blocks, PROGRAM_RESULT_TAG, "pi-agents-program-wait");
-	let offset = 0;
-	const details = results.map((record, index) => {
-		const block = blocks[index]!;
-		const available = Math.max(0, bounded.kept.length - offset - block.indexOf("\n") - 1);
-		offset += block.length + 2;
-		return resultDetails(record, index < bounded.shown ? available : undefined);
-	});
-	let text = bounded.text;
-	const returned = results.slice(0, bounded.shown);
-	const omittedText = omittedLine(results.slice(bounded.shown).map((record) => record.id), ids);
-	if (omittedText) text += `\n\n${omittedText}`;
-	if (runningText) text += `\n\n${runningText}`;
-	return { content: [{ type: "text", text }, ...images(returned)], details: { results: details, ...bounded.details }, returned };
-}
 
 export function programListLine(record: ProgramRecord, ids: string[]): string {
 	return `${shortId(record.id, ids)}  ${record.state}`;

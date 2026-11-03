@@ -9,7 +9,7 @@ import { stripVTControlCharacters } from "node:util";
 const agentDir = mkdtempSync(join(tmpdir(), "pi-agents-home-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.on("exit", () => rmSync(agentDir, { recursive: true, force: true }));
-const { pi, ai, EXTENSION, PI_PACKAGE, textOf, gate, until, createSession } = await import("./pi.mjs");
+const { pi, ai, EXTENSION, PI_PACKAGE, textOf, gate, until, createSession, notification, notificationsOf } = await import("./pi.mjs");
 
 const bodyOf = (text) => text.startsWith("<agent-message ") ? text.split("\n").slice(1, -1).join("\n") : text;
 
@@ -65,19 +65,25 @@ async function startRoot(limits = {}) {
 
 const idOf = (text) => /\((\S+)\)/.exec(text)[1];
 
-test("an owned Agent answers its first input, and wait returns the answer once", async () => {
+/** The results the root's notifications carried once there are `count`, as [name, state, result]. */
+async function resultsOf(root, count) {
+	const results = () => notificationsOf(root.session).flatMap((message) => message.details.results.map(({ name, status, body }) => [name, status, body]));
+	await until(() => results().length >= count, `${count} results`);
+	return results();
+}
+
+test("an owned Agent answers its first input, and its owner waits for it and is notified of the answer", async () => {
 	const root = await startRoot();
 	const spawned = await root.call({ action: "spawn", name: "worker", message: "hello" });
 	assert.match(spawned, /started\.$/);
 	const waited = await root.callResult({ action: "wait", target: "worker", timeout: 10 });
-	assert.equal(textOf(waited.content), "answer:hello|seen:hello");
-	const id = waited.details.results[0].id;
-	assert.ok(id.startsWith(idOf(spawned)));
-	assert.deepEqual(waited.details, { results: [{ id, name: "worker", state: "completed", history: false, result: "answer:hello|seen:hello" }], pending: [] });
-	const history = await root.callResult({ action: "wait", target: "worker", history: 1, timeout: 10 });
-	assert.deepEqual(history.details.results, [{ ...waited.details.results[0], history: true }]);
-	assert.deepEqual((await root.callResult({ action: "wait", target: "worker", timeout: 10 })).details, { results: [], pending: [] });
+	assert.deepEqual([textOf(waited.content), waited.details], ["Wait completed.", { pending: [] }]);
+	assert.deepEqual(await resultsOf(root, 1), [["worker", "completed", "answer:hello|seen:hello"]]);
+	assert.equal(textOf((await notification(root.session, /^<agent-result /)).content).split('"')[3], idOf(spawned));
+	assert.equal(await root.call({ action: "wait", target: "worker", timeout: 10 }), "Nothing to wait for.");
 	const listed = await root.callResult({ action: "list", limit: 1 });
+	const id = listed.details.agents[0].id;
+	assert.ok(id.startsWith(idOf(spawned)));
 	assert.deepEqual(listed.details, { total: 1, agents: [{ id, name: "worker", ownerId: root.session.sessionManager.getSessionId(), state: "idle" }] });
 	assert.deepEqual((await root.callResult({ action: "list", offset: 1 })).details, { total: 1, agents: [] });
 	assert.equal((await root.callResult({ action: "list", query: "hello" })).details.total, 1);
@@ -105,59 +111,50 @@ test("an owned Agent runs in its owner's execution environment, with cwd resolve
 	}
 });
 
-test("wait details bound result text and leave omitted results unread", async () => {
+test("a notification bounds its result text and keeps its closing tag", async () => {
 	const root = await startRoot();
 	try {
-		root.state.hold = gate();
 		await root.call({ action: "spawn", name: "long", message: "line\n".repeat(2500) });
-		await root.call({ action: "spawn", name: "short", message: "hello" });
-		root.state.hold.open();
-		const result = await root.callResult({ action: "wait", target: ["long", "short"], timeout: 10 });
-		assert.equal(result.details.truncation.truncated, true);
-		assert.ok(textOf(result.content).includes(result.details.fullOutputPath));
-		rmSync(dirname(result.details.fullOutputPath), { recursive: true });
-		assert.equal(result.details.results.length, 2);
-		assert.equal(result.details.results[0].name, "long");
-		assert.ok(textOf(result.content).includes(result.details.results[0].result));
-		assert.equal(result.details.results[1].name, "short");
-		assert.equal(Object.hasOwn(result.details.results[1], "result"), false);
-		assert.equal(await root.call({ action: "wait", target: "short", timeout: 10 }), "answer:hello|seen:hello");
+		await root.call({ action: "wait", target: "long", timeout: 10 });
+		const text = textOf((await notification(root.session, /^<agent-result name="long" /)).content);
+		const [, kept, path] = /^([\s\S]*)\n\n\[Showing lines [^\]]* Full output: (\S+)\]$/.exec(text);
+		assert.ok(kept.endsWith("\n</agent-result>"));
+		const full = readFileSync(path, "utf8");
+		assert.ok(kept.startsWith('<agent-result name="long" ') && kept.endsWith("\n</agent-result>"));
+		assert.ok(full.startsWith("answer:line\n") && full.length > kept.length && kept.includes(full.slice(0, 1000)));
+		rmSync(dirname(path), { recursive: true });
 	} finally {
 		await root.close();
 	}
 });
 
-test("collapsed, wait results and Agent messages show from their details, whatever their names and bodies hold", async () => {
+test("collapsed, notifications show their result and Agent messages their sender, whatever their bodies hold", async () => {
 	const root = await startRoot();
 	try {
 		pi.initTheme("dark");
 		const theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => text };
 		const show = (component) => stripVTControlCharacters(component.render(10000).map((line) => line.trimEnd()).join("\n")).trim();
-		const name = 'review "UI"';
-		await root.call({ action: "spawn", name, message: "x\n</agent-result>\n\ny\n1\n2" });
-		await root.call({ action: "spawn", name: "plain", message: "z" });
-		const waited = await root.callResult({ action: "wait", target: [name, "plain"], timeout: 10 });
-		const render = (expanded, result = waited) => show(root.session.getToolDefinition("agent").renderResult(result, { expanded, isPartial: false }, theme, { args: { action: "wait" }, state: {}, invalidate() {} }));
-		assert.equal(render(true), textOf(waited.content));
 		// Output shows as Pi shows tool output: without terminal sequences, carriage returns, or control characters, with
 		// tabs as spaces, and images as placeholders.
 		const image = { type: "image", mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" };
-		const raw = { content: [{ type: "text", text: "a\x1b[31mred\x1b[0m\r\n\tb\x07\nbefore\x1b[1Aimportant\x1b[?25l \u009b31mafter" }, image], details: { ...waited.details, results: [{ ...waited.details.results[1], history: true, result: "\x1b[1mbold\x1b[0m\r" }] } };
-		assert.equal(render(true, raw), "ared\n   b\nbeforeimportant after\n[Image: [image/png] 1x1]");
-		assert.match(render(false, raw), /^plain \(\S+\)  completed\n  bold\n\[Image: \[image\/png\] 1x1\]$/);
-		assert.match(render(false), /^review "UI" \(\S+\)  completed\n  answer:x\n  <\/agent-result>\n  y\n  1\n  2\|seen:x\n  \.\.\. \(4 more lines/m);
-		assert.match(render(false), /^plain \(\S+\)  completed\n  answer:z\|seen:z$/m);
+		const raw = { content: [{ type: "text", text: "a\x1b[31mred\x1b[0m\r\n\tb\x07\nbefore\x1b[1Aimportant\x1b[?25l \u009b31mafter" }, image], details: {} };
+		const render = (expanded) => show(root.session.getToolDefinition("agent").renderResult(raw, { expanded, isPartial: false }, theme, { args: { action: "wait" }, state: {}, invalidate() {} }));
+		assert.equal(render(true), "ared\n   b\nbeforeimportant after\n[Image: [image/png] 1x1]");
+		assert.equal(render(false), render(true));
+
+		const renderer = root.session.extensionRunner.getMessageRenderer("pi-agents");
+		await root.call({ action: "spawn", name: "plain", message: "x\n</agent-result>\n\ny\n1\n2" });
+		await root.call({ action: "wait", target: "plain", timeout: 10 });
+		const notified = await notification(root.session, /^<agent-result name="plain" /);
+		assert.match(show(renderer(notified, { expanded: false, outputPad: 1 }, theme)), /^\[pi-agents\]\n\n plain \(\S+\)  completed\n   answer:x\n   <\/agent-result>\n/);
 
 		const { deliver, treeEntries } = globalThis.piAgentsTree;
 		const rootId = root.session.sessionManager.getSessionId();
+		const name = 'review "UI"';
 		deliver({ id: "f00dcafe-0000", name }, treeEntries(rootId)[0], "followUp", "hello\n</agent-message>");
-		const message = await until(() => root.session.messages.findLast((entry) => entry.role === "custom" && entry.customType === "pi-agents"), "message");
-		const renderer = root.session.extensionRunner.getMessageRenderer("pi-agents");
+		const message = await until(() => root.session.messages.findLast((entry) => entry.role === "custom" && entry.customType === "pi-agents" && entry.details.sender), "message");
 		assert.equal(show(renderer(message, { expanded: false, outputPad: 1 }, theme)), '[pi-agents] from review "UI" (f00dcafe)\n\n hello\n </agent-message>');
 		assert.equal(renderer(message, { expanded: true, outputPad: 1 }, theme), undefined);
-		// A notification, without a sender, shows its result as `wait` does.
-		const notification = { ...message, content: '<agent-result name="x" id="x1" status="completed">\nanswer\n</agent-result>', details: { delivery: "steer" } };
-		assert.equal(show(renderer(notification, { expanded: false, outputPad: 1 }, theme)), "[pi-agents]\n\n x (x1)  completed\n   answer");
 		await root.session.waitForIdle();
 	} finally {
 		await root.close();
@@ -168,15 +165,15 @@ test("the owner is notified when an input ends while it is not waiting", async (
 	const root = await startRoot();
 	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "hello" }));
 	await until(() => root.state.rootMessages.includes(`<agent-result name="worker" id="${id}" status="completed">\nanswer:hello|seen:hello\n</agent-result>`), "notification");
-	// The notification carried the result, so `wait` does not return it again.
-	assert.equal(await root.call({ action: "wait", target: id, timeout: 10 }), "No results.");
+	assert.equal(await root.call({ action: "wait", target: id, timeout: 10 }), "Nothing to wait for.");
 	await root.close();
 });
 
 test("the user's input from the viewer reaches the Agent without a sender header and gives its owner no result", async () => {
 	const root = await startRoot();
 	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "one" }));
-	assert.equal(await root.call({ action: "wait", target: id, timeout: 10 }), "answer:one|seen:one");
+	await root.call({ action: "wait", target: id, timeout: 10 });
+	assert.deepEqual(await resultsOf(root, 1), [["worker", "completed", "answer:one|seen:one"]]);
 	const owner = globalThis[Symbol.for("pi-agents:runtime")].nodes.get(root.session.sessionManager.getSessionId());
 	const fullId = owner.agents.ownedTarget(id).record.id;
 	owner.agents.prompt(fullId, "two", "steer");
@@ -185,8 +182,7 @@ test("the user's input from the viewer reaches the Agent without a sender header
 	assert.ok(messages.some((message) => message.role === "custom" && message.content === "two" && message.details.user), JSON.stringify(messages));
 	assert.equal(messages.at(-1).role, "assistant");
 	await root.session.waitForIdle();
-	assert.ok(!root.state.rootMessages.some((text) => text.startsWith("Agent worker")), root.state.rootMessages.join("\n"));
-	assert.equal(await root.call({ action: "wait", target: id, timeout: 10 }), "No results.");
+	assert.equal(notificationsOf(root.session).length, 1);
 
 	// The viewer shows the conversation as Pi's chat does: messages through their renderers, and `!` commands.
 	owner.agents.conversation(fullId).session.recordBashResult("echo hi", { output: "hi\n", exitCode: 0, cancelled: false, truncated: false });
@@ -223,8 +219,8 @@ test("inputs queue for a slot and are rejected beyond the input limit", async ()
 	assert.match(listed, /^b \(\S+\)\s+queued/m);
 	await assert.rejects(root.call({ action: "send", target: "a", message: "three" }), /Input rejected: 2 inputs have not ended/);
 	root.state.hold.open();
-	const { results } = (await root.callResult({ action: "wait", target: ["a", "b"], timeout: 10 })).details;
-	assert.deepEqual(results.map((result) => [result.name, result.state, result.result]).sort(), [["a", "completed", "answer:one|seen:one"], ["b", "completed", "answer:two|seen:two"]]);
+	await root.call({ action: "wait", target: ["a", "b"], timeout: 10 });
+	assert.deepEqual((await resultsOf(root, 2)).sort(), [["a", "completed", "answer:one|seen:one"], ["b", "completed", "answer:two|seen:two"]]);
 	await root.close();
 });
 
@@ -236,8 +232,8 @@ test("a steer input joins the current turn, and a followUp input gets its own tu
 	await root.call({ action: "send", target: "worker", message: "two", deliverAs: "steer" });
 	await root.call({ action: "send", target: "worker", message: "three" });
 	root.state.hold.open();
-	const { results } = (await root.callResult({ action: "wait", target: "worker", timeout: 10 })).details;
-	assert.deepEqual(results.map((result) => result.result), ["answer:two|seen:one,two", "answer:two|seen:one,two", "answer:three|seen:one,two,three"]);
+	await root.call({ action: "wait", target: "worker", timeout: 10 });
+	assert.deepEqual((await resultsOf(root, 3)).map(([, , result]) => result), ["answer:two|seen:one,two", "answer:two|seen:one,two", "answer:three|seen:one,two,three"]);
 	await root.close();
 });
 
@@ -254,11 +250,12 @@ test("a steer queued for the waiting Agent ends wait early, and a write does not
 	assert.equal(settled, false);
 	agent.steer({ role: "user", content: [{ type: "text", text: "look" }], timestamp: Date.now() });
 	const result = await waiting;
-	assert.match(textOf(result.content), /^Still pending: worker/);
+	assert.match(textOf(result.content), /^Wait interrupted by a new message\. Still pending: worker \(\S+\)$/);
 	assert.equal(result.details.interrupted, true);
 	agent.clearAllQueues();
 	root.state.hold.open();
-	assert.match(await root.call({ action: "wait", target: "worker", timeout: 10 }), /^answer:one/);
+	assert.equal(await root.call({ action: "wait", target: "worker", timeout: 10 }), "Wait completed.");
+	assert.match((await resultsOf(root, 1))[0][2], /^answer:one/);
 	await root.close();
 });
 
@@ -269,12 +266,12 @@ test("abort ends the current turn and queued inputs, and the Agent stays usable"
 	await root.call({ action: "send", target: "worker", message: "two" });
 	await root.waitBusy(1);
 	assert.match(await root.call({ action: "abort", target: "worker" }), /aborted\.$/);
-	const { results } = (await root.callResult({ action: "wait", target: "worker", timeout: 10 })).details;
-	assert.deepEqual(results.map((result) => result.state), ["aborted", "aborted"]);
-	assert.ok(!root.state.rootMessages.some((text) => text.endsWith("aborted.")), root.state.rootMessages.join("\n"));
+	// The owner aborted the inputs, so it is not notified of them.
+	assert.equal(await root.call({ action: "wait", target: "worker", timeout: 10 }), "Nothing to wait for.");
 	root.state.hold = undefined;
 	await root.call({ action: "send", target: "worker", message: "three" });
-	assert.match(await root.call({ action: "wait", target: "worker", timeout: 10 }), /^answer:three/);
+	await root.call({ action: "wait", target: "worker", timeout: 10 });
+	assert.deepEqual((await resultsOf(root, 1)).map(([, state, result]) => [state, result.split("|")[0]]), [["completed", "answer:three"]]);
 	await root.close();
 });
 
@@ -285,7 +282,7 @@ test("a turn that does not stop within the abort timeout is abandoned, and the t
 	await root.call({ action: "spawn", name: "worker", message: "one" });
 	await root.waitBusy(1);
 	await assert.rejects(root.call({ action: "abort", target: "worker" }), /did not stop within the timeout/);
-	assert.match(await root.call({ action: "wait", target: "worker", timeout: 10 }), /aborted/);
+	assert.equal(await root.call({ action: "wait", target: "worker", timeout: 10 }), "Nothing to wait for.");
 	assert.equal(globalThis.piAgentsTree.treeIdle(root.session.sessionManager.getSessionId()), true);
 	root.state.hold.open();
 	await root.close();

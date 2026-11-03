@@ -8,7 +8,7 @@ The `program` tool replaces Pi's `codemode` tool and keeps its script API, tool 
 
 An Agent runs a **Program** with the `program` tool. That Agent is the Program's **caller**. The Program can call the caller's tools and create Agents.
 
-A Program runs in the **foreground** or the **background**. In the foreground, the tool call returns the Program's result. In the background, the tool call returns the Program's ID, and the caller gets the result with `wait`.
+A Program runs in the **foreground** or the **background**. In the foreground, the tool call returns the Program's result. In the background, the tool call returns the Program's ID, and the caller gets the result in a notification.
 
 A Program is shown by its short ID: the shortest prefix of its ID, at least 8 characters, that none of the caller's other Programs' IDs starts with. A target is an ID or a unique ID prefix.
 
@@ -23,11 +23,11 @@ A Program is `running` until it ends in one of three ways:
 ## 2. Operations
 
 - `run` runs a Program in the foreground or background, with an optional timeout.
-- `wait` waits for background Programs and returns their results.
+- `wait` waits for background Programs to end.
 - `list` lists the caller's background Programs.
 - `stop` stops a running Program.
 
-When a background Program ends and its caller is not waiting for it, the caller gets a notification with the result, as in SPEC §5, and the result then counts as returned. A steer input ends `wait` early, as in SPEC §5.
+When a background Program ends, the caller gets a notification with the result, unless it stopped the Program. `wait` ends as in SPEC §5.
 
 ## 3. Program API
 
@@ -47,7 +47,7 @@ With `timeout`, an input that has not ended within that many seconds of `send()`
 
 When a Program ends, it cancels its unfinished tool calls and aborts its Agents' unfinished inputs, and waits for its Agents to go offline. It returns its result after cleanup. Work not stopped within the cleanup timeout is abandoned and may keep running; the Program's result and `stop` report it as an error, and the Program's state is unchanged.
 
-When the caller goes offline, its running Programs stop. Their results remain available when the caller is loaded again.
+When the caller goes offline, its running Programs stop, as if it stopped them.
 
 ## 5. Limits
 
@@ -61,7 +61,7 @@ An owned caller gives up its slot while a foreground Program runs or while it wa
 
 description:
 
-Run JavaScript that composes tool calls and Agents; only its output and return value reach the caller. `run` runs a Program in the foreground, or in the background with `background`; `wait` waits for background Programs and returns their results; `list` lists background Programs; `stop` stops a running Program. When a background Program ends while its caller is not waiting for it, the caller receives a notification with the result.
+Run JavaScript that composes tool calls and Agents; only its output and return value reach the caller. `run` runs a Program in the foreground, or in the background with `background`; `wait` waits for background Programs to end; `list` lists background Programs; `stop` stops a running Program. When a background Program ends, the caller receives a notification with the result.
 
 Program code is the body of an async function. It calls the caller's tools through `tools.*`, which excludes `program`, and creates Agents through `agent()`. These Agents belong to the Program, are isolated from other Agents, and go offline when it ends.
 
@@ -125,7 +125,7 @@ parameters:
 - `code`: JavaScript async-function body for `run`.
 - `background`: Whether `run` returns the Program ID at once (default: false).
 - `timeout`: Maximum seconds. For `run` (default: none), expiry stops the Program. For `wait` (default: 30, min: 10, max: 3600), expiry does not stop Programs.
-- `target`: Program ID or unique ID prefix for `wait` or `stop`. `wait` also accepts an array. When omitted for `wait`, selects running Programs and ended Programs whose result has not been returned.
+- `target`: Program ID or unique ID prefix for `wait` or `stop`. `wait` also accepts an array. When omitted for `wait`, selects running Programs.
 - `limit`: Maximum Programs returned by `list` (default: 20, max: 200).
 - `offset`: Number of Programs to skip for `list` (default: 0).
 
@@ -141,22 +141,13 @@ In these formats, `<id>` is the Program's short ID.
 Program <id> started.
 ```
 
-`wait` returns one block per result, followed by running Programs on timeout:
+`wait` returns as `agent` `wait` does (SPEC §6), naming the Programs still running:
 
 ```text
-<program-result id="<id>" status="<outcome>">
-<result>
-</program-result>
-
-Still running: <id>, ...
-```
-
-When a steer input ended the wait, the line of SPEC §6 follows.
-
-A single completed result, with nothing running, is returned alone. When there are no results or running Programs:
-
-```text
-No results.
+Wait completed.
+Wait timed out. Still running: <id>, ...
+Wait interrupted by a new message. Still running: <id>, ...
+Nothing to wait for.
 ```
 
 `list` returns one entry per background Program, newest first:
@@ -210,15 +201,11 @@ No Program matches "<target>". Use list to find Programs.
 
 truncation:
 
-`wait` text beyond Pi's output limits is truncated as in SPEC §6, and so is a notification's result, which keeps its closing tag. `wait` adds results in order; the result that crosses the limit is truncated but keeps its closing tag, and later results are omitted. A truncated result counts as returned. Omitted results stay unreturned, and the text ends with:
-
-```text
-[Results omitted: <id>, ... Use wait with fewer targets.]
-```
+A notification's result beyond Pi's output limits is truncated as in SPEC §6 and keeps its closing tag.
 
 messages:
 
-A notification to the caller:
+A notification to the caller, followed by the result's images:
 
 ```text
 <program-result id="<id>" status="<outcome>">

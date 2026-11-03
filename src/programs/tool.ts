@@ -5,7 +5,7 @@ import { writeSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import { Type } from "typebox";
-import { settlesBy, steerQueued, SUBMIT_RESULT_TOOL_NAME, type Limits } from "../agents/agents.ts";
+import { settlesBy, steerQueued, SUBMIT_RESULT_TOOL_NAME, waitText, type Limits } from "../agents/agents.ts";
 import { nodes, trackTreeWork, type AgentNode } from "../agents/registry.ts";
 import { rejectFields } from "../params.ts";
 import { agentSession } from "../roots/rpc.ts";
@@ -15,11 +15,11 @@ import { CLEANUP_TIMEOUT_MS, executeProgram, PROGRAM_TOOL_NAME, type ProgramRunO
 import { commandSession, runDetached } from "./host-patches.ts";
 import { programDescription, programLoadout, programRenderers } from "./loadout.ts";
 import { randomUUID } from "node:crypto";
-import { CLEANUP_ERROR, programListLine, Programs, renderProgramWait } from "./programs.ts";
+import { CLEANUP_ERROR, programListLine, Programs } from "./programs.ts";
 import { PROGRAM_MESSAGE, runOutput } from "./run-output.mjs";
 import { agentGlobals, withAgentPrefix } from "./sandbox.ts";
 
-const PROGRAM_DESCRIPTION = `Run JavaScript that composes tool calls and Agents; only its output and return value reach the caller. \`run\` runs a Program in the foreground, or in the background with \`background\`; \`wait\` waits for background Programs and returns their results; \`list\` lists background Programs; \`stop\` stops a running Program. When a background Program ends while its caller is not waiting for it, the caller receives a notification with the result.
+const PROGRAM_DESCRIPTION = `Run JavaScript that composes tool calls and Agents; only its output and return value reach the caller. \`run\` runs a Program in the foreground, or in the background with \`background\`; \`wait\` waits for background Programs to end; \`list\` lists background Programs; \`stop\` stops a running Program. When a background Program ends, the caller receives a notification with the result.
 
 Program code is the body of an async function. It calls the caller's tools through \`tools.*\`, which excludes \`program\`, and creates Agents through \`agent()\`. These Agents belong to the Program, are isolated from other Agents, and go offline when it ends.
 
@@ -168,7 +168,7 @@ export function registerProgramTools(
 			code: Type.Optional(Type.String({ description: "JavaScript async-function body for `run`." })),
 			background: Type.Optional(Type.Boolean({ description: "Whether `run` returns the Program ID at once (default: false)." })),
 			timeout: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Maximum seconds. For `run` (default: none), expiry stops the Program. For `wait` (default: 30, min: 10, max: 3600), expiry does not stop Programs." })),
-			target: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "Program ID or unique ID prefix for `wait` or `stop`. `wait` also accepts an array. When omitted for `wait`, selects running Programs and ended Programs whose result has not been returned." })),
+			target: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "Program ID or unique ID prefix for `wait` or `stop`. `wait` also accepts an array. When omitted for `wait`, selects running Programs." })),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, description: "Maximum Programs returned by `list` (default: 20, max: 200)." })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, description: "Number of Programs to skip for `list` (default: 0)." })),
 		}),
@@ -200,10 +200,12 @@ export function registerProgramTools(
 					onUpdate?.({ content: [], details: undefined });
 					const session = agentSession(current.sessionManager);
 					const waitFor = () => programs!.wait(selected, timeout, signal, () => steerQueued(session?.agent));
-					const outcome = programs.running(selected) ? await self.agents.whileSuspended(waitFor, signal, true) : await waitFor();
-					const rendered = renderProgramWait(outcome, programs.ids());
-					programs.markReturned(rendered.returned);
-					return { content: rendered.content, details: { ...rendered.details, running: outcome.running.map((record) => record.id), ...(outcome.interrupted && { interrupted: true }) } };
+					const { end, running } = programs.running(selected) ? await self.agents.whileSuspended(waitFor, signal, true) : await waitFor();
+					const text = waitText(end, `Still running: ${running.map((record) => programs!.label(record)).join(", ")}`);
+					return {
+						content: [{ type: "text", text }],
+						details: { running: running.map((record) => record.id), ...(end === "timedOut" && { timedOut: true }), ...(end === "interrupted" && { interrupted: true }) },
+					};
 				}
 				case "list": {
 					rejectFields(params, "list", ["code", "background", "timeout", "target"]);

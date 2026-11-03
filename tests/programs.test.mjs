@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const agentDir = mkdtempSync(join(tmpdir(), "pi-agents-home-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.on("exit", () => rmSync(agentDir, { recursive: true, force: true }));
-const { pi, ai, EXTENSION, PI_PACKAGE, textOf, gate, until, createSession } = await import("./pi.mjs");
+const { pi, ai, EXTENSION, PI_PACKAGE, textOf, gate, until, createSession, notification, notificationsOf } = await import("./pi.mjs");
 
 /** The text an Agent received from its owner, without the header and the schema instruction. */
 const bodyOf = (text) => text.split("\n").slice(1, -1).join("\n").split("\n\nWhen done, call")[0];
@@ -98,6 +98,9 @@ async function startRoot(cwd = mkdtempSync(join(agentDir, "cwd-")), sessionFile 
 
 const idOf = (text) => /^Program (\S+) started\.$/.exec(text)[1];
 
+/** The text of the result of a background Program as last recorded. */
+const programResult = (root, id) => textOf(root.sessionManager.getEntries().findLast((entry) => entry.customType === "pi-agents-program" && entry.data.id.startsWith(id)).data.content);
+
 test("a foreground Program calls the caller's tools except program and keeps store writes only when it completes", async () => {
 	const root = await startRoot();
 	const completed = await root.call({ action: "run", code: "const note = await tools.read({ path: 'note.txt' }); store('note', note); return ['program' in tools, note]" });
@@ -122,13 +125,40 @@ test("/program runs a saved script before the Session has a reply, and adds the 
 	await root.close();
 });
 
-test("a background Program runs on after run returns, notifies its caller, and wait returns its result once", async () => {
+test("a background Program runs on after run returns and notifies its caller with its result", async () => {
 	const root = await startRoot();
 	const id = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' }); return 'done'" }));
 	await until(() => root.messages.some((message) => message.startsWith(`<program-result id="${id}" status="completed">`) && message.includes("done")), "notification");
-	// The notification carried the result, so `wait` does not return it again.
-	assert.equal(await root.text({ action: "wait", timeout: 10 }), "No results.");
+	assert.equal(await root.text({ action: "wait", timeout: 10 }), "Nothing to wait for.");
 	assert.match(await root.text({ action: "list" }), new RegExp(`^${id}  completed$`));
+	// The notification also carries the images of the result.
+	const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+	const pictured = idOf(await root.text({ action: "run", background: true, code: `image("data:image/png;base64,${png}"); return 'pic'` }));
+	const message = await notification(root.session, new RegExp(`^<program-result id="${pictured}" `));
+	assert.deepEqual(message.content.filter((part) => part.type === "image").map((part) => part.data), [png]);
+	await root.close();
+});
+
+test("a wait delivers the notifications of the Agents it waits for as one when it ends", async () => {
+	const root = await startRoot();
+	await root.text({ action: "spawn", name: "a", message: "hold" }, "agent");
+	await root.text({ action: "spawn", name: "b", message: "hold" }, "agent");
+	await until(() => root.state.busy === 2, "both Agents busy");
+	const waiting = root.text({ action: "wait", target: ["a", "b"], timeout: 60 }, "agent");
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	root.state.hold.open();
+	assert.equal(await waiting, "Wait completed.");
+	await root.session.waitForIdle();
+	const [message, ...rest] = notificationsOf(root.session);
+	assert.equal(rest.length, 0);
+	assert.deepEqual(message.details.results.map(({ name, status, body }) => [name, status, body]).sort(), [["a", "completed", "answer:hold"], ["b", "completed", "answer:hold"]]);
+	// The model takes in both results at once.
+	assert.match(root.messages.at(-1), /^<agent-result name="(a|b)" [\s\S]*\n\n<agent-result name="(?!\1)(a|b)" /);
+	// Collapsed, it shows each result as a line with its body below.
+	pi.initTheme("dark");
+	const theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => text };
+	const shown = stripVTControlCharacters(root.session.extensionRunner.getMessageRenderer("pi-agents")(message, { expanded: false, outputPad: 1 }, theme).render(10000).map((line) => line.trimEnd()).join("\n")).trimEnd();
+	assert.match(shown, /\n (a|b) \(\S+\)  completed\n   answer:hold\n (a|b) \(\S+\)  completed\n   answer:hold$/);
 	await root.close();
 });
 
@@ -218,14 +248,15 @@ test("stop and timeout stop background Programs", async () => {
 	await root.text({ action: "stop", target: stopped });
 	await root.text({ action: "stop", target: spinning });
 	await root.session.waitForIdle();
-	const waited = await root.call({ action: "wait", target: [stopped, timedOut, spinning], timeout: 10 });
-	const results = textOf(waited.content);
-	for (const id of [stopped, timedOut, spinning]) assert.match(results, new RegExp(`<program-result id="${id}" status="stopped">`));
-	// Collapsed, each result shows as a line with its output below; expanded, as the model received it.
+	assert.equal(await root.text({ action: "wait", target: [stopped, timedOut, spinning], timeout: 10 }), "Nothing to wait for.");
+	const listed = await root.text({ action: "list" });
+	for (const id of [stopped, timedOut, spinning]) assert.match(listed, new RegExp(`^${id}  stopped$`, "m"));
+	// Collapsed, a notification shows its result as a line with its output below.
 	pi.initTheme("dark");
-	const render = (expanded) => stripVTControlCharacters(root.session.getToolDefinition("program").renderResult(waited, { expanded, isPartial: false }, { fg: (_color, text) => text, bold: (text) => text }, { args: { action: "wait" }, state: {}, invalidate() {} }).render(10000).map((line) => line.trimEnd()).join("\n").trim());
-	assert.match(render(false), new RegExp(`^Program ${timedOut}  stopped  [\\d.]+s\n  Script error:\n`, "m"));
-	assert.equal(render(true), results);
+	const theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => text };
+	const message = await notification(root.session, new RegExp(`^<program-result id="${timedOut}" `));
+	const shown = stripVTControlCharacters(root.session.extensionRunner.getMessageRenderer("pi-agents")(message, { expanded: false, outputPad: 1 }, theme).render(10000).map((line) => line.trimEnd()).join("\n"));
+	assert.match(shown, new RegExp(`\n Program ${timedOut}  stopped  [\\d.]+s\n   Script error:\n`));
 	assert.deepEqual(root.messages.filter(notified).map((message) => message.split('"')[1]), [timedOut]);
 	await root.close();
 });
@@ -242,7 +273,8 @@ test("a background Program's calls keep distinct IDs across turns, and their hoo
 	await root.session.abort();
 	await turn;
 	assert.equal(foreground.aborted, true);
-	assert.match(await root.text({ action: "wait", target: id, timeout: 10 }), /done$/);
+	await root.text({ action: "wait", target: id, timeout: 10 });
+	await notification(root.session, new RegExp(`^<program-result id="${id}" status="completed">[\\s\\S]*done\n</program-result>$`));
 	const background = hooks.calls.filter((call) => call.path === "note.txt");
 	assert.equal(background.length, 4);
 	assert.equal(new Set(background.map((call) => call.id)).size, 4);
@@ -259,7 +291,8 @@ test("a background Program's calls keep distinct IDs across turns, and their hoo
 	const aborted = idOf(await root.text({ action: "run", background: true, code: "await tools.read({ path: 'note.txt' }); await tools.read({ path: 'abort.txt' }); return 'unreachable'" }));
 	const caller = await root.call({ action: "run", code: "await tools.read({ path: 'note.txt' }); await tools.read({ path: 'note.txt' }); return 'fg'" });
 	assert.match(textOf(caller.content), /fg$/);
-	assert.match(await root.text({ action: "wait", target: aborted, timeout: 10 }), new RegExp(`<program-result id="${aborted}" status="stopped">`));
+	await root.text({ action: "wait", target: aborted, timeout: 10 });
+	await notification(root.session, new RegExp(`^<program-result id="${aborted}" status="stopped">`));
 	await root.close();
 });
 
@@ -290,13 +323,16 @@ test("compaction lists the files of background Programs", async () => {
 	await root.close();
 });
 
-test("a caller going offline stops its Programs, and their results remain when it is loaded again", async () => {
+test("a caller going offline stops its Programs as if it stopped them", async () => {
 	const root = await startRoot();
 	const id = idOf(await root.text({ action: "run", background: true, code: "while (true) await tools.read({ path: 'note.txt' })" }));
 	const file = root.sessionManager.getSessionFile();
 	await root.close();
 	const reopened = await startRoot(root.cwd, file);
-	assert.match(await reopened.text({ action: "wait", target: id, timeout: 10 }), new RegExp(`<program-result id="${id}" status="stopped">\\n[\\s\\S]*the caller went offline`));
+	assert.equal(await reopened.text({ action: "wait", target: id, timeout: 10 }), "Nothing to wait for.");
+	assert.match(await reopened.text({ action: "list" }), new RegExp(`^${id}  stopped$`));
+	assert.match(programResult(reopened, id), /the caller went offline/);
+	assert.equal(notificationsOf(reopened.session).length, 0);
 	await reopened.close();
 });
 
@@ -370,8 +406,7 @@ test("a Program's Agents are invisible to the caller, count toward its limit, an
 	// Other roots may be listed; the Program's Agents share the caller's cwd.
 	assert.match(await root.text({ action: "list", query: root.cwd }, "agent"), /^outside \(\S+\)  running  \S+\n  .+  hold$/);
 	await root.text({ action: "stop", target: id });
-	const result = await root.text({ action: "wait", target: id, timeout: 10 });
-	assert.match(result, /status="stopped">\n[\s\S]*Input rejected: 2 inputs have not ended/);
+	assert.match(programResult(root, id), /Input rejected: 2 inputs have not ended/);
 	await root.close();
 });
 
@@ -380,7 +415,7 @@ test("a Program whose Agent does not stop reports the abandoned work as an error
 	const id = idOf(await root.text({ action: "run", background: true, code: "await agent().send('stuck')" }));
 	await until(() => root.state.busy === 1, "stuck Agent busy");
 	await assert.rejects(root.text({ action: "stop", target: id }), /did not stop within the timeout/);
-	assert.match(await root.text({ action: "wait", target: id, timeout: 10 }), /status="stopped">[\s\S]*Cleanup error/);
+	assert.match(programResult(root, id), /Cleanup error/);
 	root.state.hold.open();
 	await root.close();
 });
@@ -460,9 +495,11 @@ test("an owned Agent is waiting while its wait blocks on its own Agent, and the 
 	assert.equal(activity("outer"), "wait inner");
 	assert.equal(activity("inner"), "hold");
 	root.state.hold.open();
-	assert.equal(await root.text({ action: "wait", target: "outer", timeout: 10 }, "agent"), "answer:hold");
+	assert.equal(await root.text({ action: "wait", target: "outer", timeout: 10 }, "agent"), "Wait completed.");
+	// The inner Agent's notification follows the outer one's wait in the same turn, which answers it.
+	await notification(root.session, /^<agent-result name="outer" [^>]*>\nanswer:answer:hold\n<\/agent-result>$/);
 	assert.equal(state("outer"), "idle");
-	assert.equal(activity("outer"), "answer:hold");
+	assert.equal(activity("outer"), "answer:answer:hold");
 	await root.close();
 });
 
@@ -484,7 +521,8 @@ test("an owned Agent gives up its slot while its foreground Program waits for an
 	const root = await startRoot(undefined, undefined, { maxConcurrent: 1, maxOutstanding: 2 });
 	const run = { action: "run", code: "return await agent().send('inner')" };
 	await root.text({ action: "spawn", name: "outer", message: `program:${JSON.stringify(run)}` }, "agent");
-	assert.match(await root.text({ action: "wait", target: "outer", timeout: 10 }, "agent"), /answer:inner$/);
+	await root.text({ action: "wait", target: "outer", timeout: 10 }, "agent");
+	await notification(root.session, /^<agent-result name="outer" [^>]*>\n[\s\S]*answer:inner\n<\/agent-result>$/);
 	await root.close();
 });
 

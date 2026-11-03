@@ -157,9 +157,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			cwd: () => ctx?.cwd ?? current.cwd,
 			busy: () => !(ctx?.isIdle() ?? true),
 			sessionFile: () => ctx?.sessionManager.getSessionFile(),
-			receive: (text, delivery, messageId, from) => {
+			receive: (text, delivery, messageId, from, notice) => {
 				const as = created.stopped ? "write" : delivery;
-				pi.sendMessage(customMessage(text, as, { messageId, sender: from }), as === "write"
+				pi.sendMessage(customMessage(text, as, { messageId, sender: from, notice }), as === "write"
 					? { deliverAs: "steer" }
 					: { deliverAs: as, triggerTurn: true });
 				queue.update();
@@ -169,7 +169,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		nodes.set(id, node);
 		programs = new Programs(rootId, {
 			appendEntry: (customType, data) => pi.appendEntry(customType, data),
-			notify: (text) => agents.notify(text),
+			notify: (text, notice) => agents.notify(text, notice),
 			changed: () => panel.update(),
 		});
 		created.programs = programs;

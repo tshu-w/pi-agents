@@ -15,10 +15,12 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { boundBlocks } from "../output.ts";
+import { boundText } from "../output.ts";
 import {
 	customMessage,
 	deliver,
+	messageParts,
+	type NotifiedResult,
 	addProgramSpend,
 	addSpend,
 	label,
@@ -37,6 +39,7 @@ import {
 	type Delivery,
 	type Sender,
 	type Entry,
+	type Notice,
 	type Spend,
 	type TreeMetadata,
 } from "./registry.ts";
@@ -66,8 +69,6 @@ export interface InputRecord {
 	result?: string;
 	/** The value submitted with `submit_result`, for an input with a schema. */
 	value?: unknown;
-	read: boolean;
-	notified: boolean;
 }
 
 export interface AgentRecord {
@@ -154,11 +155,16 @@ export function steerQueued(agent: AgentSession["agent"] | undefined): boolean {
 // Pi does not report steers queued by extensions, so a wait checks the queue this often.
 export const STEER_POLL_MS = 250;
 
-export const WAIT_INTERRUPTED = "Stopped waiting for a new message. Wait again to keep waiting.";
 export const RESULT_TAG = "agent-result";
 
-export function resultBlock({ agent, input, history }: WaitResult, ids: string[]): string {
-	return `<${RESULT_TAG} name="${agent.name}" id="${shortId(agent.id, ids)}" status="${input.state}"${history ? ' history="true"' : ""}>\n${input.result ?? ""}\n</${RESULT_TAG}>`;
+/** How a wait ended: what it waited for ended, its timeout expired, another message ended it, or it had nothing to wait for. */
+export type WaitEnd = "completed" | "timedOut" | "interrupted" | "nothing";
+
+/** The text `wait` returns, naming what it still waits for as `still` does. */
+export function waitText(end: WaitEnd, still: string): string {
+	if (end === "nothing") return "Nothing to wait for.";
+	if (end === "completed") return "Wait completed.";
+	return `${end === "timedOut" ? "Wait timed out." : "Wait interrupted by a new message."} ${still}`;
 }
 
 export interface Deferred {
@@ -217,6 +223,7 @@ interface Input {
 	user?: boolean;
 	/** The Agent that sent it. */
 	sender?: Sender;
+	notice?: Notice;
 	record?: InputRecord;
 	permit?: symbol;
 	schema?: unknown;
@@ -226,7 +233,7 @@ interface Input {
 	silent?: boolean;
 }
 
-type Message = Pick<Input, "text" | "user" | "sender">;
+type Message = Pick<Input, "text" | "user" | "sender" | "notice">;
 
 interface Turn {
 	inputs: Input[];
@@ -257,7 +264,6 @@ interface Owned {
 	session?: AgentSession;
 	loading?: Promise<AgentSession>;
 	prepared?: Prepared;
-	waiters: number;
 	/** Its turn was stopped: messages from other Agents become writes until its owner's or user's next input. */
 	stopped?: boolean;
 }
@@ -271,23 +277,47 @@ export interface SpawnRequest {
 	thinkingLevel?: ThinkingLevel;
 }
 
-export interface WaitResult {
-	agent: AgentRecord;
-	input: InputRecord;
-	history: boolean;
+/** A notification a wait holds; every wait for its Agent or Program holds it, and the first to end delivers it. */
+interface HeldNotice {
+	text: string;
+	result: NotifiedResult;
+	images?: NonNullable<Notice["images"]>;
+	delivered?: boolean;
+}
+
+/** A wait in progress: the IDs of the Agents or Programs it waits for, and their notifications it holds. */
+export interface Held {
+	ids: Set<string>;
+	notices: HeldNotice[];
+}
+
+/** Has the waits in progress for `id` hold a notification; returns whether any does. */
+export function hold(waits: Held[], id: string, notice: HeldNotice): boolean {
+	const holding = waits.filter(({ ids }) => ids.has(id));
+	for (const wait of holding) wait.notices.push(notice);
+	return holding.length > 0;
+}
+
+/** The notifications a wait holds that no other wait has delivered, as one notification, or undefined if none. */
+export function release(wait: Held): { text: string; notice: Notice } | undefined {
+	const notices = wait.notices.filter(({ delivered }) => !delivered);
+	if (notices.length === 0) return undefined;
+	for (const notice of notices) notice.delivered = true;
+	const images = notices.flatMap((notice) => notice.images ?? []);
+	return { text: notices.map(({ text }) => text).join("\n\n"), notice: { results: notices.map(({ result }) => result), ...(images.length ? { images } : {}) } };
 }
 
 export interface WaitOutcome {
-	results: WaitResult[];
+	end: WaitEnd;
 	pending: AgentRecord[];
-	/** A steer ended the wait. */
-	interrupted?: boolean;
 }
 
 /** The Agents owned by one loaded Agent. */
 export class Agents {
 	/** Waits in progress that keep this Agent's turn `waiting`. */
 	waiting = 0;
+	/** The notifications held by the waits in progress. */
+	private held: Held[] = [];
 	private agents = new Map<string, Owned>();
 	private change = deferred();
 	private closing = false;
@@ -421,7 +451,6 @@ export class Agents {
 			},
 			queue: [],
 			prepared,
-			waiters: 0,
 		};
 		this.agents.set(agent.record.id, agent);
 		return agent;
@@ -462,31 +491,30 @@ export class Agents {
 		input.submitted = { value: args.value };
 	}
 
-	accept(id: string, text: string, delivery: Delivery, options: { fromOwner: boolean; notification: boolean; sender?: Sender }): { queued: boolean } {
+	accept(id: string, text: string, delivery: Delivery, options: { fromOwner: boolean; notice?: Notice; sender?: Sender }): { queued: boolean } {
 		const agent = this.agent(id);
 		if (agent.stopped && !options.fromOwner) delivery = "write";
 		if (delivery === "write") {
-			this.write(agent, text, options.sender);
+			this.write(agent, text, options.sender, options.notice);
 			return { queued: false };
 		}
 		// Notifications keep their owner informed even at the input limit.
-		const permit = options.notification ? undefined : this.reserve();
-		const input: Input = { text, sender: options.sender, permit, record: options.fromOwner && !options.notification ? this.newRecord(agent) : undefined };
+		const permit = options.notice ? undefined : this.reserve();
+		const input: Input = { text, sender: options.sender, notice: options.notice, permit, record: options.fromOwner && !options.notice ? this.newRecord(agent) : undefined };
 		return { queued: this.add(agent, input, delivery) };
 	}
 
-	async wait(targets: Owned[] | undefined, history: number, timeoutSeconds: number, signal?: AbortSignal, steered?: () => boolean): Promise<WaitOutcome> {
-		const selected = targets ?? [...this.agents.values()].filter((agent) =>
-			this.pending(agent) || agent.record.inputs.some((input) => ended(input) && !input.read));
-		const unique = [...new Set(selected)];
-		const replay = new Map(unique.map((agent) => [agent, history === 0
-			? []
-			: agent.record.inputs.filter((input) => ended(input) && input.read).slice(-history)]));
-		for (const agent of unique) agent.waiters += 1;
-		const blocking = unique.some((agent) => this.pending(agent));
-		const suspended = blocking && this.self.ownerId !== undefined && scheduler.suspend(this.self.rootId, this.self.id);
-		if (blocking) this.markWaiting(1);
-		let returned = false;
+	/**
+	 * Waits until `targets`, or the Agents with pending inputs, have none; a steer ends it early. Their notifications
+	 * are held until it ends, then delivered as one.
+	 */
+	async wait(targets: Owned[] | undefined, timeoutSeconds: number, signal?: AbortSignal, steered?: () => boolean): Promise<WaitOutcome> {
+		const unique = [...new Set(targets ?? [...this.agents.values()])].filter((agent) => this.pending(agent));
+		if (unique.length === 0) return { end: "nothing", pending: [] };
+		const held: Held = { ids: new Set(unique.map((agent) => agent.record.id)), notices: [] };
+		this.held.push(held);
+		const suspended = this.self.ownerId !== undefined && scheduler.suspend(this.self.rootId, this.self.id);
+		this.markWaiting(1);
 		let interrupted = false;
 		try {
 			const deadline = Date.now() + timeoutSeconds * 1000;
@@ -501,40 +529,15 @@ export class Agents {
 				await waitForChange(this.change.promise, steered ? Math.min(remaining, STEER_POLL_MS) : remaining, signal);
 			}
 			signal?.throwIfAborted();
-			const results: WaitResult[] = [];
-			for (const agent of unique) {
-				for (const input of replay.get(agent)!) results.push({ agent: agent.record, input, history: true });
-				for (const input of agent.record.inputs) {
-					if (ended(input) && !input.read) results.push({ agent: agent.record, input, history: false });
-				}
-			}
-			returned = true;
-			return { results, pending: unique.filter((agent) => this.pending(agent)).map((agent) => agent.record), ...(interrupted && { interrupted }) };
+			const pending = unique.filter((agent) => this.pending(agent)).map((agent) => agent.record);
+			return { end: pending.length === 0 ? "completed" : interrupted ? "interrupted" : "timedOut", pending };
 		} finally {
-			if (blocking) this.markWaiting(-1);
+			this.held.splice(this.held.indexOf(held), 1);
+			const released = this.closing ? undefined : release(held);
+			if (released) this.notify(released.text, released.notice);
+			this.markWaiting(-1);
 			if (suspended) await scheduler.resume(this.self.rootId, this.self.id, this.limits.maxConcurrent, signal);
-			for (const agent of unique) {
-				agent.waiters -= 1;
-				let notified = false;
-				for (const input of agent.record.inputs) {
-					if (!ended(input) || input.notified) continue;
-					if (returned) input.notified = notified = true;
-					else this.notifyLater(agent, input);
-				}
-				if (notified) this.persist(agent);
-			}
 		}
-	}
-
-	markRead(results: WaitResult[]): void {
-		const changed = new Set<string>();
-		for (const { agent, input, history } of results) {
-			if (history || input.read) continue;
-			input.read = true;
-			changed.add(agent.id);
-		}
-		for (const id of changed) this.persist(this.agents.get(id)!);
-		if (changed.size > 0) treeChanged();
 	}
 
 	/**
@@ -590,14 +593,13 @@ export class Agents {
 			records.set(record.id, record);
 		}
 		for (const record of records.values()) {
-			const agent: Owned = { record, queue: [], waiters: 0 };
+			const agent: Owned = { record, queue: [] };
 			this.agents.set(record.id, agent);
 			if (!record.inputs.some((input) => !ended(input))) continue;
 			for (const input of record.inputs) {
 				if (ended(input)) continue;
 				input.state = "aborted";
 				input.result = "The process exited before this input ended.";
-				input.notified = true;
 			}
 			this.persist(agent);
 		}
@@ -633,8 +635,8 @@ export class Agents {
 		if (errors.length > 0) throw new Error(errors.map((error) => error instanceof Error ? error.message : String(error)).join("\n"));
 	}
 
-	private write(agent: Owned, text: string, from?: Sender): void {
-		const message = customMessage(text, "write", { sender: from });
+	private write(agent: Owned, text: string, from?: Sender, notice?: Notice): void {
+		const message = customMessage(text, "write", { sender: from, notice });
 		const session = agent.session;
 		if (session?.isStreaming) {
 			session.agent.steer({ role: "custom", ...message, timestamp: Date.now() });
@@ -676,9 +678,9 @@ export class Agents {
 		this.changed();
 		if (!turn.started) return;
 		if (agent.session?.isStreaming) {
-			agent.session.agent.steer({ role: "custom", ...customMessage(input.text, "steer", { user: input.user, sender: input.sender }), timestamp: Date.now() });
+			agent.session.agent.steer({ role: "custom", ...customMessage(input.text, "steer", { user: input.user, sender: input.sender, notice: input.notice }), timestamp: Date.now() });
 		} else {
-			turn.pending.push({ text: input.text, user: input.user, sender: input.sender });
+			turn.pending.push({ text: input.text, user: input.user, sender: input.sender, notice: input.notice });
 		}
 	}
 
@@ -704,7 +706,7 @@ export class Agents {
 			for (const input of turn.inputs) if (input.record) input.record.state = "running";
 			this.persist(agent);
 			this.changed();
-			let batch: Message[] = turn.inputs.map(({ text, user, sender }) => ({ text, user, sender }));
+			let batch: Message[] = turn.inputs.map(({ text, user, sender, notice }) => ({ text, user, sender, notice }));
 			while (batch.length > 0 && !turn.abort.signal.aborted) {
 				for (const { text, ...rest } of batch.slice(0, -1)) await session.sendCustomMessage(customMessage(text, "steer", rest), { triggerTurn: false });
 				const { text, ...rest } = batch.at(-1)!;
@@ -716,7 +718,7 @@ export class Agents {
 				}
 				batch = [
 					...turn.pending.splice(0),
-					...leftover.flatMap(({ content, details }) => details.delivery === "write" ? [] : [{ text: content, user: details.user, sender: details.sender }]),
+					...leftover.flatMap((message) => message.details.delivery === "write" ? [] : [messageParts(message)]),
 				];
 			}
 			const last = lastAnswer(session, before);
@@ -756,10 +758,9 @@ export class Agents {
 		}
 		record.state = outcome;
 		record.result = result;
-		if (input.silent) record.notified = true;
 		this.persist(agent);
 		input.done?.resolve();
-		if (agent.waiters === 0 && !input.silent) this.notifyLater(agent, record);
+		if (!input.silent) this.notifyLater(agent, record);
 	}
 
 	private notifyLater(agent: Owned, record: InputRecord): void {
@@ -768,25 +769,24 @@ export class Agents {
 		const release = trackTreeWork(this.self.rootId);
 		queueMicrotask(() => {
 			try {
-				if (this.closing || record.notified || agent.waiters > 0) return;
-				record.notified = true;
-				// A delivered notification carries the result, so `wait` does not return it again.
-				if (this.notify(boundBlocks([resultBlock({ agent: agent.record, input: record, history: false }, this.ids())], RESULT_TAG, "pi-agents-notification").text)) record.read = true;
-				this.persist(agent);
+				if (this.closing) return;
+				const { kept, notice } = boundText(record.result ?? "", "pi-agents-notification");
+				const id = shortId(agent.record.id, this.ids());
+				const text = `<${RESULT_TAG} name="${agent.record.name}" id="${id}" status="${record.state}">\n${kept}\n</${RESULT_TAG}>${notice ? `\n\n${notice}` : ""}`;
+				const result = { name: agent.record.name, id, status: record.state, body: kept, ...(notice && { notice }) };
+				if (!hold(this.held, agent.record.id, { text, result })) this.notify(text, { results: [result] });
 			} finally {
 				release();
 			}
 		});
 	}
 
-	/** Delivers a notification to this Agent as a steer; returns whether it was delivered. */
-	notify(text: string): boolean {
+	/** Delivers a notification to this Agent as a steer. */
+	notify(text: string, notice: Notice): void {
 		try {
-			deliver(undefined, { id: this.self.id, name: this.self.name(), ownerId: this.self.ownerId, cwd: "", state: "running" }, "steer", text);
-			return true;
+			deliver(undefined, { id: this.self.id, name: this.self.name(), ownerId: this.self.ownerId, cwd: "", state: "running" }, "steer", text, notice);
 		} catch (error) {
 			console.warn(`[pi-agents] notification failed: ${error instanceof Error ? error.message : String(error)}`);
-			return false;
 		}
 	}
 
@@ -823,7 +823,7 @@ export class Agents {
 	}
 
 	private newRecord(agent: Owned): InputRecord {
-		const record: InputRecord = { id: `${agent.record.id}:${agent.record.inputs.length + 1}`, state: "queued", read: false, notified: false };
+		const record: InputRecord = { id: `${agent.record.id}:${agent.record.inputs.length + 1}`, state: "queued" };
 		agent.record.inputs.push(record);
 		return record;
 	}

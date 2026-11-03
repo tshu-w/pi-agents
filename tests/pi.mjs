@@ -26,6 +26,14 @@ export const textOf = (content) => typeof content === "string"
 	? content
 	: content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
 
+/** The notifications a Session has received. */
+export const notificationsOf = (session) =>
+	session.messages.filter((message) => message.role === "custom" && message.details?.results !== undefined);
+
+/** Waits for a notification whose text matches `pattern`, and returns it. */
+export const notification = (session, pattern) =>
+	until(() => notificationsOf(session).find((message) => pattern.test(textOf(message.content))), `notification ${pattern}`);
+
 /** A gate that holds work until opened. */
 export function gate() {
 	let open;

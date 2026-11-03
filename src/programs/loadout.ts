@@ -3,9 +3,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { CODEMODE_TOOL_NAME, type PiCodemode } from "./codemode.ts";
 import { PROGRAM_TOOL_NAME } from "./execute.ts";
 import { shortId } from "../agents/registry.ts";
-import { formatDuration, formatToolCall, moreLines, renderResultList, renderTextResult, startDuration, type DurationState } from "../render-call.ts";
-import type { Truncation } from "../output.ts";
-import { omittedLine, runningLine, type ProgramResultDetails } from "./programs.ts";
+import { formatToolCall, moreLines, renderTextResult, startDuration, type DurationState } from "../render-call.ts";
 
 /** The first line of the `codemode` description, which the `program` intro replaces. */
 const CODEMODE_FIRST_LINE = "Run JavaScript code to orchestrate/compose tool calls\n";
@@ -103,21 +101,9 @@ export function programRenderers(piCodemode: PiCodemode): Renderers {
 			component.setText(text);
 			return component;
 		},
-		// `wait` shows how long it has waited, and when collapsed, each result as a line with the first lines of its output;
-		// the other results render like `codemode`.
+		// `wait` shows how long it has waited; the other results render like `codemode`.
 		renderResult: (result, options, theme, context) => (context.args as { action?: string }).action === "wait"
-			? renderTextResult(result, options, theme, context, () => {
-				const { results = [], running = [], interrupted, ...truncated } = (result.details ?? {}) as { results?: ProgramResultDetails[]; running?: string[]; interrupted?: boolean } & Partial<Truncation>;
-				const only = results[0];
-				// As `renderProgramWait` returns them, no results, or a single completed result alone, show as they are.
-				if (!only || (results.length === 1 && running.length === 0 && only.state === "completed")) return undefined;
-				const ids = [...results.map((entry) => entry.id), ...running];
-				const notes = [omittedLine(results.flatMap((entry) => entry.output === undefined ? [entry.id] : []), ids), runningLine(running, interrupted, ids)];
-				return renderResultList(results.flatMap(({ id, state, wallTimeSeconds, output }) => output === undefined ? [] : [{
-					line: [`Program ${shortId(id, ids)}`, state, ...(wallTimeSeconds === undefined ? [] : [formatDuration(wallTimeSeconds * 1000)])].join("  "),
-					body: output,
-				}]), notes, truncated, theme);
-			})
+			? renderTextResult(result, options, theme, context)
 			: piCodemode.renderResult(result, options, theme, context) as Text,
 	};
 }

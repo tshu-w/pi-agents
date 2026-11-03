@@ -1,21 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { boundBlocks, boundText, type Truncation } from "../output.ts";
+import { boundText } from "../output.ts";
 import { rejectFields } from "../params.ts";
-import { renderResultList, renderTextResult, renderToolCall, startDuration, type DurationState } from "../render-call.ts";
+import { renderTextResult, renderToolCall, startDuration, type DurationState } from "../render-call.ts";
 import { agentSession } from "../roots/rpc.ts";
 import type { RootRuntime } from "../roots/runtime.ts";
-import {
-	resultBlock,
-	RESULT_TAG,
-	steerQueued,
-	THINKING_LEVELS,
-	WAIT_INTERRUPTED,
-	type Limits,
-	type WaitOutcome,
-	type WaitResult,
-} from "./agents.ts";
+import { steerQueued, THINKING_LEVELS, waitText, type Limits } from "./agents.ts";
 import {
 	deliver,
 	label,
@@ -27,51 +18,6 @@ import {
 	type Entry,
 } from "./registry.ts";
 import { listLine, searchEntries } from "./search.ts";
-
-function resultDetails({ agent, input, history }: WaitResult, result?: string) {
-	return { id: agent.id, name: agent.name, state: input.state, history, ...(result === undefined ? {} : { result }) };
-}
-
-type Named = { id: string; name?: string };
-
-/** The line naming the results left out to keep within Pi's output limits. */
-function omittedLine(omitted: Named[], ids: string[]): string {
-	return omitted.length > 0 ? `[Results omitted: ${omitted.map((agent) => label(agent, ids)).join(", ")}. Use wait with fewer targets.]` : "";
-}
-
-/** The line naming the Agents still pending, and that a steer ended the wait if one did. */
-function pendingLine(pending: Named[], interrupted: boolean | undefined, ids: string[]): string {
-	return pending.length > 0 ? `Still pending: ${pending.map((agent) => label(agent, ids)).join(", ")}${interrupted ? `\n${WAIT_INTERRUPTED}` : ""}` : "";
-}
-
-/** Renders wait results; returns the text and the results the caller has now read. */
-function renderWait(outcome: WaitOutcome, ids: string[]): { text: string; read: WaitResult[]; details: Record<string, unknown> } {
-	const { results, pending, interrupted } = outcome;
-	const pendingText = pendingLine(pending, interrupted, ids);
-	const flag = interrupted ? { interrupted } : {};
-	const named = pending.map(({ id, name }) => ({ id, name }));
-	if (results.length === 0) return { text: pendingText || "No results.", read: [], details: { results: [], pending: named, ...flag } };
-	const only = results[0]!;
-	if (results.length === 1 && pending.length === 0 && !only.history && only.input.state === "completed") {
-		const bounded = boundText(only.input.result ?? "", "pi-agents-wait");
-		return { text: bounded.text, read: results, details: { results: [resultDetails(only, bounded.kept)], pending: [], ...bounded.details } };
-	}
-	const blocks = results.map((result) => resultBlock(result, ids));
-	const bounded = boundBlocks(blocks, RESULT_TAG, "pi-agents-wait");
-	let offset = 0;
-	const details = results.map((result, index) => {
-		const block = blocks[index]!;
-		const available = Math.max(0, bounded.kept.length - offset - block.indexOf("\n") - 1);
-		offset += block.length + 2;
-		return resultDetails(result, index < bounded.shown ? (result.input.result ?? "").slice(0, available) : undefined);
-	});
-	let text = bounded.text;
-	const read = results.slice(0, bounded.shown);
-	const omittedText = omittedLine(results.slice(bounded.shown).map((result) => result.agent), ids);
-	if (omittedText) text += `\n\n${omittedText}`;
-	if (pendingText) text += `\n\n${pendingText}`;
-	return { text, read, details: { results: details, pending: named, ...flag, ...bounded.details } };
-}
 
 /** Registers the `agent` tool. */
 export function registerAgentTool(
@@ -99,19 +45,8 @@ export function registerAgentTool(
 			startDuration(context.state as DurationState, args.action === "wait", context.executionStarted);
 			return renderToolCall("agent", args, theme, context.lastComponent);
 		},
-		// `wait` shows how long it has waited, and when collapsed, each result as a line with the first lines of its body.
-		renderResult: (result, options, theme, context) => renderTextResult(result, options, theme, context, (context.args as { action?: string }).action === "wait"
-			? () => {
-				const { results = [], pending = [], interrupted, ...truncated } = (result.details ?? {}) as { results?: ReturnType<typeof resultDetails>[]; pending?: Named[]; interrupted?: boolean } & Partial<Truncation>;
-				const only = results[0];
-				// As `renderWait` returns them, no results, or a single completed result alone, show as they are.
-				if (!only || (results.length === 1 && pending.length === 0 && !only.history && only.state === "completed")) return undefined;
-				const ids = [...results.map((entry) => entry.id), ...pending.map((agent) => agent.id)];
-				const notes = [omittedLine(results.filter((entry) => entry.result === undefined), ids), pendingLine(pending, interrupted, ids)];
-				return renderResultList(results.flatMap((entry) => entry.result === undefined ? [] : [{ line: `${label(entry, ids)}  ${entry.state}`, body: entry.result }]), notes, truncated, theme);
-			}
-			: undefined),
-		description: `Create, message, and coordinate Agents. \`spawn\` creates an Agent and sends its first input; \`send\` sends an input or a write to a visible Agent; \`wait\` waits for owned Agents and returns unread results; \`list\` finds visible Agents; \`abort\` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification with the result. Owned Agents under the same root share \`${maxConcurrent}\` execution slots and a limit of \`${maxOutstanding}\` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.`,
+		renderResult: (result, options, theme, context) => renderTextResult(result, options, theme, context),
+		description: `Create, message, and coordinate Agents. \`spawn\` creates an Agent and sends its first input; \`send\` sends an input or a write to a visible Agent; \`wait\` waits for owned Agents to finish; \`list\` finds visible Agents; \`abort\` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input, its owner receives a notification with the result. Owned Agents under the same root share \`${maxConcurrent}\` execution slots and a limit of \`${maxOutstanding}\` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.`,
 		promptSnippet: "Create, message, and coordinate Agents",
 		promptGuidelines: [
 			"Use `agent(action='spawn', name=..., message=...)` for concrete, bounded work with a clear expected result. Keep the first message self-contained; use `context='fork'` only when the Agent needs the caller's conversation.",
@@ -119,7 +54,7 @@ export function registerAgentTool(
 			"Use `agent(action='wait', ...)` when your next step or answer depends on Agent results. Prefer one longer wait over repeated short polling.",
 		],
 		parameters: Type.Object({
-			action: StringEnum(["spawn", "send", "wait", "list", "abort"] as const, { description: "Operation and applicable parameters: `spawn(name, message, cwd?, context?, model?, thinkingLevel?, disown?)`, `send(target, message, deliverAs?)`, `wait(target?, history?, timeout?)`, `list(query?, state?, limit?, offset?)`, or `abort(target)`." }),
+			action: StringEnum(["spawn", "send", "wait", "list", "abort"] as const, { description: "Operation and applicable parameters: `spawn(name, message, cwd?, context?, model?, thinkingLevel?, disown?)`, `send(target, message, deliverAs?)`, `wait(target?, timeout?)`, `list(query?, state?, limit?, offset?)`, or `abort(target)`." }),
 			name: Type.Optional(Type.String({ description: "Name of the new Agent for `spawn`; unique among the caller's Agents." })),
 			message: Type.Optional(Type.String({ description: "Non-empty text for `spawn` or `send`." })),
 			cwd: Type.Optional(Type.String({ description: "Working directory for `spawn` (default: the caller's current working directory)." })),
@@ -127,9 +62,8 @@ export function registerAgentTool(
 			model: Type.Optional(Type.String({ description: "Model for `spawn` as provider/modelId (default: the caller's model)." })),
 			thinkingLevel: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level for `spawn`: off, minimal, low, medium, high, xhigh, or max (default: the caller's level)." })),
 			disown: Type.Optional(Type.Boolean({ description: "For `spawn`, start a root Agent the caller does not own; it replies with send instead of returning a result (default: false)." })),
-			target: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "Agent ID, name, or unique ID prefix for `send`, `wait`, or `abort`. `wait` and `send` with `deliverAs='write'` also accept an array. When omitted for `wait`, selects all owned Agents with pending or unread results." })),
+			target: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "Agent ID, name, or unique ID prefix for `send`, `wait`, or `abort`. `wait` and `send` with `deliverAs='write'` also accept an array. When omitted for `wait`, selects all owned Agents with pending inputs." })),
 			deliverAs: Type.Optional(StringEnum(["followUp", "steer", "write"] as const, { description: "Delivery for `send` (default: followUp). followUp waits until the recipient's current turn ends; steer delivers after its current tool calls, before the next model call; write delivers like steer but does not wake an idle recipient and has no result." })),
-			history: Type.Optional(Type.Integer({ minimum: 0, description: "Number of most recent read results to return again per selected Agent for `wait` (default: 0)." })),
 			timeout: Type.Optional(Type.Number({ minimum: 10, maximum: 3600, description: "Maximum seconds for `wait` (default: 30, min: 10, max: 3600). Timeout does not abort Agents." })),
 			query: Type.Optional(Type.String({ description: "Search query for `list`, matching ID, name, cwd, summaries, and user messages. Case-insensitive; spaces mean AND; `|` means OR." })),
 			state: Type.Optional(StringEnum(["running", "waiting", "queued", "idle"] as const, { description: "State for `list`: running, waiting, queued, or idle." })),
@@ -144,7 +78,7 @@ export function registerAgentTool(
 			const targets = params.target === undefined ? undefined : Array.isArray(params.target) ? params.target : [params.target];
 			switch (params.action) {
 				case "spawn": {
-					rejectFields(params, "spawn", ["target", "deliverAs", "history", "timeout", "query", "state", "limit", "offset"]);
+					rejectFields(params, "spawn", ["target", "deliverAs", "timeout", "query", "state", "limit", "offset"]);
 					if (!params.name?.trim() || !params.message?.trim()) throw new Error("spawn requires name and message");
 					if (params.disown) {
 						if (params.context === "fork") throw new Error("Only an owned Agent can fork the caller's context.");
@@ -170,7 +104,7 @@ export function registerAgentTool(
 					};
 				}
 				case "send": {
-					rejectFields(params, "send", ["name", "cwd", "context", "model", "thinkingLevel", "history", "timeout", "query", "state", "limit", "offset", "disown"]);
+					rejectFields(params, "send", ["name", "cwd", "context", "model", "thinkingLevel", "timeout", "query", "state", "limit", "offset", "disown"]);
 					const delivery = params.deliverAs ?? "followUp";
 					if (!targets?.length || !params.message?.trim()) throw new Error("send requires target and message");
 					if (targets.length > 1 && delivery !== "write") throw new Error("Only a write can go to several Agents.");
@@ -204,13 +138,15 @@ export function registerAgentTool(
 					// An empty partial result lets the row show the elapsed time.
 					onUpdate?.({ content: [], details: undefined });
 					const session = agentSession(current.sessionManager);
-					const outcome = await agents.wait(selected, params.history ?? 0, params.timeout ?? 30, signal, () => steerQueued(session?.agent));
-					const rendered = renderWait(outcome, ids());
-					agents.markRead(rendered.read);
-					return { content: [{ type: "text", text: rendered.text }], details: rendered.details };
+					const { end, pending } = await agents.wait(selected, params.timeout ?? 30, signal, () => steerQueued(session?.agent));
+					const text = waitText(end, `Still pending: ${pending.map((agent) => label(agent, ids())).join(", ")}`);
+					return {
+						content: [{ type: "text", text }],
+						details: { pending: pending.map(({ id, name }) => ({ id, name })), ...(end === "timedOut" && { timedOut: true }), ...(end === "interrupted" && { interrupted: true }) },
+					};
 				}
 				case "list": {
-					rejectFields(params, "list", ["name", "message", "cwd", "context", "model", "thinkingLevel", "target", "deliverAs", "history", "timeout", "disown"]);
+					rejectFields(params, "list", ["name", "message", "cwd", "context", "model", "thinkingLevel", "target", "deliverAs", "timeout", "disown"]);
 					const offset = params.offset ?? 0;
 					const limit = params.limit ?? 20;
 					const all = await visible(self, signal);
@@ -226,7 +162,7 @@ export function registerAgentTool(
 					return { content: [{ type: "text", text: text.text }], details: { total: items.length, agents, ...text.details } };
 				}
 				case "abort": {
-					rejectFields(params, "abort", ["name", "message", "cwd", "context", "model", "thinkingLevel", "deliverAs", "history", "timeout", "query", "state", "limit", "offset", "disown"]);
+					rejectFields(params, "abort", ["name", "message", "cwd", "context", "model", "thinkingLevel", "deliverAs", "timeout", "query", "state", "limit", "offset", "disown"]);
 					if (targets?.length !== 1) throw new Error("abort requires one target");
 					const agent = agents.ownedTarget(targets[0]!);
 					const aborted = await agents.abort(agent, { silent: true });

@@ -38,7 +38,7 @@ When the user of a root Agent clears its queued messages, messages from other Ag
 
 ### 2.3 wait
 
-`wait` returns results of inputs sent to owned Agents. It can target specific Agents and take a timeout.
+`wait` waits until owned Agents have answered the inputs sent to them. It can target specific Agents and take a timeout.
 
 ### 2.4 list
 
@@ -76,9 +76,9 @@ An input is outstanding from acceptance until its turn ends or it is withdrawn. 
 
 An input sent to an owned Agent ends as `completed` when its turn answers it, `failed` when its turn fails, or `aborted` when it is aborted or withdrawn. Its result is the answer or the error. Only inputs from the owner have results; the recipient replies to other senders with `send`.
 
-`wait` returns unread results in order and marks them read. On timeout, it returns the results so far and names the Agents still pending. A steer input to the waiting Agent, from any sender, ends `wait` the same way; a write does not. It can also return read results again.
+When an input ends, its owner receives a notification carrying the result, unless the owner aborted it or is going offline. The notification is an input delivered as `steer` (a write after the owner's turn is stopped, §2.2).
 
-When an input ends and its owner is not waiting for that Agent, the owner receives a notification, unless the owner aborted it. The notification is an input delivered as `steer` (a write after the owner's turn is stopped, §2.2), and it carries the result, which then counts as read.
+`wait` ends when the Agents it waits for have no pending inputs, when its timeout expires, or when a steer input arrives; a write does not end it. Their notifications are held until it ends, then delivered as one.
 
 A recipient sees each message with its sender's name and ID.
 
@@ -88,7 +88,7 @@ A recipient sees each message with its sender's name and ID.
 
 description:
 
-Create, message, and coordinate Agents. `spawn` creates an Agent and sends its first input; `send` sends an input or a write to a visible Agent; `wait` waits for owned Agents and returns unread results; `list` finds visible Agents; `abort` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification with the result. Owned Agents under the same root share `${maxConcurrent}` execution slots and a limit of `${maxOutstanding}` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.
+Create, message, and coordinate Agents. `spawn` creates an Agent and sends its first input; `send` sends an input or a write to a visible Agent; `wait` waits for owned Agents to finish; `list` finds visible Agents; `abort` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input, its owner receives a notification with the result. Owned Agents under the same root share `${maxConcurrent}` execution slots and a limit of `${maxOutstanding}` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.
 
 promptSnippet:
 
@@ -102,7 +102,7 @@ promptGuidelines:
 
 parameters:
 
-- `action`: Operation and applicable parameters: `spawn(name, message, cwd?, context?, model?, thinkingLevel?, disown?)`, `send(target, message, deliverAs?)`, `wait(target?, history?, timeout?)`, `list(query?, state?, limit?, offset?)`, or `abort(target)`.
+- `action`: Operation and applicable parameters: `spawn(name, message, cwd?, context?, model?, thinkingLevel?, disown?)`, `send(target, message, deliverAs?)`, `wait(target?, timeout?)`, `list(query?, state?, limit?, offset?)`, or `abort(target)`.
 - `name`: Name of the new Agent for `spawn`; unique among the caller's Agents.
 - `message`: Non-empty text for `spawn` or `send`.
 - `cwd`: Working directory for `spawn` (default: the caller's current working directory).
@@ -110,9 +110,8 @@ parameters:
 - `model`: Model for `spawn` as provider/modelId (default: the caller's model).
 - `thinkingLevel`: Thinking level for `spawn`: off, minimal, low, medium, high, xhigh, or max (default: the caller's level).
 - `disown`: For `spawn`, start a root Agent the caller does not own; it replies with send instead of returning a result (default: false).
-- `target`: Agent ID, name, or unique ID prefix for `send`, `wait`, or `abort`. `wait` and `send` with `deliverAs='write'` also accept an array. When omitted for `wait`, selects all owned Agents with pending or unread results.
+- `target`: Agent ID, name, or unique ID prefix for `send`, `wait`, or `abort`. `wait` and `send` with `deliverAs='write'` also accept an array. When omitted for `wait`, selects all owned Agents with pending inputs.
 - `deliverAs`: Delivery for `send` (default: followUp). followUp waits until the recipient's current turn ends; steer delivers after its current tool calls, before the next model call; write delivers like steer but does not wake an idle recipient and has no result.
-- `history`: Number of most recent read results to return again per selected Agent for `wait` (default: 0).
 - `timeout`: Maximum seconds for `wait` (default: 30, min: 10, max: 3600). Timeout does not abort Agents.
 - `query`: Search query for `list`, matching ID, name, cwd, summaries, and user messages. Case-insensitive; spaces mean AND; `|` means OR.
 - `state`: State for `list`: running, waiting, queued, or idle.
@@ -151,36 +150,25 @@ followUp / steer: { id, queued }
 write:           { ids }
 ```
 
-`wait` returns one block per result, followed by pending Agents on timeout:
+`wait` returns how it ended; results arrive as notifications:
 
 ```text
-<agent-result name="<name>" id="<id>" status="<outcome>">
-<answer or error>
-</agent-result>
-
-Still pending: <name> (<id>), ...
+Wait completed.
+Wait timed out. Still pending: <name> (<id>), ...
+Wait interrupted by a new message. Still pending: <name> (<id>), ...
 ```
 
-When a steer input ended the wait, a line follows:
+When none of the selected Agents has pending inputs:
 
 ```text
-Still pending: <name> (<id>), ...
-Stopped waiting for a new message. Wait again to keep waiting.
-```
-
-A result returned again through `history` adds `history="true"`. A single unread completed result, with nothing pending, is returned as the answer alone. When there are no results or pending inputs:
-
-```text
-No results.
+Nothing to wait for.
 ```
 
 Details:
 
 ```text
-{ results: [{ id, name, state, history, result? }], pending: [{ id, name }], interrupted? }
+{ pending: [{ id, name }], timedOut?, interrupted? }
 ```
-
-`state` is the input outcome (§5); `history` marks a previously read result; `interrupted` is `true` when a steer input ended the wait.
 
 `list` returns one entry per Agent, followed by its latest request, if any, and its time. With a query, entries are ordered by their most recent match, and a matching summary or user message shows its latest excerpt instead:
 
@@ -260,13 +248,7 @@ Agent <name> (<id>) did not stop within the timeout and may still be running.
 
 truncation:
 
-Text beyond Pi's output limits is truncated with Pi's native notice, and the full text is saved to a file whose path appears in the notice. A notification's result is truncated the same way and keeps its closing tag. `wait` adds results in order; the result that crosses the limit is truncated but keeps its closing tag, and later results are omitted. A truncated result counts as read. Omitted results stay unread, and the text ends with:
-
-```text
-[Results omitted: <name> (<id>), ... Use wait with fewer targets.]
-```
-
-Details retain metadata, `truncation`, and `fullOutputPath`. `wait.results[].result` contains only retained text and is absent for omitted results.
+Text beyond Pi's output limits is truncated with Pi's native notice, and the full text is saved to a file whose path appears in the notice. A notification's result is truncated the same way and keeps its closing tag. Details retain metadata, `truncation`, and `fullOutputPath`.
 
 messages:
 
@@ -277,6 +259,8 @@ A notification to the owner:
 <answer or error>
 </agent-result>
 ```
+
+A notification that a `wait` held holds one such block per result, separated by blank lines.
 
 A recipient sees each message in an `agent-message` element naming the sender. An input from a sender other than the owner also carries a note asking for a reply:
 
@@ -331,7 +315,7 @@ A message from another Agent shows its sender after the label:
 <body>
 ```
 
-The user's input from the task viewer shows as a user message. `wait` and notifications show each result with the first lines of its body; a Program's body starts at its output:
+The user's input from the task viewer shows as a user message. Notifications show each result with the first lines of its body; a Program's body starts at its output:
 
 ```text
 <name> (<id>)  <state>

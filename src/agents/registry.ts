@@ -1,5 +1,5 @@
 /** The Agents loaded in this process, shared across trees: who sees whom, how targets resolve, and how messages are addressed. */
-import type { Usage } from "@earendil-works/pi-ai";
+import type { ImageContent, Usage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Programs } from "../programs/programs.ts";
 import type { Agents } from "./agents.ts";
@@ -34,7 +34,7 @@ export interface AgentNode {
 	/** An Agent's background Programs, which the task viewer lists. */
 	programs?: Programs;
 	/** Delivers a message to this node; used only for root Agents. */
-	receive(text: string, delivery: Delivery, messageId?: string, sender?: Sender): void;
+	receive(text: string, delivery: Delivery, messageId?: string, sender?: Sender, notice?: Notice): void;
 	/** A root Agent's turn was stopped: messages from other Agents become writes until the user's next input. */
 	stopped?: boolean;
 }
@@ -252,11 +252,30 @@ export function resolveIn(entries: Entry[], target: string): Entry {
 }
 
 /** Sends a message from one Agent to another visible Agent. */
+/** A result a notification carries, as it shows: a Program has no name, and may have a wall time. */
+export interface NotifiedResult {
+	name?: string;
+	id: string;
+	status: string;
+	seconds?: number;
+	/** The text kept within Pi's output limits, and the notice naming the file with the rest. */
+	body: string;
+	notice?: string;
+}
+
+/** What a notification carries: its results, and their images. */
+export interface Notice {
+	results: NotifiedResult[];
+	images?: ImageContent[];
+}
+
+/** Delivers a message from `from`, or with `notice` a notification. */
 export function deliver(
 	from: { id: string; name?: string } | undefined,
 	target: Entry,
 	delivery: Delivery,
 	body: string,
+	notice?: Notice,
 ): { queued: boolean } {
 	const fromOwner = from !== undefined && target.ownerId === from.id;
 	const ids = recipientIds(target);
@@ -265,12 +284,12 @@ export function deliver(
 	if (target.ownerId === undefined) {
 		const node = shared.nodes.get(target.id);
 		if (!node) throw new Error(`${label(target, ids)} is offline.`);
-		node.receive(text, delivery, undefined, by);
+		node.receive(text, delivery, undefined, by, notice);
 		return { queued: false };
 	}
 	const owner = shared.nodes.get(target.ownerId);
 	if (!owner) throw new Error(`${label(target, ids)} is offline.`);
-	return owner.agents.accept(target.id, text, delivery, { fromOwner, notification: from === undefined, sender: by });
+	return owner.agents.accept(target.id, text, delivery, { fromOwner, notice, sender: by });
 }
 
 export const MESSAGE_TAG = "agent-message";
@@ -307,10 +326,24 @@ export function messageBody(text: string, sender: Sender): string | undefined {
 
 /**
  * `messageId` marks a message from a root Agent in another process, so it is added once; `user`
- * marks the user's input from the task viewer, and `sender` the Agent that sent it.
+ * marks the user's input from the task viewer, `sender` the Agent that sent it, and `notice` a notification.
  */
-export function customMessage(text: string, delivery: Delivery, { messageId, user, sender }: { messageId?: string; user?: boolean; sender?: Sender } = {}) {
-	return { customType: MESSAGE_TYPE, content: text, display: true, details: { delivery, ...(messageId ? { messageId } : {}), ...(user ? { user } : {}), ...(sender ? { sender } : {}) } };
+export function customMessage(text: string, delivery: Delivery, { messageId, user, sender, notice }: { messageId?: string; user?: boolean; sender?: Sender; notice?: Notice } = {}) {
+	return {
+		customType: MESSAGE_TYPE,
+		content: notice?.images?.length ? [{ type: "text" as const, text }, ...notice.images] : text,
+		display: true,
+		details: { delivery, ...(messageId ? { messageId } : {}), ...(user ? { user } : {}), ...(sender ? { sender } : {}), ...(notice ? { results: notice.results } : {}) },
+	};
+}
+
+/** The text, sender, and notice of a message `customMessage` made. */
+export function messageParts({ content, details }: { content: string | Array<{ type: string }>; details: { user?: boolean; sender?: Sender; results?: NotifiedResult[] } }) {
+	const parts = typeof content === "string" ? [{ type: "text", text: content }] : content;
+	const text = parts.flatMap((part) => part.type === "text" ? [(part as { text: string }).text] : []).join("\n");
+	const images = parts.filter((part) => part.type === "image") as ImageContent[];
+	const notice = details.results && { results: details.results, ...(images.length ? { images } : {}) };
+	return { text, user: details.user, sender: details.sender, ...(notice ? { notice } : {}) };
 }
 
 export function receivedMessageIds(ctx: ExtensionContext): string[] {
