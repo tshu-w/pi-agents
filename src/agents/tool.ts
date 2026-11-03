@@ -111,7 +111,7 @@ export function registerAgentTool(
 				return renderResultList(results.flatMap((entry) => entry.result === undefined ? [] : [{ line: `${label(entry, ids)}  ${entry.state}`, body: entry.result }]), notes, truncated, theme);
 			}
 			: undefined),
-		description: `Create, message, and coordinate Agents. \`spawn\` creates an owned Agent and sends its first input; \`send\` sends an input or a write to a visible Agent; \`wait\` waits for owned Agents and returns unread results; \`list\` finds visible Agents; \`abort\` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification with the result. Owned Agents under the same root share \`${maxConcurrent}\` execution slots and a limit of \`${maxOutstanding}\` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.`,
+		description: `Create, message, and coordinate Agents. \`spawn\` creates an Agent and sends its first input; \`send\` sends an input or a write to a visible Agent; \`wait\` waits for owned Agents and returns unread results; \`list\` finds visible Agents; \`abort\` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification with the result. Owned Agents under the same root share \`${maxConcurrent}\` execution slots and a limit of \`${maxOutstanding}\` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.`,
 		promptSnippet: "Create, message, and coordinate Agents",
 		promptGuidelines: [
 			"Use `agent(action='spawn', name=..., message=...)` for concrete, bounded work with a clear expected result. Keep the first message self-contained; use `context='fork'` only when the Agent needs the caller's conversation.",
@@ -119,13 +119,14 @@ export function registerAgentTool(
 			"Use `agent(action='wait', ...)` when your next step or answer depends on Agent results. Prefer one longer wait over repeated short polling.",
 		],
 		parameters: Type.Object({
-			action: StringEnum(["spawn", "send", "wait", "list", "abort"] as const, { description: "Operation and applicable parameters: `spawn(name, message, cwd?, context?, model?, thinkingLevel?)`, `send(target, message, deliverAs?)`, `wait(target?, history?, timeout?)`, `list(query?, state?, limit?, offset?)`, or `abort(target)`." }),
+			action: StringEnum(["spawn", "send", "wait", "list", "abort"] as const, { description: "Operation and applicable parameters: `spawn(name, message, cwd?, context?, model?, thinkingLevel?, disown?)`, `send(target, message, deliverAs?)`, `wait(target?, history?, timeout?)`, `list(query?, state?, limit?, offset?)`, or `abort(target)`." }),
 			name: Type.Optional(Type.String({ description: "Name of the new Agent for `spawn`; unique among the caller's Agents." })),
 			message: Type.Optional(Type.String({ description: "Non-empty text for `spawn` or `send`." })),
 			cwd: Type.Optional(Type.String({ description: "Working directory for `spawn` (default: the caller's current working directory)." })),
 			context: Type.Optional(StringEnum(["fresh", "fork"] as const, { description: "Context for `spawn` (default: fresh). fresh starts without the caller's conversation; fork snapshots it." })),
 			model: Type.Optional(Type.String({ description: "Model for `spawn` as provider/modelId (default: the caller's model)." })),
 			thinkingLevel: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level for `spawn`: off, minimal, low, medium, high, xhigh, or max (default: the caller's level)." })),
+			disown: Type.Optional(Type.Boolean({ description: "For `spawn`, start a root Agent the caller does not own; it replies with send instead of returning a result (default: false)." })),
 			target: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "Agent ID, name, or unique ID prefix for `send`, `wait`, or `abort`. `wait` and `send` with `deliverAs='write'` also accept an array. When omitted for `wait`, selects all owned Agents with pending or unread results." })),
 			deliverAs: Type.Optional(StringEnum(["followUp", "steer", "write"] as const, { description: "Delivery for `send` (default: followUp). followUp waits until the recipient's current turn ends; steer delivers after its current tool calls, before the next model call; write delivers like steer but does not wake an idle recipient and has no result." })),
 			history: Type.Optional(Type.Integer({ minimum: 0, description: "Number of most recent read results to return again per selected Agent for `wait` (default: 0)." })),
@@ -145,6 +146,16 @@ export function registerAgentTool(
 				case "spawn": {
 					rejectFields(params, "spawn", ["target", "deliverAs", "history", "timeout", "query", "state", "limit", "offset"]);
 					if (!params.name?.trim() || !params.message?.trim()) throw new Error("spawn requires name and message");
+					if (params.disown) {
+						if (params.context === "fork") throw new Error("Only an owned Agent can fork the caller's context.");
+						if (self.ownerId !== undefined) throw new Error("Only a root Agent can disown an Agent.");
+						const root = agents.disown({ name: params.name, cwd: params.cwd, model: params.model, thinkingLevel: params.thinkingLevel });
+						await roots.send({ id: root.id, label: root.name }, "followUp", params.message, signal);
+						return {
+							content: [{ type: "text", text: `Agent ${label(root, ids())} started.` }],
+							details: { id: root.id, name: root.name, queued: false },
+						};
+					}
 					const { record, queued } = agents.spawn({
 						name: params.name,
 						message: params.message,
@@ -159,7 +170,7 @@ export function registerAgentTool(
 					};
 				}
 				case "send": {
-					rejectFields(params, "send", ["name", "cwd", "context", "model", "thinkingLevel", "history", "timeout", "query", "state", "limit", "offset"]);
+					rejectFields(params, "send", ["name", "cwd", "context", "model", "thinkingLevel", "history", "timeout", "query", "state", "limit", "offset", "disown"]);
 					const delivery = params.deliverAs ?? "followUp";
 					if (!targets?.length || !params.message?.trim()) throw new Error("send requires target and message");
 					if (targets.length > 1 && delivery !== "write") throw new Error("Only a write can go to several Agents.");
@@ -188,7 +199,7 @@ export function registerAgentTool(
 					};
 				}
 				case "wait": {
-					rejectFields(params, "wait", ["name", "message", "cwd", "context", "model", "thinkingLevel", "deliverAs", "query", "state", "limit", "offset"]);
+					rejectFields(params, "wait", ["name", "message", "cwd", "context", "model", "thinkingLevel", "deliverAs", "query", "state", "limit", "offset", "disown"]);
 					const selected = targets?.map((target) => agents.ownedTarget(target));
 					// An empty partial result lets the row show the elapsed time.
 					onUpdate?.({ content: [], details: undefined });
@@ -199,7 +210,7 @@ export function registerAgentTool(
 					return { content: [{ type: "text", text: rendered.text }], details: rendered.details };
 				}
 				case "list": {
-					rejectFields(params, "list", ["name", "message", "cwd", "context", "model", "thinkingLevel", "target", "deliverAs", "history", "timeout"]);
+					rejectFields(params, "list", ["name", "message", "cwd", "context", "model", "thinkingLevel", "target", "deliverAs", "history", "timeout", "disown"]);
 					const offset = params.offset ?? 0;
 					const limit = params.limit ?? 20;
 					const all = await visible(self, signal);
@@ -215,7 +226,7 @@ export function registerAgentTool(
 					return { content: [{ type: "text", text: text.text }], details: { total: items.length, agents, ...text.details } };
 				}
 				case "abort": {
-					rejectFields(params, "abort", ["name", "message", "cwd", "context", "model", "thinkingLevel", "deliverAs", "history", "timeout", "query", "state", "limit", "offset"]);
+					rejectFields(params, "abort", ["name", "message", "cwd", "context", "model", "thinkingLevel", "deliverAs", "history", "timeout", "query", "state", "limit", "offset", "disown"]);
 					if (targets?.length !== 1) throw new Error("abort requires one target");
 					const agent = agents.ownedTarget(targets[0]!);
 					const aborted = await agents.abort(agent, { silent: true });

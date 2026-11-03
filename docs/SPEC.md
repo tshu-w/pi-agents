@@ -6,7 +6,7 @@ Terms follow Pi's [Pi Durable specification](https://github.com/earendil-works/p
 
 ## 1. Semantic model
 
-An **Agent** is an addressable conversation with a stable identity. The Agent that spawns another Agent is its **owner**. A root Agent has no owner and is usually opened by a user. Ownership forms trees.
+An **Agent** is an addressable conversation with a stable identity. The Agent that spawns another Agent is its **owner**, unless it disowns it (§2.1). A root Agent has no owner. Ownership forms trees.
 
 An Agent is shown by its name and **short ID**: the shortest prefix of its ID, at least 8 characters, that no other Agent visible to the reader has. An address is an ID, a name, or a unique ID prefix, tried in that order.
 
@@ -23,6 +23,8 @@ An owner can **wait** for answers to the inputs it sends to its owned Agents.
 ### 2.1 spawn
 
 `spawn` creates a named, owned Agent and sends it a first input. It accepts an optional working directory, model, thinking level, and forked context, and returns the Agent's ID. Names are unique among siblings.
+
+With `disown`, a root Agent's `spawn` starts a root Agent instead, detached in a host (HOSTS §4).
 
 ### 2.2 send
 
@@ -86,7 +88,7 @@ A recipient sees each message with its sender's name and ID.
 
 description:
 
-Create, message, and coordinate Agents. `spawn` creates an owned Agent and sends its first input; `send` sends an input or a write to a visible Agent; `wait` waits for owned Agents and returns unread results; `list` finds visible Agents; `abort` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification with the result. Owned Agents under the same root share `${maxConcurrent}` execution slots and a limit of `${maxOutstanding}` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.
+Create, message, and coordinate Agents. `spawn` creates an Agent and sends its first input; `send` sends an input or a write to a visible Agent; `wait` waits for owned Agents and returns unread results; `list` finds visible Agents; `abort` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input while its owner is not waiting for it, the owner receives a notification with the result. Owned Agents under the same root share `${maxConcurrent}` execution slots and a limit of `${maxOutstanding}` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.
 
 promptSnippet:
 
@@ -100,13 +102,14 @@ promptGuidelines:
 
 parameters:
 
-- `action`: Operation and applicable parameters: `spawn(name, message, cwd?, context?, model?, thinkingLevel?)`, `send(target, message, deliverAs?)`, `wait(target?, history?, timeout?)`, `list(query?, state?, limit?, offset?)`, or `abort(target)`.
+- `action`: Operation and applicable parameters: `spawn(name, message, cwd?, context?, model?, thinkingLevel?, disown?)`, `send(target, message, deliverAs?)`, `wait(target?, history?, timeout?)`, `list(query?, state?, limit?, offset?)`, or `abort(target)`.
 - `name`: Name of the new Agent for `spawn`; unique among the caller's Agents.
 - `message`: Non-empty text for `spawn` or `send`.
 - `cwd`: Working directory for `spawn` (default: the caller's current working directory).
 - `context`: Context for `spawn` (default: fresh). fresh starts without the caller's conversation; fork snapshots it.
 - `model`: Model for `spawn` as provider/modelId (default: the caller's model).
 - `thinkingLevel`: Thinking level for `spawn`: off, minimal, low, medium, high, xhigh, or max (default: the caller's level).
+- `disown`: For `spawn`, start a root Agent the caller does not own; it replies with send instead of returning a result (default: false).
 - `target`: Agent ID, name, or unique ID prefix for `send`, `wait`, or `abort`. `wait` and `send` with `deliverAs='write'` also accept an array. When omitted for `wait`, selects all owned Agents with pending or unread results.
 - `deliverAs`: Delivery for `send` (default: followUp). followUp waits until the recipient's current turn ends; steer delivers after its current tool calls, before the next model call; write delivers like steer but does not wake an idle recipient and has no result.
 - `history`: Number of most recent read results to return again per selected Agent for `wait` (default: 0).

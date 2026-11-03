@@ -22,7 +22,7 @@ Object.assign(process.env, {
 const { pi, PI_PACKAGE, EXTENSION: extension, textOf, until } = await import("./pi.mjs");
 const { statePaths } = await import("../src/roots/paths.mjs");
 const { request } = await import("../src/roots/transport.mjs");
-const { listHosts } = await import("../src/host/client.mjs");
+const { hostSessionFile, listHosts } = await import("../src/host/client.mjs");
 const { reserve } = await import("../src/roots/locks.mjs");
 const { default: lockExtension } = await import("../src/roots/lock-extension.mjs");
 const paths = statePaths();
@@ -116,6 +116,21 @@ test("an input starts the offline root in a host on its active branch, which ans
 		}
 	}, "host exit");
 	assert.equal(existsSync(paths.session(target.id)), false);
+});
+
+test("a disowned Agent is a root in a host of its own, which replies to its spawner", async () => {
+	const cwd = mkdtempSync(join(home, "cwd-"));
+	await assert.rejects(sender.call({ action: "spawn", name: "x", message: "m", disown: true, context: "fork" }), /Only an owned Agent can fork the caller's context/);
+	assert.match(await sender.call({ action: "spawn", name: "keeper", message: "hello", cwd, disown: true }), /^Agent keeper \(\S+\) started\.$/);
+	const listed = await until(async () => (await listHosts(paths)).find((entry) => entry.session?.name === "keeper"), "host");
+	assert.deepEqual([listed.session.cwd, listed.attached], [cwd, false]);
+	const file = hostSessionFile(listed);
+	assert.equal(entriesOf(file)[0].cwd, cwd);
+	assert.ok(!entriesOf(file).some((entry) => entry.customType === "pi-agents-tree"));
+	const answered = await until(() => entriesOf(file).find((entry) => entry.type === "message" && entry.message.role === "assistant"), "answer");
+	assert.match(textOf(answered.message.content), /^answer:<agent-message name="sender" [^>]*note="Reply with send">\nhello\n/);
+	process.kill(listed.pid, "SIGTERM");
+	await until(async () => !(await listHosts(paths)).some((entry) => entry.pid === listed.pid), "host exit");
 });
 
 test("a root whose Session another process holds without answering is busy", async () => {

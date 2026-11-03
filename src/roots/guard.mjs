@@ -35,6 +35,11 @@ export function readSessionHeader(path) {
 
 const installed = Symbol.for('pi-agents.guard');
 
+/** Releases the locks a Session in this process holds, so that another process can open it. */
+export function releaseSession(sm) {
+  Object.getPrototypeOf(sm)[installed]?.release(sm);
+}
+
 /** Patches Pi's Session classes so every persisted Session holds its locks. Idempotent across /reload. */
 export function installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir }) {
   const p = SessionManager.prototype;

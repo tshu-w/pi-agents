@@ -40,7 +40,8 @@ import {
 	type Spend,
 	type TreeMetadata,
 } from "./registry.ts";
-import { defaultSessionDir } from "../roots/paths.mjs";
+import { releaseSession } from "../roots/guard.mjs";
+import { defaultSessionDir, sessionDir as rootSessionDir } from "../roots/paths.mjs";
 
 const AGENT_ENTRY = "pi-agents-agent";
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -91,15 +92,20 @@ function childSessionDirectory(cwd: string, currentCwd: string, currentSessionDi
 	return path.basename(current) === "subagents" ? current : path.join(current, "subagents");
 }
 
-function persistPreparedSession(sessionManager: SessionManager, cwd: string): SessionManager {
+function writePreparedSession(sessionManager: SessionManager): string {
 	const sessionFile = sessionManager.getSessionFile()!;
 	mkdirSync(path.dirname(sessionFile), { recursive: true });
 	// SessionManager flushes itself once it holds an assistant message (a forked context);
-	// otherwise write the prepared entries so the child can be reopened.
+	// otherwise write the prepared entries so the Session can be reopened.
 	if (!existsSync(sessionFile)) {
 		const entries = [sessionManager.getHeader(), ...sessionManager.getEntries()];
 		writeFileSync(sessionFile, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, { flag: "wx" });
 	}
+	return sessionFile;
+}
+
+function persistPreparedSession(sessionManager: SessionManager, cwd: string): SessionManager {
+	const sessionFile = writePreparedSession(sessionManager);
 	return SessionManager.open(sessionFile, path.dirname(sessionFile), cwd);
 }
 
@@ -846,7 +852,31 @@ export class Agents {
 		return this.ctx;
 	}
 
-	private prepare(request: Omit<SpawnRequest, "message">, name: string, id?: string): Prepared {
+	/** Creates the Session of a root Agent the caller does not own; a message to it starts it. */
+	disown(request: Omit<SpawnRequest, "message" | "context">): { id: string; name: string } {
+		const ctx = this.requireContext();
+		const name = request.name.trim();
+		const env = ctx.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "env-state").pop();
+		if (env?.type === "custom" && (env.data as { environment?: string | null }).environment) throw new Error("An Agent in a pi-env environment cannot disown an Agent.");
+		const { model, thinkingLevel } = this.resolveModel(request);
+		const cwd = path.resolve(ctx.cwd, request.cwd ?? ".");
+		// Where Pi keeps the cwd's Sessions without `--session-dir`, which the daemon searches.
+		const configured = path.resolve(rootSessionDir());
+		const sessionDir = configured === path.resolve(this.agentDir, "sessions") ? defaultSessionDir(cwd, this.agentDir) : configured;
+		const sessionManager = SessionManager.create(cwd, sessionDir);
+		sessionManager.appendSessionInfo(name);
+		sessionManager.appendModelChange(model.provider, model.id);
+		sessionManager.appendThinkingLevelChange(thinkingLevel);
+		try {
+			writePreparedSession(sessionManager);
+		} finally {
+			// The Session runs in a process of its own.
+			releaseSession(sessionManager);
+		}
+		return { id: sessionManager.getSessionId(), name };
+	}
+
+	private resolveModel(request: Pick<SpawnRequest, "model" | "thinkingLevel">): Pick<Prepared, "model" | "thinkingLevel"> {
 		const ctx = this.requireContext();
 		let model = ctx.model;
 		if (request.model !== undefined) {
@@ -857,7 +887,12 @@ export class Agents {
 			if (!model) throw new Error(`Unknown model "${request.model}". Use provider/modelId.`);
 		}
 		if (!model) throw new Error("Cannot spawn an Agent without a model.");
-		const thinkingLevel = request.thinkingLevel ?? this.pi.getThinkingLevel();
+		return { model, thinkingLevel: request.thinkingLevel ?? this.pi.getThinkingLevel() };
+	}
+
+	private prepare(request: Omit<SpawnRequest, "message">, name: string, id?: string): Prepared {
+		const ctx = this.requireContext();
+		const { model, thinkingLevel } = this.resolveModel(request);
 		// In a pi-env execution environment, the Agent runs in the same environment and `cwd` is a path there.
 		const envEntry = ctx.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "env-state").pop();
 		const envState = envEntry?.type === "custom" ? structuredClone(envEntry.data) as { environment?: string | null } : undefined;
