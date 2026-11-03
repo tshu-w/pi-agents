@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0] - 2026-11-04
+
+### Added
+
+- `spawn` takes `disown`: a root Agent starts another root Agent it does not own, which replies with `send`.
+- A Program's notification carries the result's images.
+
+### Changed
+
+- **Breaking:** `wait` only waits, for Agents and background Programs, and returns how it ended; results always arrive as notifications, also while waiting. The `history` parameter is removed.
+- The notifications of what a `wait` waits for arrive together when it ends.
+- `pd main` opens the main Agent from any directory, and starts one in `~` if there is none; `/new` in it starts a new main Agent.
+
 ## [0.3.0] - 2026-11-02
 
 ### Added
