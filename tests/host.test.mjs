@@ -94,8 +94,8 @@ test("Pi keeps running in its host when another terminal takes over or the termi
 	assert.deepEqual((await listHosts(paths)).map((entry) => entry.pid), [host.pid]);
 
 	// The detach key works while a dialog has the keyboard.
-	second.child.write("/settings\r");
-	await until(() => second.text().includes("Auto-compact"), "settings dialog");
+	second.child.write("/ask\r");
+	await until(() => second.text().includes("Proceed?"), "editor dialog");
 	second.child.write("\x1a");
 	assert.equal((await second.exited).exitCode, 0);
 	assert.match(stripVTControlCharacters(second.output()), /Pi keeps running\. To reattach: pd attach \S+/);

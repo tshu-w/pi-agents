@@ -114,11 +114,10 @@ test("an owned Agent runs in its owner's execution environment, with cwd resolve
 test("a notification bounds its result text and keeps its closing tag", async () => {
 	const root = await startRoot();
 	try {
-		await root.call({ action: "spawn", name: "long", message: "line\n".repeat(2500) });
+		await root.call({ action: "spawn", name: "long", message: "line\n".repeat(pi.DEFAULT_MAX_LINES + 1) });
 		await root.call({ action: "wait", target: "long", timeout: 10 });
 		const text = textOf((await notification(root.session, /^<agent-result name="long" /)).content);
 		const [, kept, path] = /^([\s\S]*)\n\n\[Showing lines [^\]]* Full output: (\S+)\]$/.exec(text);
-		assert.ok(kept.endsWith("\n</agent-result>"));
 		const full = readFileSync(path, "utf8");
 		assert.ok(kept.startsWith('<agent-result name="long" ') && kept.endsWith("\n</agent-result>"));
 		assert.ok(full.startsWith("answer:line\n") && full.length > kept.length && kept.includes(full.slice(0, 1000)));
