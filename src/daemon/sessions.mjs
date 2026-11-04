@@ -1,8 +1,8 @@
 import { constants } from 'node:fs';
 import { open, readFile, realpath, rename } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { relative } from 'node:path';
-import { discoverRoots } from '../roots/discovery.mjs';
+import { relative, resolve } from 'node:path';
+import { discoverRoots, readRootFile } from '../roots/discovery.mjs';
 import { isLocked } from '../roots/locks.mjs';
 
 const MARKS_VERSION = 1;
@@ -11,6 +11,15 @@ async function readMarks(file) {
   try {
     const value = JSON.parse(await readFile(file, 'utf8'));
     if (value?.version === MARKS_VERSION && value.sessions && typeof value.sessions === 'object') return value.sessions;
+  } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
+  return {};
+}
+
+/** The main Agents' Session files by entry name, as `main.json` maps them; an old `{ sessionFile }` is the entry `main`. */
+async function readMains(file) {
+  try {
+    const entries = JSON.parse(await readFile(file, 'utf8'));
+    return typeof entries.sessionFile === 'string' ? { main: entries.sessionFile } : entries;
   } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
   return {};
 }
@@ -49,9 +58,13 @@ export async function createSessions(paths, sessionDir) {
   function finished(id, turn) {
     const mark = marks[id] ??= {};
     if (mark.last && mark.last.at >= turn.at) return false;
-    mark.last = { at: turn.at, failed: turn.failed === true };
+    // Another Agent's turn that went well and was answered leaves nothing for the user.
+    const quiet = turn.by === 'agent' && turn.replied === true && turn.failed !== true;
+    mark.last = { at: turn.at, failed: turn.failed === true, ...(quiet ? { quiet } : {}) };
     return true;
   }
+
+  const unseen = mark => mark?.last && !mark.last.quiet && (mark.seen ?? 0) < mark.last.at;
 
   return {
     /**
@@ -104,13 +117,19 @@ export async function createSessions(paths, sessionDir) {
       save();
     },
     files,
-    /** Root Sessions the workbench lists: running ones, listed ones, and ones with an unseen turn. */
+    /** Root Sessions the workbench lists: running ones, listed ones, ones with an unseen turn, and main Agents, named by `main`. */
     async list({ signal } = {}) {
       const ids = new Set(live.keys());
       for (const [id, mark] of Object.entries(marks)) {
-        if (mark.listed || (mark.last && (mark.seen ?? 0) < mark.last.at)) ids.add(id);
+        if (mark.listed || unseen(mark)) ids.add(id);
       }
       const records = await discoverRoots(sessionDir, { extraFiles: files(), ids, signal });
+      const mains = new Map(Object.entries(await readMains(paths.mainSession)).map(([name, file]) => [resolve(file), name]));
+      for (const file of mains.keys()) {
+        if (records.some(record => resolve(record.sessionFile) === file)) continue;
+        const record = await readRootFile(file, { signal });
+        if (record) records.push(record);
+      }
       const rows = new Map();
       for (const record of records) {
         let status = 'idle';
@@ -127,8 +146,9 @@ export async function createSessions(paths, sessionDir) {
       }
       return [...rows.values()].map(row => {
         const mark = marks[row.id];
-        const attention = mark?.last && (mark.seen ?? 0) < mark.last.at ? (mark.last.failed ? 'failed' : 'done') : undefined;
-        return { ...row, ...(attention ? { attention } : {}), ...(mark?.last ? { finishedAt: mark.last.at } : {}) };
+        const attention = unseen(mark) ? (mark.last.failed ? 'failed' : 'done') : undefined;
+        const main = row.sessionFile && mains.get(resolve(row.sessionFile));
+        return { ...row, ...(attention ? { attention } : {}), ...(mark?.last ? { finishedAt: mark.last.at } : {}), ...(main ? { main } : {}) };
       });
     },
     saved: () => saving,

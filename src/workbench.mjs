@@ -141,7 +141,8 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     const list = [];
     const sorted = sessions.map(session => ({ session, time: time(session) })).sort((a, b) => b.time - a.time).map(entry => entry.session);
     for (const [state, title, note] of GROUPS) {
-      const members = sorted.filter(session => stateOf(session) === state);
+      // Main Agents come first in their group.
+      const members = sorted.filter(session => stateOf(session) === state).sort((a, b) => !a.main - !b.main);
       if (list.length) list.push({ gap: true });
       list.push({ header: title });
       if (!members.length) list.push({ note });
@@ -188,7 +189,8 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     const pointer = isSelected ? theme.fg('accent', theme.bold('❯ ')) : '  ';
     const { session } = row;
     const nameWidth = Math.min(32, Math.max(12, Math.floor(width * 0.3)));
-    const name = T.truncateToWidth(label(session), nameWidth, '…', true);
+    const fitted = T.truncateToWidth(label(session), nameWidth, '…', true);
+    const name = session.main ? theme.fg('accent', fitted) : fitted;
     const right = theme.fg('dim', `  ${age(time(session)).padStart(3)}`);
     const room = width - 4 - nameWidth - 2 - T.visibleWidth(right);
     const middle = room > 0 ? T.truncateToWidth(activity(session), room, '…', true) : '';

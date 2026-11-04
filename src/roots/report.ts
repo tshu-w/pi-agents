@@ -1,5 +1,5 @@
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { onTreeChange, treeMetadata } from "../agents/registry.ts";
+import { MESSAGE_TYPE, onTreeChange, treeMetadata, type Sender } from "../agents/registry.ts";
 import { ensureDaemon } from "../daemon/client.mjs";
 import { statePaths, sessionDir as resolveSessionDir } from "./paths.mjs";
 import { openStream } from "./transport.mjs";
@@ -39,6 +39,11 @@ function toolLabel(name: string, args: unknown): string {
  * Reports this root Session's state to the daemon while it is loaded: whether it works, its
  * running tool, its last reply and finished turn, and whether a terminal shows it. The daemon
  * forwards interrupts from the workbench.
+ *
+ * A turn is the user's when it took in a message from the user, and an Agent's when it took in only
+ * messages from other Agents; one that took in neither, such as notifications, continues the
+ * previous turn's. An Agent's turns have `replied` once every Agent whose message started them has
+ * had a `send` back.
  */
 export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 	const paths = statePaths();
@@ -49,7 +54,14 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let dialog = false;
 	let tools = new Map<string, string>();
-	let turn: { at: number; failed: boolean } | undefined;
+	let turn: { at: number; failed: boolean; by: "user" | "agent"; replied?: boolean } | undefined;
+	let by: "user" | "agent" = "user";
+	// This run's messages from the user and from other Agents, and the IDs it sent to.
+	let fromUser = false;
+	let senders: Sender[] = [];
+	let sent: string[] = [];
+	// The Agents whose messages started the current Agent's turns and have had no reply yet.
+	let unanswered: Sender[] = [];
 	let reply: string | undefined;
 	let title: string | undefined;
 	let unsubscribe: (() => void) | undefined;
@@ -132,6 +144,14 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 		dialog = false;
 		tools = new Map();
 		turn = reply = title = undefined;
+		by = "user";
+		fromUser = false;
+		senders = sent = unanswered = [];
+	});
+	pi.on("message_end", (event) => {
+		const message = event.message as { role: string; customType?: string; details?: { delivery?: string; sender?: Sender } };
+		if (message.role === "user") fromUser = true;
+		else if (message.role === "custom" && message.customType === MESSAGE_TYPE && message.details?.sender && message.details.delivery !== "write") senders.push(message.details.sender);
 	});
 	pi.on("session_info_changed", () => changed());
 	pi.on("agent_start", () => changed());
@@ -141,6 +161,8 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 		changed();
 	});
 	pi.on("tool_execution_end", (event) => {
+		const details = event.result?.details as { id?: string; ids?: string[] } | undefined;
+		if (event.toolName === "agent" && !event.isError && details) sent.push(...details.ids ?? (details.id ? [details.id] : []));
 		if (tools.delete(event.toolCallId)) changed();
 	});
 	pi.on("ui_prompt_start", () => {
@@ -154,7 +176,19 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 		const last = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
 		const message = last?.type === "message" && last.message.role === "assistant" ? last.message : undefined;
 		reply = message ? firstLine(textOf(message.content)) || firstLine(message.errorMessage ?? "") : undefined;
-		turn = { at: Date.now(), failed: !event.aborted && message?.stopReason === "error" };
+		if (fromUser) {
+			by = "user";
+			unanswered = [];
+		} else if (senders.length > 0) {
+			by = "agent";
+			unanswered.push(...senders);
+		}
+		// A sender is named by its shortest unique ID prefix.
+		unanswered = unanswered.filter((sender) => !sent.some((id) => id.startsWith(sender.id)));
+		fromUser = false;
+		senders = [];
+		sent = [];
+		turn = { at: Date.now(), failed: !event.aborted && message?.stopReason === "error", by, ...(by === "agent" && { replied: unanswered.length === 0 }) };
 		tools = new Map();
 		changed();
 	});

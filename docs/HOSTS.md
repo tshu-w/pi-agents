@@ -70,11 +70,11 @@ A detached Session exits after 10 minutes with no live work in its tree and no `
 
 The list shows running Sessions, Sessions that ran without a terminal (started here, woken by a message, or detached), Sessions opened here, and Sessions with an unseen turn. Older Sessions are reached with `/resume`.
 
-Each row shows a root Session's name and what it did last. The name is the Session name, or else the first line of its first message. While the Session works, the row shows the running tool; otherwise, the start of its last reply. Running owned Agents and Programs are counted, as in `3 agents running`.
+Each row shows a root Session's name and what it did last. The name is the Session name, or else the first line of its first message. While the Session works, the row shows the running tool; otherwise, the start of its last reply. Running owned Agents and Programs are counted, as in `3 agents running`. A main Agent is always listed, first in its group, with its name highlighted.
 
 Rows are grouped by state, newest first in each group:
 
-- **Needs attention**: a dialog waiting for the user, or a finished turn the user has not seen. A turn that failed after Pi's retries, or a host that exited abnormally, is marked failed.
+- **Needs attention**: a dialog waiting for the user, or a finished turn the user has not seen, unless it answered another Agent's message with `send` and did not fail. A turn that failed after Pi's retries, or a host that exited abnormally, is marked failed.
 - **Working**: the Session or its tree has live work.
 - **Completed**: everything else.
 

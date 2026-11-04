@@ -44,3 +44,27 @@ test('a turn that ends while no terminal is attached needs attention until one a
   assert.deepEqual(await attention(), { a: 'failed', b: undefined, d: undefined });
   await sessions.saved();
 });
+
+test('main Agents are always listed and named; another Agent\'s turn needs attention only if it failed or did not reply', async t => {
+  const base = await mkdtemp('/tmp/pa-main-');
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const paths = statePaths({ PI_AGENTS_STATE_DIR: base });
+  const sessionDir = join(base, 'sessions');
+  await mkdir(join(sessionDir, 'project'), { recursive: true });
+  const file = id => join(sessionDir, 'project', `${id}.jsonl`);
+  for (const id of ['a', 'b', 'c', 'd', 'e']) await writeFile(file(id), JSON.stringify({ type: 'session', version: 3, id, cwd: base, timestamp: new Date().toISOString() }) + '\n');
+  const sessions = await createSessions(paths, sessionDir);
+  const rows = async () => Object.fromEntries((await sessions.list()).map(row => [row.id, [row.main, row.attention]]));
+
+  await writeFile(paths.mainSession, JSON.stringify({ main: file('a') }));
+  assert.deepEqual(await rows(), { a: ['main', undefined] });
+  // After `/new`, the entry names the new Session, and the previous one is an ordinary Session.
+  await writeFile(paths.mainSession, JSON.stringify({ main: file('b') }));
+  assert.deepEqual(await rows(), { b: ['main', undefined] });
+
+  sessions.update({ id: 'c', attached: false, turn: { at: 1, failed: false, by: 'agent', replied: true } });
+  sessions.update({ id: 'd', attached: false, turn: { at: 1, failed: false, by: 'agent', replied: false } });
+  sessions.update({ id: 'e', attached: false, turn: { at: 1, failed: true, by: 'agent', replied: true } });
+  assert.deepEqual(await rows(), { b: ['main', undefined], c: [undefined, undefined], d: [undefined, 'done'], e: [undefined, 'failed'] });
+  await sessions.saved();
+});
