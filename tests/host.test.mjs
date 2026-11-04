@@ -46,10 +46,10 @@ const paths = statePaths();
 const client = fileURLToPath(new URL("../bin/pd.mjs", import.meta.url));
 
 /** Runs the `pi` client in a terminal of its own. */
-function terminal(args, env = process.env) {
+function terminal(args, env = process.env, cwd = home) {
 	const [cols, rows] = [100, 30];
 	const screen = new Terminal({ cols, rows, allowProposedApi: true });
-	const child = pty.spawn(process.execPath, [client, ...args], { cols, rows, cwd: home, env });
+	const child = pty.spawn(process.execPath, [client, ...args], { cols, rows, cwd, env });
 	let output = "";
 	child.onData((data) => { output += data; screen.write(data); });
 	// The terminal answers what Pi asks of it.
@@ -164,11 +164,12 @@ test("pd main --name opens the main Agent of that entry, and an old main.json na
 	assert.equal(hostSessionFile(main), file);
 	first.child.write("\x1a");
 	assert.equal((await first.exited).exitCode, 0);
-	// Another entry starts another main Agent, named after it and started in ~.
-	const second = terminal(["main", "--name", "work"]);
+	// Another entry starts another main Agent, named after it and started in the current directory.
+	const project = mkdtempSync(join(home, "project-"));
+	const second = terminal(["main", "--name", "work"], process.env, project);
 	const work = await until(async () => (await listHosts(paths)).find((entry) => entry.session && entry.pid !== main.pid), "work host");
 	assert.notEqual(work.session.id, main.session.id);
-	assert.deepEqual([work.session.name, work.session.cwd], ["work", realpathSync(homedir())]);
+	assert.deepEqual([work.session.name, work.session.cwd], ["work", realpathSync(project)]);
 	assert.deepEqual(JSON.parse(readFileSync(paths.mainSession, "utf8")), { main: file, work: hostSessionFile(work) });
 	second.child.write("\x1a");
 	assert.equal((await second.exited).exitCode, 0);

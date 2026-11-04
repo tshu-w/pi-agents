@@ -155,9 +155,13 @@ function headlessMode() {
   if (!interactive || parsed.print) return 'text';
 }
 
-/** Opens the main Agent of the entry `--name` picks (default `main`), from any directory, or starts one in `~` if there is none. */
+/**
+ * Opens the main Agent of the entry `--name` picks (default `main`), from any directory, or starts one if there is none:
+ * the default one in `~`, another in the current directory.
+ */
 async function openMain() {
-  const name = parseArgs(args.slice(1)).name ?? 'main';
+  const named = parseArgs(args.slice(1)).name;
+  const name = named ?? 'main';
   // `--name` picks the entry, so it does not rename the Session.
   const options = argGroups(parseArgs, args.slice(1)).filter(([option]) => !['--name', '-n'].includes(option)).flat();
   let file;
@@ -170,7 +174,7 @@ async function openMain() {
   const holds = host => hostSessionFile(host) === file;
   if (file && (existsSync(file) || (await settledHosts(paths, holds)).some(holds))) args = ['--session', file, ...options];
   else {
-    process.chdir(homedir());
+    if (named === undefined) process.chdir(homedir());
     // These go first, as messages may follow `--`; with `=`, `--main` takes no other argument as its value.
     args = [`--main=${name}`, '--name', name, ...options];
   }
