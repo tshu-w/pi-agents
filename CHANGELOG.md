@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.1] - 2026-11-04
+
+### Added
+
+- `pd main --name <name>` opens a main Agent per name, so that each channel can have its own.
+
+### Changed
+
+- Inputs answered by the same turn share one notification.
+
 ## [0.4.0] - 2026-11-04
 
 ### Added
