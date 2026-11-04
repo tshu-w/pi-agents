@@ -549,7 +549,7 @@ export class Agents {
 		const turn = agent.turn;
 		if (!turn && agent.queue.length === 0) return false;
 		if (silent) for (const input of [...agent.queue, ...(turn?.inputs ?? [])]) input.silent = true;
-		for (const input of agent.queue.splice(0)) this.end(agent, input, "aborted", "");
+		this.end(agent, agent.queue.splice(0), "aborted", "");
 		this.changed();
 		if (turn) await this.stop(agent, turn, deadline);
 		return true;
@@ -560,7 +560,7 @@ export class Agents {
 		const index = agent.queue.indexOf(input);
 		if (index !== -1) {
 			agent.queue.splice(index, 1);
-			this.end(agent, input, "aborted", "");
+			this.end(agent, [input], "aborted", "");
 			this.changed();
 		} else if (agent.turn?.inputs.includes(input)) {
 			await this.stop(agent, agent.turn, Date.now() + SHUTDOWN_TIMEOUT_MS);
@@ -736,31 +736,40 @@ export class Agents {
 		turn.finished = true;
 		if (turn.slot) scheduler.release(this.self.rootId, agent.record.id);
 		if (agent.turn === turn) agent.turn = undefined;
-		for (const input of turn.inputs) this.end(agent, input, answer.outcome, answer.result);
+		this.end(agent, turn.inputs, answer.outcome, answer.result);
 		turn.done.resolve();
 		this.changed();
 		this.pump(agent);
 	}
 
-	private end(agent: Owned, input: Input, outcome: Outcome, result: string): void {
-		if (input.permit) scheduler.releaseOutstanding(this.self.rootId, input.permit);
-		input.permit = undefined;
-		const record = input.record;
-		if (!record || ended(record)) return;
-		if (input.schema !== undefined && outcome !== "aborted") {
-			if (input.submitted) {
-				outcome = "completed";
-				record.value = input.submitted.value;
-			} else if (outcome === "completed") {
-				outcome = "failed";
-				result = `The turn ended without calling ${SUBMIT_RESULT_TOOL_NAME}.`;
+	/** Ends inputs together; those that end with the same state and result share one notification. */
+	private end(agent: Owned, inputs: Input[], outcome: Outcome, result: string): void {
+		const answers = new Map<string, InputRecord>();
+		let changed = false;
+		for (const input of inputs) {
+			if (input.permit) scheduler.releaseOutstanding(this.self.rootId, input.permit);
+			input.permit = undefined;
+			const record = input.record;
+			if (!record || ended(record)) continue;
+			changed = true;
+			record.state = outcome;
+			record.result = result;
+			if (input.schema !== undefined && outcome !== "aborted") {
+				if (input.submitted) {
+					record.state = "completed";
+					record.value = input.submitted.value;
+				} else if (outcome === "completed") {
+					record.state = "failed";
+					record.result = `The turn ended without calling ${SUBMIT_RESULT_TOOL_NAME}.`;
+				}
 			}
+			input.done?.resolve();
+			if (input.silent) continue;
+			const key = JSON.stringify([record.state, record.result]);
+			if (!answers.has(key)) answers.set(key, record);
 		}
-		record.state = outcome;
-		record.result = result;
-		this.persist(agent);
-		input.done?.resolve();
-		if (!input.silent) this.notifyLater(agent, record);
+		if (changed) this.persist(agent);
+		for (const record of answers.values()) this.notifyLater(agent, record);
 	}
 
 	private notifyLater(agent: Owned, record: InputRecord): void {

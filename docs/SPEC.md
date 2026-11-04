@@ -38,7 +38,7 @@ When the user of a root Agent clears its queued messages, messages from other Ag
 
 ### 2.3 wait
 
-`wait` waits until owned Agents have answered the inputs sent to them. It can target specific Agents and take a timeout.
+`wait` waits until owned Agents have finished the inputs sent to them. It can target specific Agents and take a timeout.
 
 ### 2.4 list
 
@@ -52,11 +52,11 @@ When the user of a root Agent clears its queued messages, messages from other Ag
 
 An Agent is `running` while a turn is in progress, `waiting` while its turn waits in `wait` (§4), `queued` while its next turn waits for a slot (§4), and `idle` otherwise. An Agent goes offline when its runtime unloads it; it stays `idle`.
 
-`send` returns once the recipient's runtime accepts the message, waking it if needed. Acceptance does not mean the recipient has handled it; a message not yet handled is lost if the recipient exits.
+`send` returns once the recipient's runtime accepts the message, waking it if needed. Acceptance does not mean the recipient has handled it (§10).
 
 An input to an offline Agent wakes it; a write to one is rejected.
 
-Owned Agents run independently of their owner's turns. When their owner goes offline, they go offline too, from the bottom of the tree up, and their unfinished inputs end as `aborted`. They return as `idle` when their owner is loaded again.
+Owned Agents run independently of their owner's turns and go offline with it (§10). They return as `idle` when their owner is loaded again.
 
 On abort or when going offline, work that has not stopped within a timeout is abandoned: it no longer counts as live work and may keep running until the process exits; the timeout is reported.
 
@@ -76,7 +76,7 @@ An input is outstanding from acceptance until its turn ends or it is withdrawn. 
 
 An input sent to an owned Agent ends as `completed` when its turn answers it, `failed` when its turn fails, or `aborted` when it is aborted or withdrawn. Its result is the answer or the error. Only inputs from the owner have results; the recipient replies to other senders with `send`.
 
-When an input ends, its owner receives a notification carrying the result, unless the owner aborted it or is going offline. The notification is an input delivered as `steer` (a write after the owner's turn is stopped, §2.2).
+When an input ends, its owner receives a notification carrying the result, unless the owner aborted it or is going offline. Inputs that a turn ends with the same outcome and result share one notification. The notification is an input delivered as `steer` (a write after the owner's turn is stopped, §2.2).
 
 `wait` ends when the Agents it waits for have no pending inputs, when its timeout expires, or when a steer input arrives; a write does not end it. Their notifications are held until it ends, then delivered as one.
 
@@ -362,3 +362,10 @@ Invalid settings produce a startup warning, and the defaults are used.
 Each Agent is a persistent Pi Session. A root Agent is an ordinary Session. An owned Agent is a child Session that records its owner and root, and runs in its owner's process.
 
 A delivered message enters the recipient's current branch. An offline root Agent is started in a host, detached, with its saved working directory and model and the current configuration (HOSTS §4). If a root process cannot finish cleanup within a grace period on exit, it is forcibly terminated. Before shutting down an idle Session, another extension can emit `busy:query` on `pi.events` with `{ busy: false }`; it is set to `true` while the tree has live work. One runtime uses a Session at a time. If a Session is occupied at startup, Pi reports it and exits.
+
+## 10. Limitations
+
+In this version:
+
+- A message accepted but not yet handled is lost if the recipient exits.
+- When an owner goes offline, its owned Agents go offline too, from the bottom of the tree up, and their unfinished inputs end as `aborted`, as do inputs unfinished when a process exits.

@@ -224,7 +224,7 @@ test("inputs queue for a slot and are rejected beyond the input limit", async ()
 	await root.close();
 });
 
-test("a steer input joins the current turn, and a followUp input gets its own turn", async () => {
+test("a steer input joins the current turn and shares its notification, and a followUp input gets its own turn", async () => {
 	const root = await startRoot();
 	root.state.hold = gate();
 	await root.call({ action: "spawn", name: "worker", message: "one" });
@@ -233,7 +233,9 @@ test("a steer input joins the current turn, and a followUp input gets its own tu
 	await root.call({ action: "send", target: "worker", message: "three" });
 	root.state.hold.open();
 	await root.call({ action: "wait", target: "worker", timeout: 10 });
-	assert.deepEqual((await resultsOf(root, 3)).map(([, , result]) => result), ["answer:two|seen:one,two", "answer:two|seen:one,two", "answer:three|seen:one,two,three"]);
+	await resultsOf(root, 2);
+	await root.session.waitForIdle();
+	assert.deepEqual((await resultsOf(root, 2)).map(([, , result]) => result), ["answer:two|seen:one,two", "answer:three|seen:one,two,three"]);
 	await root.close();
 });
 
