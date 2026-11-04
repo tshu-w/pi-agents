@@ -155,20 +155,24 @@ function headlessMode() {
   if (!interactive || parsed.print) return 'text';
 }
 
-/** Opens the main Agent that `main.json` names, from any directory, or starts one in `~` if there is none. */
+/** Opens the main Agent of the entry `--name` picks (default `main`), from any directory, or starts one in `~` if there is none. */
 async function openMain() {
-  const options = args.slice(1);
+  const name = parseArgs(args.slice(1)).name ?? 'main';
+  // `--name` picks the entry, so it does not rename the Session.
+  const options = argGroups(parseArgs, args.slice(1)).filter(([option]) => !['--name', '-n'].includes(option)).flat();
   let file;
-  try { file = JSON.parse(readFileSync(paths.mainSession, 'utf8')).sessionFile; }
-  catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
+  // `main.json` maps entry names to Session files; an old one holds `{ sessionFile }` for `main`.
+  try {
+    const entries = JSON.parse(readFileSync(paths.mainSession, 'utf8'));
+    file = typeof entries.sessionFile === 'string' ? { main: entries.sessionFile }[name] : entries[name];
+  } catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
   // A main Agent without messages has no file yet, but its host may be running.
   const holds = host => hostSessionFile(host) === file;
   if (file && (existsSync(file) || (await settledHosts(paths, holds)).some(holds))) args = ['--session', file, ...options];
   else {
     process.chdir(homedir());
-    // These go first, as messages may follow `--`, and `--main` before a message would take it as its value.
-    // A `--name` among the options comes later and wins.
-    args = ['--main', '--name', 'main', ...options];
+    // These go first, as messages may follow `--`; with `=`, `--main` takes no other argument as its value.
+    args = [`--main=${name}`, '--name', name, ...options];
   }
   parsed = parseArgs(args);
 }

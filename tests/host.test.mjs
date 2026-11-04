@@ -130,7 +130,7 @@ test("pd main opens the one main Agent, named main and started in ~, from any di
 	const host = await until(async () => (await listHosts(paths)).find((entry) => entry.session), "host");
 	assert.equal(host.session.cwd, realpathSync(homedir()));
 	assert.equal(host.session.name, "main");
-	assert.equal(JSON.parse(readFileSync(paths.mainSession, "utf8")).sessionFile, hostSessionFile(host));
+	assert.equal(JSON.parse(readFileSync(paths.mainSession, "utf8")).main, hostSessionFile(host));
 	first.child.write("\x1a");
 	assert.equal((await first.exited).exitCode, 0);
 	// Opened again, it is the same Session, even before it has a file.
@@ -153,6 +153,32 @@ test("pd main opens the one main Agent, named main and started in ~, from any di
 	third.child.write("\x1a");
 	assert.equal((await third.exited).exitCode, 0);
 	process.kill(continued.pid, "SIGTERM");
+	await until(async () => (await listHosts(paths)).length === 0, "host exit");
+});
+
+test("pd main --name opens the main Agent of that entry, and an old main.json names the default one", async () => {
+	const file = JSON.parse(readFileSync(paths.mainSession, "utf8")).main;
+	writeFileSync(paths.mainSession, JSON.stringify({ sessionFile: file }));
+	const first = terminal(["main"]);
+	const main = await until(async () => (await listHosts(paths)).find((entry) => entry.session), "host");
+	assert.equal(hostSessionFile(main), file);
+	first.child.write("\x1a");
+	assert.equal((await first.exited).exitCode, 0);
+	// Another entry starts another main Agent, named after it and started in ~.
+	const second = terminal(["main", "--name", "work"]);
+	const work = await until(async () => (await listHosts(paths)).find((entry) => entry.session && entry.pid !== main.pid), "work host");
+	assert.notEqual(work.session.id, main.session.id);
+	assert.deepEqual([work.session.name, work.session.cwd], ["work", realpathSync(homedir())]);
+	assert.deepEqual(JSON.parse(readFileSync(paths.mainSession, "utf8")), { main: file, work: hostSessionFile(work) });
+	second.child.write("\x1a");
+	assert.equal((await second.exited).exitCode, 0);
+	// Opened again by its entry, it is the same Session.
+	const third = terminal(["main", "--name", "work"]);
+	await until(() => third.text().includes("work"), "attached");
+	assert.deepEqual((await listHosts(paths)).map((entry) => entry.session.id).sort(), [main.session.id, work.session.id].sort());
+	third.child.write("\x1a");
+	assert.equal((await third.exited).exitCode, 0);
+	for (const host of [main, work]) process.kill(host.pid, "SIGTERM");
 	await until(async () => (await listHosts(paths)).length === 0, "host exit");
 });
 
