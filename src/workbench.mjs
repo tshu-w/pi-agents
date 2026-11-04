@@ -520,22 +520,44 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
   function conversation(messages) {
     const markdown = themes.getMarkdownTheme();
     const view = new T.Container();
+    let steps = 0, retries = 0, custom = false;
     let tools = [];
-    // Pi's hint for folded output: "... (36 more lines, …)".
-    const summarize = summary => {
-      view.addChild(new T.Spacer(1));
-      view.addChild(new T.Text(theme.fg('muted', `... (${summary})`), 1, 0));
+    // Pi's hint for folded output: "... (36 more lines, …)"; `names` are dropped from the end, then elided, until it fits.
+    const summarize = (head, names = [], warning = '') => {
+      if (!(view.children.at(-1) instanceof T.Spacer)) view.addChild(new T.Spacer(1));
+      const tail = (warning ? theme.fg('muted', ' · ') + theme.fg('warning', warning) : '') + theme.fg('muted', ')');
+      const line = shown => ` ${theme.fg('muted', `... (${head}${shown.length ? `: ${shown.join(', ')}` : ''}`)}${tail}`;
+      view.addChild({
+        invalidate() {},
+        render(width) {
+          let label = line(names);
+          for (let count = names.length - 1; count >= 0 && T.visibleWidth(label) > width; count--) label = line([...names.slice(0, count), '…']);
+          return [T.truncateToWidth(label, width)];
+        },
+      });
     };
     const fold = () => {
-      if (!tools.length) return;
-      summarize(`${tools.length} tool call${tools.length > 1 ? 's' : ''}: ${[...new Set(tools)].join(', ')}`);
+      if (!steps && !retries) return;
+      const retry = retries ? `${retries} ${retries > 1 ? 'retries' : 'retry'}` : '';
+      if (steps) summarize(`${steps} step${steps > 1 ? 's' : ''}`, [...new Set(tools), ...(custom ? ['messages'] : [])], retry);
+      else summarize(retry);
+      steps = retries = 0;
+      custom = false;
       tools = [];
     };
-    for (const message of messages) {
+    const isUser = message => message.role === 'user' || (message.role === 'custom' && message.customType === 'pi-agents' && message.details?.user);
+    // A failure is recovered when its turn goes on before the next user input.
+    const recovered = index => {
+      for (const message of messages.slice(index + 1)) {
+        if (isUser(message)) return false;
+        if (message.role === 'assistant') return true;
+      }
+      return false;
+    };
+    for (const [index, message] of messages.entries()) {
       // As in Pi's chat, a custom message not for display is skipped.
       if (message.role === 'custom' && !message.display) continue;
-      const user = message.role === 'user' || (message.role === 'custom' && message.customType === 'pi-agents' && message.details?.user);
-      if (user) {
+      if (isUser(message)) {
         const text = textOf(message.content).trim();
         if (!text) continue;
         fold();
@@ -543,17 +565,23 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
         view.addChild(new pi.UserMessageComponent(text, markdown));
       } else if (message.role === 'assistant') {
         const content = message.content.filter(part => part.type === 'text' && part.text.trim());
-        if (content.length || ['error', 'aborted', 'length'].includes(message.stopReason)) {
+        const failed = ['error', 'aborted', 'length'].includes(message.stopReason);
+        const retried = failed && recovered(index);
+        if (content.length || (failed && !retried)) {
           fold();
-          view.addChild(new pi.AssistantMessageComponent({ ...message, content }, true, markdown));
+          // A retried failure keeps its text but not its error.
+          view.addChild(new pi.AssistantMessageComponent(retried ? { ...message, content, stopReason: 'stop', errorMessage: undefined } : { ...message, content }, true, markdown));
         }
-        tools.push(...message.content.flatMap(part => part.type === 'toolCall' ? [part.name] : []));
+        if (retried) retries++;
+        const calls = message.content.flatMap(part => part.type === 'toolCall' ? [part.name] : []);
+        steps += calls.length;
+        tools.push(...calls);
       } else if (message.role === 'branchSummary') {
         fold();
         summarize('branch summary');
       } else if (message.role === 'custom') {
-        fold();
-        summarize(`${message.customType} message`);
+        steps++;
+        custom = true;
       }
     }
     fold();
