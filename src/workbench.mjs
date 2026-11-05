@@ -617,8 +617,8 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     sending.set(session.id, settled);
     void settled.then(() => { if (sending.get(session.id) === settled) sending.delete(session.id); });
     try {
-      const receipt = await pending;
-      if (receipt?.accepted !== true || receipt.messageId !== message.id) throw new Error(`Invalid acknowledgement from ${named(session)}; it may have received the message.`);
+      // The daemon has checked the recipient's acknowledgement.
+      await pending;
       say(`Sent to ${named(session)}.`);
     } catch (error) { say(error.message, 'error'); }
   }

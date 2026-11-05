@@ -132,8 +132,8 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 			if (!active || !ready) throw new Error("Root messaging is not ready; only persistent root Sessions participate.");
 			const sender = { id: active.sessionManager.getSessionId(), ...(pi.getSessionName() ? { name: pi.getSessionName() } : {}) };
 			const message: RootMessage = { id: randomUUID(), sender, recipient: target.id, body, deliverAs: delivery };
-			let receipt: { accepted?: boolean; messageId?: string };
 			if (delivery === "write") {
+				let receipt: { accepted?: boolean; messageId?: string };
 				try {
 					receipt = await request(paths.session(target.id), { action: "deliver", message }, { signal });
 				} catch (error) {
@@ -141,16 +141,17 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 					if (code === "ENOENT" || code === "ECONNREFUSED") throw new Error(`${target.label} is offline.`);
 					throw error;
 				}
-			} else {
-				// The recipient runs with this Session's Pi, environment, and pi-agents, which Pi loads once.
-				const extension = pi.getAllTools().find((tool) => tool.name === "agent")!.sourceInfo.path;
-				const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-				const launch = { command: process.execPath, args: [piCli(), "-e", extension], env };
-				receipt = await sendViaDaemon(paths, message, { sessionDir, launch, signal });
+				if (receipt?.accepted !== true || receipt.messageId !== message.id) {
+					throw new Error(`Invalid acknowledgement from ${target.label}; it may have received the message.`);
+				}
+				return;
 			}
-			if (receipt?.accepted !== true || receipt.messageId !== message.id) {
-				throw new Error(`Invalid acknowledgement from ${target.label}; it may have received the message.`);
-			}
+			// The recipient runs with this Session's Pi, environment, and pi-agents, which Pi loads once.
+			// The daemon has checked the recipient's acknowledgement.
+			const extension = pi.getAllTools().find((tool) => tool.name === "agent")!.sourceInfo.path;
+			const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+			const launch = { command: process.execPath, args: [piCli(), "-e", extension], env };
+			await sendViaDaemon(paths, message, { sessionDir, launch, signal });
 		},
 
 		async start(ctx: ExtensionContext): Promise<void> {
