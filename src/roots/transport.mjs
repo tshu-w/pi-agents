@@ -154,6 +154,36 @@ function errorFrame(error) {
 let binds = 0;
 
 /**
+ * Listens on `socketPath` in a private directory. The socket is bound beside its path and linked there once
+ * its mode is set, so clients never find it with another mode. Closing `server` removes only the file it bound,
+ * so the caller removes `socketPath`.
+ * @param {net.Server} server
+ * @param {string} socketPath
+ */
+export async function listenPrivate(server, socketPath) {
+  const bound = join(dirname(socketPath), `.${process.pid.toString(36)}-${++binds}`);
+  validateSocketPath(bound);
+  // Left by an earlier process with this PID.
+  rmSync(bound, { force: true });
+  let linked = false;
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(bound, () => { server.removeListener('error', reject); resolve(); });
+    });
+    chmodSync(bound, 0o600);
+    linkSync(bound, socketPath);
+    linked = true;
+    unlinkSync(bound);
+  } catch (error) {
+    // Node removes the socket file it bound.
+    try { if (linked) rmSync(socketPath, { force: true }); }
+    finally { await new Promise(resolve => server.close(resolve)); }
+    throw error;
+  }
+}
+
+/**
  * FIFO by default. Handlers receive a connection-lifetime signal, not an acceptance rollback.
  * `stream` takes over the connections that open a stream; they keep the server from being idle. It may
  * refuse a stream by throwing; its result joins the acceptance, which reaches the client before anything it sends.
@@ -236,27 +266,7 @@ export async function listen(socketPath, { status, accept, stream, serialize = t
     socket.on('end', () => { disconnect(); socket.destroySoon(); });
   });
   server.maxConnections = MAX_CONNECTIONS;
-  // Bound beside its path and linked there once its mode is set, so clients never find it with another mode.
-  const bound = join(parent, `.${process.pid.toString(36)}-${++binds}`);
-  validateSocketPath(bound);
-  // Left by an earlier process with this PID.
-  rmSync(bound, { force: true });
-  let linked = false;
-  try {
-    await new Promise((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(bound, () => { server.removeListener('error', reject); resolve(); });
-    });
-    chmodSync(bound, 0o600);
-    linkSync(bound, socketPath);
-    linked = true;
-    unlinkSync(bound);
-  } catch (error) {
-    // Node removes the socket file it bound.
-    try { if (linked) rmSync(socketPath, { force: true }); }
-    finally { await new Promise(resolve => server.close(resolve)); }
-    throw error;
-  }
+  await listenPrivate(server, socketPath);
   return {
     closeIfIdle(idleMs) {
       if (clients.size || pending || Date.now() - lastActivity < idleMs) return;

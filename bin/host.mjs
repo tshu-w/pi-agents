@@ -5,6 +5,7 @@ import net from 'node:net';
 import { createRequire } from 'node:module';
 import { FRAME, frame, json, readFrames } from '../src/host/frames.mjs';
 import { prepareDirectory, statePaths } from '../src/roots/paths.mjs';
+import { listenPrivate } from '../src/roots/transport.mjs';
 
 const require = createRequire(import.meta.url);
 const pty = require('@lydell/node-pty');
@@ -90,10 +91,6 @@ function start({ cols, rows }) {
     }, 100);
   });
 }
-// Started for a terminal, Pi waits for it, so its startup queries reach the terminal.
-if (!config.waitForTerminal) start(config);
-else setTimeout(() => { if (!child) process.exit(0); }, 10000).unref();
-
 function resize({ cols, rows }) {
   mirror.resize(cols, rows);
   child.resize(cols, rows);
@@ -173,6 +170,10 @@ const server = net.createServer(socket => {
     if (control === socket) control = undefined;
   });
 });
-server.listen(socketPath);
+// Pi connects once, as it starts.
+await listenPrivate(server, socketPath);
+// Started for a terminal, Pi waits for it, so its startup queries reach the terminal.
+if (!config.waitForTerminal) start(config);
+else setTimeout(() => { if (!child) process.exit(0); }, 10000).unref();
 process.on('SIGHUP', () => {});
 process.on('SIGTERM', () => child ? child.kill('SIGTERM') : process.exit(0));
