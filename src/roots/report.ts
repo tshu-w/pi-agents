@@ -4,7 +4,9 @@ import { ensureDaemon } from "../daemon/client.mjs";
 import { statePaths, sessionDir as resolveSessionDir } from "./paths.mjs";
 import { openStream } from "./transport.mjs";
 
+// Each attempt may start a daemon, so attempts that keep failing back off.
 const RECONNECT_MS = 1000;
+const MAX_RECONNECT_MS = 30000;
 const SEND_DELAY_MS = 50;
 // Pi exits once its shutdown handlers finish; the end frame has this long to reach the daemon.
 const END_WAIT_MS = 1000;
@@ -54,6 +56,7 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 	let stream: { send(message: object): void; close(): void; end(timeoutMs: number): Promise<void> } | undefined;
 	let generation = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	let reconnectMs = RECONNECT_MS;
 	let dialog = false;
 	let tools = new Map<string, string>();
 	let turn: { at: number; failed: boolean; by: "user" | "agent"; replied?: boolean } | undefined;
@@ -124,6 +127,7 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 			opened.unref();
 			if (current !== generation) return opened.close();
 			stream = opened;
+			reconnectMs = RECONNECT_MS;
 			changed();
 		} catch {
 			retry(current);
@@ -132,7 +136,9 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 
 	// A daemon that exits, for example to update, is replaced by the next connection.
 	function retry(current: number): void {
-		if (current === generation) setTimeout(() => { if (current === generation) void connect(current); }, RECONNECT_MS).unref();
+		if (current !== generation) return;
+		setTimeout(() => { if (current === generation) void connect(current); }, reconnectMs).unref();
+		reconnectMs = Math.min(reconnectMs * 2, MAX_RECONNECT_MS);
 	}
 
 	pi.on("session_start", (_event, current) => {
