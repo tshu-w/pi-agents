@@ -2,8 +2,12 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { statePaths } from '../src/roots/paths.mjs';
 import { createSessions } from '../src/daemon/sessions.mjs';
+import { ensureDaemon } from '../src/daemon/client.mjs';
+import { alive } from '../src/host/client.mjs';
+import { openStream } from '../src/roots/transport.mjs';
 
 test('a turn that ends while no terminal is attached needs attention until one attaches, across daemon restarts', async t => {
   const base = await mkdtemp('/tmp/pa-seen-');
@@ -67,4 +71,32 @@ test('main Agents are always listed and named; another Agent\'s turn needs atten
   sessions.update({ id: 'e', attached: false, turn: { at: 1, failed: true, by: 'agent', replied: true } });
   assert.deepEqual(await rows(), { b: ['main', undefined], c: [undefined, undefined], d: [undefined, 'done'], e: [undefined, 'failed'] });
   await sessions.saved();
+});
+
+test('the daemon keeps another Agent\'s answered turn out of Needs attention', async t => {
+  const base = await mkdtemp('/tmp/pa-quiet-');
+  const previous = process.env.PI_AGENTS_STATE_DIR;
+  process.env.PI_AGENTS_STATE_DIR = base;
+  const paths = statePaths();
+  const { pid } = await ensureDaemon(paths, { sessionDir: join(base, 'sessions') });
+  const streams = [];
+  t.after(async () => {
+    for (const stream of streams) stream.close();
+    process.kill(pid, 'SIGTERM');
+    while (alive(pid)) await delay(20);
+    if (previous === undefined) delete process.env.PI_AGENTS_STATE_DIR;
+    else process.env.PI_AGENTS_STATE_DIR = previous;
+    await rm(base, { recursive: true, force: true });
+  });
+  const listed = Promise.withResolvers();
+  streams.push(await openStream(paths.daemon, { action: 'stream', role: 'workbench' }, {
+    onMessage: message => { if (message.sessions?.length === 2) listed.resolve(message.sessions); },
+  }));
+  const session = await openStream(paths.daemon, { action: 'stream', role: 'session' }, {});
+  streams.push(session);
+  const turn = replied => ({ at: 1, failed: false, by: 'agent', replied });
+  session.send({ type: 'state', state: { id: 'answered', cwd: base, attached: false, turn: turn(true) } });
+  session.send({ type: 'state', state: { id: 'unanswered', cwd: base, attached: false, turn: turn(false) } });
+  const rows = Object.fromEntries((await listed.promise).map(row => [row.id, row.attention]));
+  assert.deepEqual(rows, { answered: undefined, unanswered: 'done' });
 });

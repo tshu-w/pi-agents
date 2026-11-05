@@ -131,7 +131,11 @@ function changed() {
 const text = value => typeof value === 'string' ? value : undefined;
 function sessionState(value) {
   if (!value || typeof value !== 'object' || typeof value.id !== 'string' || !value.id) return;
-  const turn = value.turn && Number.isFinite(value.turn.at) ? { at: value.turn.at, failed: value.turn.failed === true } : undefined;
+  const turn = value.turn && Number.isFinite(value.turn.at) ? {
+    at: value.turn.at, failed: value.turn.failed === true,
+    ...(['user', 'agent'].includes(value.turn.by) ? { by: value.turn.by } : {}),
+    ...(typeof value.turn.replied === 'boolean' ? { replied: value.turn.replied } : {}),
+  } : undefined;
   return {
     id: value.id, sessionFile: text(value.sessionFile), cwd: text(value.cwd), name: text(value.name), title: text(value.title),
     host: text(value.host), attached: value.attached === true, working: value.working === true, blocked: value.blocked === true,
