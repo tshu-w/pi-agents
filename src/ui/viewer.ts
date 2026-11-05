@@ -118,7 +118,7 @@ function mountViewer(tui: ViewportTUI, theme: Theme, ctx: ExtensionContext, tran
 		follow: "end",
 		primary: true,
 		overscroll: "chain",
-		scrollbar: agentSession(ctx.sessionManager)?.settingsManager.getFullscreenScrollbar() ?? "auto",
+		scrollbar: agentSession(ctx.sessionManager)!.settingsManager.getFullscreenScrollbar(),
 		scrollbarTrackStyle: (text) => theme.fg("scrollbarTrack", text),
 		scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
 	});
@@ -348,16 +348,16 @@ class AgentViewer implements Component, Focusable {
 
 	/** The transcript's display settings: as Pi's chat shows messages, with the settings of the Session the viewer is in. */
 	private display(conversation: Conversation) {
-		const current = agentSession(this.ctx.sessionManager);
-		const settings = current?.settingsManager;
-		const pad = settings?.getOutputPad() ?? 1;
+		const current = agentSession(this.ctx.sessionManager)!;
+		const settings = current.settingsManager;
+		const pad = settings.getOutputPad();
 		return {
 			settings,
-			markdown: settings ? { ...getMarkdownTheme(), codeBlockIndent: settings.getCodeBlockIndent() } : getMarkdownTheme(),
-			transformers: current?.extensionRunner.getMarkdownTransformers(),
+			markdown: { ...getMarkdownTheme(), codeBlockIndent: settings.getCodeBlockIndent() },
+			transformers: current.extensionRunner.getMarkdownTransformers(),
 			pad,
-			runner: (conversation.session ?? current)?.extensionRunner,
-			images: { showImages: settings?.getShowImages() ?? false, imageWidthCells: settings?.getImageWidthCells(), outputPad: pad },
+			runner: (conversation.session ?? current).extensionRunner,
+			images: { showImages: settings.getShowImages(), imageWidthCells: settings.getImageWidthCells(), outputPad: pad },
 		};
 	}
 
@@ -391,7 +391,7 @@ class AgentViewer implements Component, Focusable {
 		this.shown = messages.length;
 		this.last = messages.at(-1);
 		if (streaming?.role === "assistant") {
-			const component = new AssistantMessageComponent(streaming, display.settings?.getHideThinkingBlock() ?? false, display.markdown, undefined, display.pad, display.transformers);
+			const component = new AssistantMessageComponent(streaming, display.settings.getHideThinkingBlock(), display.markdown, undefined, display.pad, display.transformers);
 			// As Pi does, so Markdown transformers know the message is still streaming.
 			component.updateContent(streaming, true);
 			this.transcript.addChild(component);
@@ -437,7 +437,7 @@ class AgentViewer implements Component, Focusable {
 	private add(message: Message, conversation: Conversation, display: Display): void {
 		const { markdown, transformers, pad, runner } = display;
 		if (message.role === "assistant") {
-			this.transcript.addChild(new AssistantMessageComponent(message, display.settings?.getHideThinkingBlock() ?? false, markdown, undefined, pad, transformers));
+			this.transcript.addChild(new AssistantMessageComponent(message, display.settings.getHideThinkingBlock(), markdown, undefined, pad, transformers));
 			for (const part of message.content) if (part.type === "toolCall") this.addTool(part, conversation, display);
 			this.settle(message);
 		} else if (message.role === "toolResult") {
@@ -468,7 +468,7 @@ class AgentViewer implements Component, Focusable {
 				this.transcript.addChild(new UserMessageComponent(message.content, markdown, pad, transformers));
 			} else {
 				// The component starts with its own blank line.
-				const component = new CustomMessageComponent(message, runner?.getMessageRenderer(message.customType), markdown, pad);
+				const component = new CustomMessageComponent(message, runner.getMessageRenderer(message.customType), markdown, pad);
 				component.setExpanded(this.expanded);
 				this.transcript.addChild(component);
 			}
@@ -508,10 +508,11 @@ class ProgramViewer implements Component, Focusable {
 		private done: () => void,
 	) {
 		const code = programs.view(id)?.code;
-		const settings = agentSession(ctx.sessionManager)?.settingsManager;
+		const session = agentSession(ctx.sessionManager)!;
+		const settings = session.settingsManager;
 		this.tool = new ToolExecutionComponent(PROGRAM_TOOL_NAME, `program-${id}`, { action: "run", background: true, ...(code !== undefined && { code }) }, {
-			showImages: settings?.getShowImages() ?? false, imageWidthCells: settings?.getImageWidthCells(), outputPad: settings?.getOutputPad(),
-		}, agentSession(ctx.sessionManager)?.getToolDefinition(PROGRAM_TOOL_NAME), tui, ctx.cwd);
+			showImages: settings.getShowImages(), imageWidthCells: settings.getImageWidthCells(), outputPad: settings.getOutputPad(),
+		}, session.getToolDefinition(PROGRAM_TOOL_NAME), tui, ctx.cwd);
 		this.tool.markExecutionStarted();
 		this.sync();
 		this.disposers.push(programs.onView(() => {
