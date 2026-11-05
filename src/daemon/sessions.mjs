@@ -1,8 +1,8 @@
 import { constants } from 'node:fs';
-import { open, readFile, realpath, rename } from 'node:fs/promises';
+import { open, readFile, realpath, rename, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { relative, resolve } from 'node:path';
-import { discoverRoots, readRootFile } from '../roots/discovery.mjs';
+import { discoverRoots, readRootFile, realPath } from '../roots/discovery.mjs';
 import { isLocked } from '../roots/locks.mjs';
 
 const MARKS_VERSION = 1;
@@ -123,10 +123,12 @@ export async function createSessions(paths, sessionDir) {
       for (const [id, mark] of Object.entries(marks)) {
         if (mark.listed || unseen(mark)) ids.add(id);
       }
-      const records = await discoverRoots(sessionDir, { extraFiles: files(), ids, signal });
+      // Running Sessions report their own metadata; skip reparsing their growing files.
+      const running = new Set(await Promise.all([...live.values()].flatMap(state => state.sessionFile ? [realPath(state.sessionFile)] : [])));
+      const records = await discoverRoots(sessionDir, { extraFiles: files(), ids, skip: running, signal });
       const mains = new Map(Object.entries(await readMains(paths.mainSession)).map(([name, file]) => [resolve(file), name]));
       for (const file of mains.keys()) {
-        if (records.some(record => resolve(record.sessionFile) === file)) continue;
+        if (running.has(await realPath(file)) || records.some(record => resolve(record.sessionFile) === file)) continue;
         const record = await readRootFile(file, { signal });
         if (record) records.push(record);
       }
@@ -141,8 +143,13 @@ export async function createSessions(paths, sessionDir) {
       }
       for (const state of live.values()) {
         const saved = rows.get(state.id);
+        let updatedAt = saved?.updatedAt;
+        if (!updatedAt && state.sessionFile) {
+          try { updatedAt = (await stat(state.sessionFile)).mtime.toISOString(); }
+          catch (error) { if (error.code !== 'ENOENT') throw error; }
+        }
         rows.set(state.id, { ...saved, ...state, title: state.title ?? saved?.title, reply: state.reply ?? saved?.reply,
-          status: state.blocked ? 'blocked' : state.working ? 'working' : 'idle', running: true, updatedAt: saved?.updatedAt ?? state.since });
+          status: state.blocked ? 'blocked' : state.working ? 'working' : 'idle', running: true, updatedAt: updatedAt ?? state.since });
       }
       return [...rows.values()].map(row => {
         const mark = marks[row.id];

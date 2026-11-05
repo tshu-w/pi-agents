@@ -71,6 +71,8 @@ const COMMANDS = [
   { value: '/resume', label: 'resume', description: 'Open a past Session' },
   { value: '/quit', label: 'quit', description: 'Exit the workbench' },
 ];
+// A large Session takes a while to reread, so the preview follows it at most once a second.
+const PREVIEW_REFRESH_MS = 1000;
 // Pi's working spinner.
 const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const GROUPS = [
@@ -430,21 +432,37 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     catch (error) { return say(error.message, 'error'); }
     let body = conversation(messages);
     const border = themes.getEditorTheme().borderColor;
-    let scroll = 0, page = 1, timer, scrolled, hideBar;
+    let scroll = 0, page = 1, timer, reading, stale, closed, scrolled, hideBar;
     // A turn the preview shows counts as seen.
     const see = () => stream?.send({ type: 'see', id: session.id });
     see();
     // Pi appends each finished message to the file, so the preview follows the Session as it works.
-    const watcher = watch(session.sessionFile, () => {
-      clearTimeout(timer);
-      timer = setTimeout(async () => {
-        try { body = conversation(await branchMessages(pi, session.sessionFile)); }
-        catch (error) { return say(error.message, 'error'); }
+    const changed = () => {
+      if (!timer) timer = setTimeout(refresh, PREVIEW_REFRESH_MS);
+      else if (reading) stale = true;
+    };
+    const refresh = async () => {
+      reading = true;
+      let latest;
+      try { latest = await branchMessages(pi, session.sessionFile); }
+      catch (error) { say(error.message, 'error'); }
+      reading = false;
+      timer = undefined;
+      if (closed) return;
+      if (latest) {
+        body = conversation(latest);
         see();
         ui.requestRender();
-      }, 100);
-    });
+      }
+      // A change during the read may have come too late for it.
+      if (stale) {
+        stale = false;
+        changed();
+      }
+    };
+    const watcher = watch(session.sessionFile, changed);
     const close = () => {
+      closed = true;
       watcher.close();
       see();
       clearTimeout(timer);

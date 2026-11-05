@@ -1,6 +1,6 @@
 import { readdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
-import { discoverRoots } from './discovery.mjs';
+import { discoverRoots, realPath } from './discovery.mjs';
 import { isLocked } from './locks.mjs';
 import { markedFiles } from '../daemon/sessions.mjs';
 import { request } from './transport.mjs';
@@ -27,7 +27,7 @@ export async function rootSnapshot(paths, sessionDir, { signal, current } = {}) 
   }
   if (current) online.set(current.id, current);
   // Online roots report their own metadata; skip reparsing their growing Session files.
-  const skip = new Set([...online.values()].map(root => root.sessionFile));
+  const skip = new Set(await Promise.all([...online.values()].map(root => realPath(root.sessionFile))));
   const records = await discoverRoots(sessionDir, { extraFiles: await markedFiles(paths), skip, signal });
   const roots = [];
   for (const record of records) {

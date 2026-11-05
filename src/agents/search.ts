@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { entryLine, MESSAGE_TAG, MESSAGE_TYPE, type Entry } from "./registry.ts";
 
 interface SearchText {
@@ -114,19 +114,48 @@ function messageBody(content: string): string {
  */
 export function latestActivity(sessionFile: string | undefined): string | undefined {
 	if (!sessionFile || !existsSync(sessionFile)) return undefined;
+	const size = statSync(sessionFile).size;
+	// A long Session is read at its end for the latest activity, which counts after an input there or at its start.
+	if (size > 2 * CHUNK_BYTES) {
+		const file = openSync(sessionFile, "r");
+		try {
+			const tail = linesAt(file, size - CHUNK_BYTES, CHUNK_BYTES);
+			const activity = scan(tail, false).activity
+				?? (scan(linesAt(file, 0, CHUNK_BYTES), false).input !== undefined ? scan(tail, true).activity : undefined);
+			if (activity !== undefined) return flatten(activity);
+		} finally { closeSync(file); }
+	}
+	const { input, activity } = scan(readFileSync(sessionFile, "utf8").split("\n"), false);
+	return flatten(activity ?? input);
+}
+
+const CHUNK_BYTES = 256 * 1024;
+
+const flatten = (text: string | undefined) => text?.replace(/\s+/g, " ").trim();
+
+/** The lines in `length` bytes from `start`, without a line cut at `start`; a line cut at the end does not parse. */
+function linesAt(file: number, start: number, length: number): string[] {
+	const bytes = Buffer.alloc(length);
+	const read = readSync(file, bytes, 0, length, start);
+	const from = start === 0 ? 0 : bytes.indexOf(10) + 1;
+	return bytes.subarray(from, read).toString("utf8").split("\n");
+}
+
+/** The first input and the latest activity after it, or after the start when `started`. */
+function scan(lines: string[], started: boolean): { input?: string; activity?: string } {
 	let input: string | undefined;
 	let activity: string | undefined;
-	for (const line of readFileSync(sessionFile, "utf8").split("\n")) {
+	for (const line of lines) {
 		let entry: Record<string, any>;
 		try { entry = JSON.parse(line); } catch { continue; }
 		if (input === undefined && entry.type === "custom_message" && entry.customType === MESSAGE_TYPE && typeof entry.content === "string") {
 			input = messageBody(entry.content);
 		}
-		if (input !== undefined && entry.type === "message" && entry.message?.role === "assistant" && Array.isArray(entry.message.content)) {
+		if ((started || input !== undefined) && entry.type === "message" && entry.message?.role === "assistant" && Array.isArray(entry.message.content)) {
 			activity = replyActivity(entry.message.content) ?? activity;
 		}
 	}
-	return (activity ?? input)?.replace(/\s+/g, " ").trim();
+	return { input, activity };
 }
 
 function toolActivity(name: string, args: Record<string, any>): string {

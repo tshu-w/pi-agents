@@ -92,6 +92,13 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 		};
 	}
 
+	/** The last assistant message on the Session's branch, and the first line of its reply. */
+	function lastReply(current: ExtensionContext) {
+		const last = current.sessionManager.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
+		const message = last?.type === "message" && last.message.role === "assistant" ? last.message : undefined;
+		return { message, reply: message ? firstLine(textOf(message.content)) || firstLine(message.errorMessage ?? "") : undefined };
+	}
+
 	function changed(): void {
 		if (timer || !ctx) return;
 		timer = setTimeout(() => {
@@ -131,6 +138,8 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 	pi.on("session_start", (_event, current) => {
 		if (!current.sessionManager.getSessionFile() || treeMetadata(current)) return;
 		ctx = current;
+		// A resumed Session shows its last reply before its next turn.
+		reply = lastReply(current).reply;
 		unsubscribe ??= onTreeChange(() => changed());
 		void connect(++generation);
 	});
@@ -176,9 +185,9 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 	pi.on("ui_prompt_end", () => { dialog = false; changed(); });
 	pi.on("agent_settled", (event) => {
 		if (!ctx) return;
-		const last = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
-		const message = last?.type === "message" && last.message.role === "assistant" ? last.message : undefined;
-		reply = message ? firstLine(textOf(message.content)) || firstLine(message.errorMessage ?? "") : undefined;
+		const settled = lastReply(ctx);
+		const message = settled.message;
+		reply = settled.reply;
 		if (fromUser) {
 			by = "user";
 			unanswered = [];

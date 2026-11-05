@@ -1,9 +1,21 @@
 import { createReadStream } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { readdir, realpath, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 
 const cache = new Map();
+const realPaths = new Map();
+
+/** A file's path with symlinks resolved, cached once found; a missing file keeps its path. */
+export async function realPath(file) {
+  let real = realPaths.get(file);
+  if (real === undefined) {
+    try { real = await realpath(file); }
+    catch (error) { if (error.code === 'ENOENT') return file; throw error; }
+    realPaths.set(file, real);
+  }
+  return real;
+}
 
 /** The first line of a message's text, for the workbench row. */
 function firstLine(content) {
@@ -87,14 +99,14 @@ async function sessionFiles(sessionDir, extraFiles, signal) {
 }
 
 /**
- * Root Sessions in `sessionDir` and `extraFiles`; with `ids`, only those. A file Pi named
- * `<timestamp>_<id>.jsonl` is skipped by its name; others are read for their ID.
+ * Root Sessions in `sessionDir` and `extraFiles`; with `ids`, only those; without the files whose
+ * `realPath` is in `skip`. A file Pi named `<timestamp>_<id>.jsonl` is skipped by its name; others are read for their ID.
  */
 export async function discoverRoots(sessionDir, { extraFiles = [], ids, skip, signal } = {}) {
   const roots = [];
   for (const file of await sessionFiles(sessionDir, extraFiles, signal)) {
     const named = /_([0-9a-f-]{36})\.jsonl$/.exec(file)?.[1];
-    if (skip?.has(file) || (ids && named && !ids.has(named))) continue;
+    if ((ids && named && !ids.has(named)) || (skip?.size && skip.has(await realPath(file)))) continue;
     const root = await readRootFile(file, { signal });
     if (root && (!ids || ids.has(root.id))) roots.push(root);
   }

@@ -21,7 +21,7 @@ Object.assign(process.env, {
 });
 const { pi, PI_PACKAGE, EXTENSION: extension, textOf, until } = await import("./pi.mjs");
 const { statePaths } = await import("../src/roots/paths.mjs");
-const { request } = await import("../src/roots/transport.mjs");
+const { openStream, request } = await import("../src/roots/transport.mjs");
 const { hostSessionFile, listHosts } = await import("../src/host/client.mjs");
 const { reserve } = await import("../src/roots/locks.mjs");
 const { default: lockExtension } = await import("../src/roots/lock-extension.mjs");
@@ -194,4 +194,24 @@ test("a root in another process is listed with its state and cannot be opened tw
 
 	await sender.call({ action: "send", target: "live-c", message: "note", deliverAs: "write" });
 	await until(() => entriesOf(target.file).some((entry) => entry.type === "custom_message" && entry.content.startsWith('<agent-message name="sender" ') && entry.content.includes("\nnote\n")), "write");
+});
+
+test("a resumed root shows its last reply in the workbench before its next turn", async () => {
+	const target = offlineRoot("resumed-e", "resumed");
+	const timestamp = new Date().toISOString();
+	appendFileSync(target.file, JSON.stringify({ type: "message", id: "r", parentId: "n", timestamp, message: {
+		role: "assistant", content: [{ type: "text", text: "earlier reply" }], api: "agents-test-api", provider: "agents-test", model: "fake",
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+		stopReason: "stop", timestamp: Date.now(),
+	} }) + "\n");
+	runPi(["--session", target.file], target.cwd);
+	let rows = [];
+	const workbench = await until(async () => {
+		try { return await openStream(paths.daemon, { action: "stream", role: "workbench" }, { onMessage: (message) => { rows = message.sessions ?? rows; } }); }
+		catch (error) { if (!["ENOENT", "ECONNREFUSED"].includes(error.code)) throw error; }
+	}, "daemon");
+	try {
+		const row = await until(() => rows.find((entry) => entry.id === target.id && entry.running), "running row");
+		assert.equal(row.reply, "earlier reply");
+	} finally { workbench.close(); }
 });
