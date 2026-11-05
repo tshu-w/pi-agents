@@ -13,7 +13,7 @@ import { agentSession } from "../roots/rpc.ts";
 import { programScope } from "./scope.ts";
 import type { PiCodemode } from "./codemode.ts";
 import { CLEANUP_TIMEOUT_MS, executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./execute.ts";
-import { commandSession, runDetached } from "./host-patches.ts";
+import { commandSession, runDetached } from "./pi-patches.ts";
 import { programDescription, programLoadout, programRenderers } from "./loadout.ts";
 import { randomUUID } from "node:crypto";
 import { CLEANUP_ERROR, programListLine } from "./programs.ts";

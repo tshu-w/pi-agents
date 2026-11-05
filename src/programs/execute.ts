@@ -7,7 +7,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { CodemodeResult, CodemodeTool } from "@earendil-works/pi-codemode";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { loadCodemode, loadPiCodemode, loadPiWorkerSource } from "./codemode.ts";
-import type { DetachedCallOptions } from "./host-patches.ts";
+import type { DetachedCallOptions } from "./pi-patches.ts";
 
 export const PROGRAM_TOOL_NAME = "program";
 /** How long a Program's work may take to stop once it ends. */

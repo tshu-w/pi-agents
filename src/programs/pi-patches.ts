@@ -85,7 +85,7 @@ function commandMessage() {
  *   need a script tool and neither is active, counts an active `program` as reaching its tools,
  *   and makes a Program wait for the servers its code names, as it does for `codemode` scripts.
  */
-export function installHostPatches(
+export function installProgramPatches(
 	session: typeof AgentSession,
 	runner: typeof ExtensionRunner,
 	codemodeSchema: unknown,

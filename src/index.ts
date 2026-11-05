@@ -31,7 +31,7 @@ import { registerAgentTool } from "./agents/tool.ts";
 import { hostExtension } from "./host/extension.ts";
 import { CODEMODE_TOOL_NAME, loadPiCodemode } from "./programs/codemode.ts";
 import { PROGRAM_TOOL_NAME } from "./programs/execute.ts";
-import { installHostPatches } from "./programs/host-patches.ts";
+import { installProgramPatches } from "./programs/pi-patches.ts";
 import { applyProgramOnlyFlag, PROGRAM_ONLY_FLAG } from "./programs/loadout.ts";
 import { addProgramFiles, Programs } from "./programs/programs.ts";
 import { registerProgramTools } from "./programs/tool.ts";
@@ -101,7 +101,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	const panel = createPanel(() => node);
 
 	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: statePaths().locks });
-	installHostPatches(AgentSession, ExtensionRunner, piCodemode.codemodeSchema);
+	installProgramPatches(AgentSession, ExtensionRunner, piCodemode.codemodeSchema);
 	installQueuePatches(AgentSession);
 	const roots = createRootRuntime(pi, {
 		receive: async (message) => {
