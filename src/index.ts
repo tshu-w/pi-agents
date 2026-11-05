@@ -231,10 +231,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 				current.ui.notify("Usage: /tasks [panel]", "error");
 				return;
 			}
-			if (!node) return;
+			const self = requireNode(current);
 			browsing = true;
 			try {
-				await openTaskViewer(current, requireNode(current), pi.getSettings().editorPaddingX ?? 0);
+				await openTaskViewer(current, self, pi.getSettings().editorPaddingX ?? 0);
 			} finally {
 				browsing = false;
 			}
