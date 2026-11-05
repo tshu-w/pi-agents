@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Agents, settlesBy, SUBMIT_RESULT_TOOL_NAME, THINKING_LEVELS, type Limits } from "../agents/agents.ts";
+import { Agents, SUBMIT_RESULT_TOOL_NAME, THINKING_LEVELS, type Limits } from "../agents/agents.ts";
+import { settlesBy } from "../agents/wait.ts";
 import { label, messageText, nodes, sender, treeChanged, visibleIds, type AgentNode } from "../agents/registry.ts";
 import { CLEANUP_TIMEOUT_MS } from "./execute.ts";
 import type { AgentOptions, ProgramAgentHost, SendOptions } from "./sandbox.ts";

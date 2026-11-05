@@ -20,7 +20,6 @@ import {
 	customMessage,
 	deliver,
 	messageParts,
-	type NotifiedResult,
 	addProgramSpend,
 	addSpend,
 	label,
@@ -43,6 +42,7 @@ import {
 	type Spend,
 	type TreeMetadata,
 } from "./registry.ts";
+import { deferred, hold, settlesBy, waitFor, type Deferred, type Held, type WaitEnd } from "./wait.ts";
 import { releaseSession } from "../roots/guard.mjs";
 import { defaultSessionDir, sessionDir as rootSessionDir } from "../roots/paths.mjs";
 
@@ -152,66 +152,7 @@ export function steerQueued(agent: AgentSession["agent"] | undefined): boolean {
 		&& (message as { details?: { delivery?: string } }).details?.delivery === "write"));
 }
 
-// Pi does not report steers queued by extensions, so a wait checks the queue this often.
-export const STEER_POLL_MS = 250;
-
 export const RESULT_TAG = "agent-result";
-
-/** How a wait ended: what it waited for ended, its timeout expired, another message ended it, or it had nothing to wait for. */
-export type WaitEnd = "completed" | "timedOut" | "interrupted" | "nothing";
-
-/** The text `wait` returns, naming what it still waits for as `still` does. */
-export function waitText(end: WaitEnd, still: string): string {
-	if (end === "nothing") return "Nothing to wait for.";
-	if (end === "completed") return "Wait completed.";
-	return `${end === "timedOut" ? "Wait timed out." : "Wait interrupted by a new message."} ${still}`;
-}
-
-export interface Deferred {
-	promise: Promise<void>;
-	resolve(): void;
-}
-
-export function deferred(): Deferred {
-	let resolve!: () => void;
-	const promise = new Promise<void>((done) => { resolve = done; });
-	return { promise, resolve };
-}
-
-/** Resolves when `change` resolves, `ms` pass, or `signal` aborts. */
-export async function waitForChange(change: Promise<void>, ms: number, signal?: AbortSignal): Promise<void> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	let onAbort: (() => void) | undefined;
-	try {
-		await Promise.race([
-			change,
-			new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }),
-			new Promise<void>((resolve) => {
-				onAbort = resolve;
-				signal?.addEventListener("abort", onAbort, { once: true });
-			}),
-		]);
-	} finally {
-		clearTimeout(timer);
-		if (onAbort) signal?.removeEventListener("abort", onAbort);
-	}
-}
-
-/** Whether `work` settles by `deadline`; a rejection passes through. */
-export async function settlesBy(work: Promise<unknown>, deadline: number): Promise<boolean> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	try {
-		const settled = work.then(() => true);
-		// A rejection after the deadline has no one to report to.
-		settled.catch(() => {});
-		return await Promise.race([
-			settled,
-			new Promise<boolean>((resolve) => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now()), false); }),
-		]);
-	} finally {
-		clearTimeout(timer);
-	}
-}
 
 function ended(input: InputRecord): boolean {
 	return input.state === "completed" || input.state === "failed" || input.state === "aborted";
@@ -275,36 +216,6 @@ export interface SpawnRequest {
 	context?: "fresh" | "fork";
 	model?: string;
 	thinkingLevel?: ThinkingLevel;
-}
-
-/** A notification a wait holds; every wait for its Agent or Program holds it, and the first to end delivers it. */
-interface HeldNotice {
-	text: string;
-	result: NotifiedResult;
-	images?: NonNullable<Notice["images"]>;
-	delivered?: boolean;
-}
-
-/** A wait in progress: the IDs of the Agents or Programs it waits for, and their notifications it holds. */
-export interface Held {
-	ids: Set<string>;
-	notices: HeldNotice[];
-}
-
-/** Has the waits in progress for `id` hold a notification; returns whether any does. */
-export function hold(waits: Held[], id: string, notice: HeldNotice): boolean {
-	const holding = waits.filter(({ ids }) => ids.has(id));
-	for (const wait of holding) wait.notices.push(notice);
-	return holding.length > 0;
-}
-
-/** The notifications a wait holds that no other wait has delivered, as one notification, or undefined if none. */
-export function release(wait: Held): { text: string; notice: Notice } | undefined {
-	const notices = wait.notices.filter(({ delivered }) => !delivered);
-	if (notices.length === 0) return undefined;
-	for (const notice of notices) notice.delivered = true;
-	const images = notices.flatMap((notice) => notice.images ?? []);
-	return { text: notices.map(({ text }) => text).join("\n\n"), notice: { results: notices.map(({ result }) => result), ...(images.length ? { images } : {}) } };
 }
 
 export interface WaitOutcome {
@@ -511,30 +422,18 @@ export class Agents {
 	async wait(targets: Owned[] | undefined, timeoutSeconds: number, signal?: AbortSignal, steered?: () => boolean): Promise<WaitOutcome> {
 		const unique = [...new Set(targets ?? [...this.agents.values()])].filter((agent) => this.pending(agent));
 		if (unique.length === 0) return { end: "nothing", pending: [] };
-		const held: Held = { ids: new Set(unique.map((agent) => agent.record.id)), notices: [] };
-		this.held.push(held);
 		const suspended = this.self.ownerId !== undefined && scheduler.suspend(this.self.rootId, this.self.id);
 		this.markWaiting(1);
-		let interrupted = false;
 		try {
-			const deadline = Date.now() + timeoutSeconds * 1000;
-			while (unique.some((agent) => this.pending(agent))) {
-				const remaining = deadline - Date.now();
-				if (remaining <= 0) break;
-				if (steered?.()) {
-					interrupted = true;
-					break;
-				}
-				signal?.throwIfAborted();
-				await waitForChange(this.change.promise, steered ? Math.min(remaining, STEER_POLL_MS) : remaining, signal);
-			}
-			signal?.throwIfAborted();
-			const pending = unique.filter((agent) => this.pending(agent)).map((agent) => agent.record);
-			return { end: pending.length === 0 ? "completed" : interrupted ? "interrupted" : "timedOut", pending };
+			return await waitFor(
+				{ waits: this.held, change: () => this.change.promise, closing: () => this.closing, notify: (text, notice) => this.notify(text, notice) },
+				unique.map((agent) => agent.record.id),
+				() => unique.filter((agent) => this.pending(agent)).map((agent) => agent.record),
+				timeoutSeconds,
+				signal,
+				steered,
+			);
 		} finally {
-			this.held.splice(this.held.indexOf(held), 1);
-			const released = this.closing ? undefined : release(held);
-			if (released) this.notify(released.text, released.notice);
 			this.markWaiting(-1);
 			if (suspended) await scheduler.resume(this.self.rootId, this.self.id, this.limits.maxConcurrent, signal);
 		}

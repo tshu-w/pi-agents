@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { deferred, hold, release, settlesBy, STEER_POLL_MS, waitForChange, type Deferred, type Held, type WaitEnd } from "../agents/agents.ts";
 import { shortId, trackTreeWork, type Notice } from "../agents/registry.ts";
+import { deferred, hold, settlesBy, waitFor, type Deferred, type Held, type WaitEnd } from "../agents/wait.ts";
 import { boundText } from "../output.ts";
 import { CLEANUP_TIMEOUT_MS, PROGRAM_TOOL_NAME, type ProgramFiles, type ProgramOutcome, type ProgramRunResult } from "./execute.ts";
 
@@ -210,29 +210,15 @@ export class Programs {
 	async wait(programs: Running[], timeoutSeconds: number, signal?: AbortSignal, steered?: () => boolean): Promise<ProgramWaitOutcome> {
 		const unique = programs.filter(({ record }) => !ended(record));
 		if (unique.length === 0) return { end: "nothing", running: [] };
-		const held: Held = { ids: new Set(unique.map(({ record }) => record.id)), notices: [] };
-		this.held.push(held);
-		try {
-			let interrupted = false;
-			const deadline = Date.now() + timeoutSeconds * 1000;
-			while (unique.some(({ record }) => !ended(record))) {
-				const remaining = deadline - Date.now();
-				if (remaining <= 0) break;
-				if (steered?.()) {
-					interrupted = true;
-					break;
-				}
-				signal?.throwIfAborted();
-				await waitForChange(this.change.promise, steered ? Math.min(remaining, STEER_POLL_MS) : remaining, signal);
-			}
-			signal?.throwIfAborted();
-			const running = unique.filter(({ record }) => !ended(record)).map(({ record }) => record);
-			return { end: running.length === 0 ? "completed" : interrupted ? "interrupted" : "timedOut", running };
-		} finally {
-			this.held.splice(this.held.indexOf(held), 1);
-			const released = this.closing ? undefined : release(held);
-			if (released) this.hooks.notify(released.text, released.notice);
-		}
+		const { end, pending } = await waitFor(
+			{ waits: this.held, change: () => this.change.promise, closing: () => this.closing, notify: (text, notice) => this.hooks.notify(text, notice) },
+			unique.map(({ record }) => record.id),
+			() => unique.filter(({ record }) => !ended(record)).map(({ record }) => record),
+			timeoutSeconds,
+			signal,
+			steered,
+		);
+		return { end, running: pending };
 	}
 
 	async shutdown(): Promise<void> {
