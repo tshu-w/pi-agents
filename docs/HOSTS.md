@@ -102,7 +102,7 @@ The input at the bottom:
 
 ## 6. Upgrades
 
-A host keeps running the version it started with until its Session exits. When the daemon sees a newer pi-agents version, it restarts once idle, and Sessions reconnect to the new daemon.
+A host keeps running the version it started with until its Session exits. When the daemon sees a newer pi-agents version, it restarts as soon as no message is being delivered, and Sessions reconnect to the new daemon.
 
 ## 7. Platform
 

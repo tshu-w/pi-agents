@@ -1,6 +1,6 @@
 // The per-user daemon: tracks root Sessions, routes messages between them, and starts a host for
 // a Session that is offline. Runs while a Session or the workbench is connected, exits once idle
-// otherwise, and restarts once idle after pi-agents is updated.
+// otherwise, and restarts after pi-agents is updated as soon as no message is being delivered.
 import { readFile } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -196,7 +196,7 @@ const server = await listen(paths.daemon, {
   },
   stream(input, channel) {
     lastActivity = Date.now();
-    // A newly started Pi may run updated code; this daemon then hands over once idle.
+    // A newly started Pi may run updated code; this daemon then hands over once no message is being delivered.
     void codeVersion().then(current => { if (current !== version) retiring = true; }, () => {});
     if (input.role === 'workbench') openWorkbench(channel);
     else openSession(channel);
