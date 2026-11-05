@@ -61,7 +61,7 @@ async function accepting(root, signal) {
   } catch (error) {
     signal.throwIfAborted();
     // A Pi still starting may answer late.
-    if (!['ENOENT', 'ECONNREFUSED', 'SOCKET_MODE', 'ETIMEDOUT'].includes(error.code)) throw error;
+    if (!['ENOENT', 'ECONNREFUSED', 'ETIMEDOUT'].includes(error.code)) throw error;
   }
 }
 

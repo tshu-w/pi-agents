@@ -10,7 +10,7 @@ import { piPackage } from '../pi.mjs';
 import { PROGRAM_MESSAGE, runOutput } from '../programs/run-output.mjs';
 
 const TIMEOUT_MS = 30000;
-const NOT_READY = ['ENOENT', 'ECONNREFUSED', 'SOCKET_MODE', 'NOT_READY'];
+const NOT_READY = ['ENOENT', 'ECONNREFUSED', 'NOT_READY'];
 const GONE = ['ENOENT', 'ECONNREFUSED', 'ECONNRESET'];
 // Options that choose the Session; another Session opens with the rest.
 const SESSION_OPTIONS = new Set(['--session', '--session-id', '--fork', '--name', '-n', '-c', '--continue', '-r', '--resume']);
