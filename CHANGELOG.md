@@ -12,6 +12,7 @@
 - A turn that answered another Agent's message with `send` stays out of Needs attention.
 - A Session that quits normally is no longer marked failed in the workbench because its exit message was lost.
 - The workbench, its preview, and `/tasks` stay responsive with large Session files.
+- Connecting to a Session or daemon just as it starts no longer fails with `SOCKET_MODE`.
 
 ## [0.4.1] - 2026-11-04
 

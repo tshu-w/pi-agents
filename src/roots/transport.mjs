@@ -1,6 +1,6 @@
 import net from 'node:net';
-import { chmodSync, lstatSync, mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { chmodSync, linkSync, lstatSync, mkdirSync, rmSync, unlinkSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 
 const MAX_BYTES = 1024 * 1024;
 // Pi's events on an rpc stream carry whole messages, images included.
@@ -41,7 +41,7 @@ function privateSocket(path) {
   safeDirectory(dirname(path));
   const info = lstatSync(path);
   if (!info.isSocket() || info.uid !== process.getuid()) throw fault('UNSAFE_PATH', 'Socket must be owned by the current user');
-  // A listener sets the mode just after it binds; a client waiting for a new listener may retry this.
+  // Listeners of earlier versions set the mode just after binding; a client waiting for a new listener may retry this.
   if ((info.mode & 0o777) !== 0o600) throw fault('SOCKET_MODE', 'Socket must have mode 0600');
 }
 
@@ -151,6 +151,8 @@ function errorFrame(error) {
   } });
 }
 
+let binds = 0;
+
 /**
  * FIFO by default. Handlers receive a connection-lifetime signal, not an acceptance rollback.
  * `stream` takes over the connections that open a stream; they keep the server from being idle. It may
@@ -234,14 +236,25 @@ export async function listen(socketPath, { status, accept, stream, serialize = t
     socket.on('end', () => { disconnect(); socket.destroySoon(); });
   });
   server.maxConnections = MAX_CONNECTIONS;
+  // Bound beside its path and linked there once its mode is set, so clients never find it with another mode.
+  const bound = join(parent, `.${process.pid.toString(36)}-${++binds}`);
+  validateSocketPath(bound);
+  // Left by an earlier process with this PID.
+  rmSync(bound, { force: true });
+  let linked = false;
   try {
     await new Promise((resolve, reject) => {
       server.once('error', reject);
-      server.listen(socketPath, () => { server.removeListener('error', reject); resolve(); });
+      server.listen(bound, () => { server.removeListener('error', reject); resolve(); });
     });
-    chmodSync(socketPath, 0o600);
+    chmodSync(bound, 0o600);
+    linkSync(bound, socketPath);
+    linked = true;
+    unlinkSync(bound);
   } catch (error) {
-    await new Promise(resolve => server.close(resolve));
+    // Node removes the socket file it bound.
+    try { if (linked) rmSync(socketPath, { force: true }); }
+    finally { await new Promise(resolve => server.close(resolve)); }
     throw error;
   }
   return {
@@ -262,8 +275,11 @@ export async function listen(socketPath, { status, accept, stream, serialize = t
           if (!queued.has(socket)) socket.destroy();
         }
         queued.clear();
-        // Node removes the socket file; the caller holds the lock on its path until then.
-        server.close(error => error ? reject(error) : resolve());
+        // Node removes only the file it bound; the caller holds the lock on the path until then.
+        let failure;
+        try { unlinkSync(socketPath); }
+        catch (error) { if (error.code !== 'ENOENT') failure = error; }
+        server.close(error => error ?? failure ? reject(error ?? failure) : resolve());
       }));
       return closing;
     },

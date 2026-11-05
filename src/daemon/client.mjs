@@ -43,7 +43,7 @@ export async function ensureDaemon(paths, { sessionDir, signal }) {
       if (code !== 0) launchError = new Error(`Daemon exited (${code}). See ${paths.daemonLog}`);
     });
     child.unref();
-    // The new daemon sets its socket's mode just after binding; a mode that stays wrong is an error.
+    // Daemons of earlier versions set their socket's mode just after binding; a mode that stays wrong is an error.
     let modeWait = 0;
     for (;;) {
       signal?.throwIfAborted();
