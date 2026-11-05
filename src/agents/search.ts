@@ -74,8 +74,7 @@ function parse(sessionFile: string | undefined): Parsed {
 	}
 	let model: { provider: string; modelId: string } | undefined;
 	let thinkingLevel: string | undefined;
-	// A step per entry at most, should parents loop.
-	for (let id = leaf, steps = 0; id !== undefined && !(model && thinkingLevel) && steps++ < parents.size;) {
+	for (let id = leaf; id !== undefined && !(model && thinkingLevel);) {
 		const entry = parents.get(id);
 		model ??= entry?.model;
 		thinkingLevel ??= entry?.thinkingLevel;

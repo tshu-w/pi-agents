@@ -177,8 +177,8 @@ export async function listenPrivate(server, socketPath) {
     unlinkSync(bound);
   } catch (error) {
     // Node removes the socket file it bound.
-    try { if (linked) rmSync(socketPath, { force: true }); }
-    finally { await new Promise(resolve => server.close(resolve)); }
+    if (linked) rmSync(socketPath, { force: true });
+    await new Promise(resolve => server.close(resolve));
     throw error;
   }
 }
@@ -286,10 +286,8 @@ export async function listen(socketPath, { status, accept, stream, serialize = t
         }
         queued.clear();
         // Node removes only the file it bound; the caller holds the lock on the path until then.
-        let failure;
-        try { unlinkSync(socketPath); }
-        catch (error) { if (error.code !== 'ENOENT') failure = error; }
-        server.close(error => error ?? failure ? reject(error ?? failure) : resolve());
+        rmSync(socketPath, { force: true });
+        server.close(error => error ? reject(error) : resolve());
       }));
       return closing;
     },
