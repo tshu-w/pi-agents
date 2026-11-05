@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `list` shows each Agent's model as `--model` takes it, such as `anthropic/claude-opus-5-5:high`.
+
+### Fixed
+
+- A message to a Session that is not running no longer fails when its Pi takes more than 10 seconds to start.
+- A turn that answered another Agent's message with `send` stays out of Needs attention.
+- A Session that quits normally is no longer marked failed in the workbench because its exit message was lost.
+- The workbench, its preview, and `/tasks` stay responsive with large Session files.
+
 ## [0.4.1] - 2026-11-04
 
 ### Added
