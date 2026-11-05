@@ -302,11 +302,10 @@ export async function listen(socketPath, { status, accept, stream, serialize = t
  * @returns {Promise<any>}
  */
 export async function request(socketPath, input, { signal, timeoutMs = TIMEOUT_MS } = {}) {
-  const value = validate(input);
-  const bytes = encode(value);
+  const bytes = encode(input);
   const interrupted = (code, message) => Object.assign(fault(code, message
-    + (value.action === 'deliver' ? '; delivery is uncertain: the recipient may have received it' : '')),
-  { uncertainDelivery: value.action === 'deliver' });
+    + (input.action === 'deliver' ? '; delivery is uncertain: the recipient may have received it' : '')),
+  { uncertainDelivery: input.action === 'deliver' });
   if (signal?.aborted) throw interrupted('ABORT_ERR', 'Request cancelled');
   socketPath = resolve(socketPath);
   validateSocketPath(socketPath);
@@ -321,7 +320,7 @@ export async function request(socketPath, input, { signal, timeoutMs = TIMEOUT_M
       signal?.removeEventListener('abort', abort);
       socket.destroy();
       if (error) {
-        if (!remote && sent && value.action === 'deliver') error.uncertainDelivery = true;
+        if (!remote && sent && input.action === 'deliver') error.uncertainDelivery = true;
         reject(error);
       } else resolve(result);
     }
@@ -350,7 +349,6 @@ export async function request(socketPath, input, { signal, timeoutMs = TIMEOUT_M
  * and calls `onClose` when the connection ends.
  */
 export function openStream(socketPath, input, { onMessage, onClose }) {
-  const value = validate(input);
   socketPath = resolve(socketPath);
   validateSocketPath(socketPath);
   privateSocket(socketPath);
@@ -364,7 +362,7 @@ export function openStream(socketPath, input, { onMessage, onClose }) {
       if (opened) onClose?.();
       else reject(fault('CONNECTION_CLOSED', 'Connection closed before the stream opened'));
     });
-    socket.on('connect', () => socket.write(encode(value)));
+    socket.on('connect', () => socket.write(encode(input)));
     readLines(socket, response => {
       if (opened) return onMessage(response);
       clearTimeout(timer);
@@ -375,7 +373,7 @@ export function openStream(socketPath, input, { onMessage, onClose }) {
       opened = true;
       resolvePromise({
         result: response.result,
-        send(message) { if (!socket.destroyed && !socket.writableEnded) socket.write(encode(message, streamLimit(value.role))); },
+        send(message) { if (!socket.destroyed && !socket.writableEnded) socket.write(encode(message, streamLimit(input.role))); },
         close() { socket.destroy(); },
         /** Closes once what was sent has been written and the server has closed too, or after `timeoutMs`. */
         end(timeoutMs) {
@@ -388,6 +386,6 @@ export function openStream(socketPath, input, { onMessage, onClose }) {
         },
         unref() { socket.unref(); },
       });
-    }, () => socket.destroy(), streamLimit(value.role));
+    }, () => socket.destroy(), streamLimit(input.role));
   });
 }
