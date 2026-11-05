@@ -7,9 +7,10 @@ import * as path from "node:path";
 import { Type } from "typebox";
 import { steerQueued, SUBMIT_RESULT_TOOL_NAME, type Limits } from "../agents/agents.ts";
 import { settlesBy, waitText } from "../agents/wait.ts";
-import { nodes, trackTreeWork, type AgentNode } from "../agents/registry.ts";
+import { nodes, trackTreeWork, treeChanged, type AgentNode } from "../agents/registry.ts";
 import { rejectFields } from "../params.ts";
-import { agentSession } from "../roots/rpc-patches.ts";
+import { agentSession, lane } from "../roots/rpc-patches.ts";
+import { setTimeout as delay } from "node:timers/promises";
 import { programScope } from "./scope.ts";
 import type { PiCodemode } from "./codemode.ts";
 import { CLEANUP_TIMEOUT_MS, executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./execute.ts";
@@ -25,6 +26,9 @@ const PROGRAM_DESCRIPTION = `Run JavaScript that composes tool calls and Agents;
 Program code is the body of an async function. It calls the caller's tools through \`tools.*\`, which excludes \`program\`, and creates Agents through \`agent()\`. These Agents belong to the Program, are isolated from other Agents, and go offline when it ends.
 
 \`program\` replaces the \`codemode\` tool; wherever \`codemode\` is mentioned, use \`program\`.`;
+
+/** How long a foreground `run` lasts before it moves to the background; tests shorten it. */
+const BACKGROUND_AFTER_MS = Number(process.env.PI_AGENTS_BACKGROUND_AFTER_MS ?? 120_000);
 
 
 interface ProgramCall {
@@ -182,14 +186,53 @@ export function registerProgramTools(
 					if (!params.code?.trim()) throw new Error("run requires code");
 					const code = params.code;
 					if (params.background) {
-						const record = programs.start(code, (id, programSignal, abort, update) => runProgram(id, self, toolCallId, code, programSignal, current, { timeout: params.timeout, background: true, detached: true, abort, onUpdate: update }));
+						const record = programs.start(code, (id, programSignal, abort, update) => runProgram(id, self, toolCallId, code, programSignal, current, { timeout: params.timeout, background: true, detached: () => true, abort, onUpdate: update }));
 						return { content: [{ type: "text", text: `Program ${programs.label(record)} started.` }], details: { id: record.id } };
 					}
-					const { result } = await self.agents.whileSuspended(() => runProgram(randomUUID(), self, toolCallId, code, signal ?? new AbortController().signal, current, {
+					// Until it moves to the background, the turn's signal stops the Program, and its calls are the tool call's.
+					const id = randomUUID();
+					const startedAt = Date.now();
+					const controller = new AbortController();
+					const stopRun = () => controller.abort(signal?.reason);
+					signal?.addEventListener("abort", stopRun, { once: true });
+					let moved = false;
+					let update = onUpdate;
+					let partial: Parameters<NonNullable<typeof onUpdate>>[0] | undefined;
+					const running = runProgram(id, self, toolCallId, code, controller.signal, current, {
 						timeout: params.timeout,
-						onUpdate,
-					}), signal);
-					return result;
+						detached: () => moved,
+						abort: () => controller.abort(new Error("Program stopped")),
+						onUpdate: (result) => {
+							partial = result;
+							update?.(result);
+						},
+					});
+					// A root Agent answering `pi -p`, directly or through its host, keeps its Programs in the foreground.
+					const session = agentSession(current.sessionManager);
+					const printing = self.ownerId === undefined && (current.mode === "print" || current.mode === "json" || (session !== undefined && lane(session).holder !== undefined));
+					return self.agents.whileSuspended(async () => {
+						const timer = new AbortController();
+						let ran;
+						try {
+							ran = await (printing ? running : Promise.race([running, delay(BACKGROUND_AFTER_MS, undefined, { signal: timer.signal })]));
+						} finally {
+							timer.abort();
+							signal?.removeEventListener("abort", stopRun);
+						}
+						if (ran) return ran.result;
+						moved = true;
+						const node = nodes.get(id);
+						if (node) {
+							node.background = true;
+							treeChanged();
+						}
+						const record = programs.add(id, code, startedAt, controller, (programUpdate) => {
+							update = programUpdate;
+							if (partial) programUpdate(partial);
+							return running;
+						});
+						return { content: [{ type: "text" as const, text: `Program ${programs.label(record)} moved to the background.` }], details: { id } };
+					}, signal);
 				}
 				case "wait": {
 					rejectFields(params, "wait", ["code", "background", "limit", "offset"]);
@@ -276,7 +319,7 @@ export function registerProgramTools(
 			if (blocked?.block) throw new Error(blocked.reason || "Tool execution was blocked");
 			const ctx = session._extensionRunner.createToolContext(toolCallId, controller.signal);
 			run = await runProgram(randomUUID(), self, toolCallId, code, controller.signal, ctx, {
-				detached: true,
+				detached: () => true,
 				abort: stop.abort,
 				args,
 				onUpdate: (partialResult) => {

@@ -6,6 +6,10 @@
 
 - `list` shows each Agent's model as `--model` takes it, such as `anthropic/claude-opus-5-5:high`.
 
+### Changed
+
+- A foreground Program still running after 120 seconds moves to the background, and its caller gets a notification when it ends.
+
 ### Fixed
 
 - A message to a Session that is not running no longer fails when its Pi takes more than 10 seconds to start.

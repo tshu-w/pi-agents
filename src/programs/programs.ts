@@ -115,8 +115,14 @@ export class Programs {
 
 	/** Starts a background Program, which `run` executes with its ID and reports its partial results to `update`, and returns its record. */
 	start(code: string, run: (id: string, signal: AbortSignal, abort: () => void, update: (result: unknown) => void) => Promise<ProgramRunResult>): ProgramRecord {
-		const record: ProgramRecord = { id: randomUUID(), state: "running", startedAt: Date.now() };
+		const id = randomUUID();
 		const controller = new AbortController();
+		return this.add(id, code, Date.now(), controller, (update) => run(id, controller.signal, () => controller.abort(new Error("Program stopped")), update));
+	}
+
+	/** Adds a running Program, which `controller` stops, as a background Program; `run` reports its partial results to `update` and settles when it ends. */
+	add(id: string, code: string, startedAt: number, controller: AbortController, run: (update: (result: unknown) => void) => Promise<ProgramRunResult>): ProgramRecord {
+		const record: ProgramRecord = { id, state: "running", startedAt };
 		const program: Running = { record, code, controller };
 		const update = (result: unknown) => {
 			if (ended(record)) return;
@@ -128,7 +134,7 @@ export class Programs {
 		const release = program.release = trackTreeWork(this.rootId);
 		this.persist(record);
 		this.hooks.changed();
-		program.done = run(record.id, controller.signal, () => controller.abort(new Error("Program stopped")), update).then(
+		program.done = run(update).then(
 			({ outcome, result, files, abandoned }) => {
 				if (abandoned) program.abandoned = true;
 				if (!ended(record)) program.result = result;

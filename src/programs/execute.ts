@@ -80,13 +80,13 @@ export interface ProgramRunOptions {
 	prepare: (code: string) => string;
 	onUpdate?: AgentToolUpdateCallback<unknown>;
 	/**
-	 * Whether the Program runs outside a tool call: after its tool call returns, or from `/program`.
-	 * Its calls then get their own IDs, since Pi records nested calls only until the calling tool
-	 * call returns.
+	 * Whether the Program runs outside a tool call, checked at each call: after its tool call returns,
+	 * or from `/program`. Its calls then get their own IDs, since Pi records nested calls only until
+	 * the calling tool call returns.
 	 */
-	detached?: boolean;
-	/** Stops a detached Program; `ctx.abort()` of its calls' hooks and tools calls it. */
-	abort?: () => void;
+	detached: () => boolean;
+	/** Stops the Program; `ctx.abort()` of its calls' hooks and tools calls it. */
+	abort: () => void;
 	appendEntry(customType: string, data: unknown): void;
 	getToolNamespace(name: string): { name: string } | undefined;
 }
@@ -252,9 +252,14 @@ export async function executeProgram(
 	let detachedCalls = 0;
 	const toolCalls: Promise<unknown>[] = [];
 	const executeTool = (name: string, args: unknown, callOptions: { signal?: AbortSignal }) => {
-		if (!options.detached) return ctx.executeTool(name, args, callOptions);
+		// A call may outlive the tool call if the Program moves to the background: its signal is never the caller's turn's,
+		// and `ctx.abort()` aborts the turn only until the move.
+		if (!options.detached()) {
+			const callerOptions = { ...callOptions, detachedAbort: (abortTurn: () => void) => options.detached() ? options.abort() : abortTurn() } satisfies DetachedCallOptions;
+			return ctx.executeTool(name, args, callerOptions as never);
+		}
 		addFile(name, args);
-		const detachedOptions = { ...callOptions, detachedCallerId: `${toolCallId}:${++detachedCalls}`, detachedAbort: () => options.abort!() } satisfies DetachedCallOptions;
+		const detachedOptions = { ...callOptions, detachedCallerId: `${toolCallId}:${++detachedCalls}`, detachedAbort: options.abort } satisfies DetachedCallOptions;
 		return ctx.executeTool(name, args, detachedOptions as never);
 	};
 	const programCtx = Object.create(ctx, {

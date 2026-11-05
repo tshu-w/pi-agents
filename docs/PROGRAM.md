@@ -8,7 +8,7 @@ The `program` tool replaces Pi's `codemode` tool and keeps its script API, tool 
 
 An Agent runs a **Program** with the `program` tool. That Agent is the Program's **caller**. The Program can call the caller's tools and create Agents.
 
-A Program runs in the **foreground** or the **background**. In the foreground, the tool call returns the Program's result. In the background, the tool call returns the Program's ID, and the caller gets the result in a notification.
+A Program runs in the **foreground** or the **background**. In the foreground, the tool call returns the Program's result. In the background, the tool call returns the Program's ID, and the caller gets the result in a notification. Except with `pi -p`, a foreground `run` that has not ended after 120 seconds moves to the background: the tool call returns the Program's ID, and the Program keeps running as a background Program.
 
 A Program is shown by its short ID: the shortest prefix of its ID, at least 8 characters, that none of the caller's other Programs' IDs starts with. A target is an ID or a unique ID prefix.
 
@@ -139,6 +139,12 @@ In these formats, `<id>` is the Program's short ID.
 
 ```text
 Program <id> started.
+```
+
+`run` that moved to the background:
+
+```text
+Program <id> moved to the background.
 ```
 
 `wait` returns as `agent` `wait` does (SPEC §6), naming the Programs still running:

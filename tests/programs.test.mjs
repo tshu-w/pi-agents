@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const agentDir = mkdtempSync(join(tmpdir(), "pi-agents-home-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
+process.env.PI_AGENTS_BACKGROUND_AFTER_MS = "500";
 process.on("exit", () => rmSync(agentDir, { recursive: true, force: true }));
 const { pi, ai, EXTENSION, PI_PACKAGE, textOf, gate, until, createSession, notification, notificationsOf } = await import("./pi.mjs");
 
@@ -24,7 +25,7 @@ const bodyOf = (text) => text.split("\n").slice(1, -1).join("\n").split("\n\nWhe
  * once `state.hold` opens, and `stuck` does so even after an abort; `call:<json>` and `program:<json>` call `agent` or `program` with those
  * arguments and answer with the result; `calls:<json>` makes `agent` calls with each arguments in turn.
  */
-async function startRoot(cwd = mkdtempSync(join(agentDir, "cwd-")), sessionFile = undefined, limits = {}, settings = {}, extensions = []) {
+async function startRoot(cwd = mkdtempSync(join(agentDir, "cwd-")), sessionFile = undefined, limits = {}, settings = {}, extensions = [], mode = "print") {
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ...settings, "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
 	writeFileSync(join(cwd, "note.txt"), "note");
 	const messages = [];
@@ -75,7 +76,7 @@ async function startRoot(cwd = mkdtempSync(join(agentDir, "cwd-")), sessionFile 
 	};
 	const sessionManager = sessionFile ? pi.SessionManager.open(sessionFile) : pi.SessionManager.create(cwd, join(cwd, "sessions"));
 	const session = await createSession({ cwd, route, extensions: [EXTENSION, ...extensions], sessionManager, tools: ["read", "program", "agent"] });
-	await session.bindExtensions({ mode: "print" });
+	await session.bindExtensions({ mode });
 	const call = async (args, tool = "program") => {
 		await session.waitForIdle();
 		pending.push([tool, args]);
@@ -258,6 +259,64 @@ test("stop and timeout stop background Programs", async () => {
 	const shown = stripVTControlCharacters(root.session.extensionRunner.getMessageRenderer("pi-agents")(message, { expanded: false, outputPad: 1 }, theme).render(10000).map((line) => line.trimEnd()).join("\n"));
 	assert.match(shown, new RegExp(`\n Program ${timedOut}  stopped  [\\d.]+s\n   Script error:\n`));
 	assert.deepEqual(root.messages.filter(notified).map((message) => message.split('"')[1]), [timedOut]);
+	await root.close();
+});
+
+test("a foreground run still running after the threshold moves to the background, notifies its caller, and keeps its timeout", async () => {
+	const root = await startRoot(undefined, undefined, {}, {}, [], "rpc");
+	const moved = await root.call({ action: "run", code: "await tools.read({ path: 'note.txt' }); return await agent().send('hold')" });
+	const [, id] = /^Program (\S+) moved to the background\.$/.exec(textOf(moved.content));
+	assert.deepEqual(Object.keys(moved.details), ["id"]);
+	assert.ok(moved.details.id.startsWith(id));
+	assert.match(await root.text({ action: "list" }), new RegExp(`^${id}  running$`));
+	root.state.hold.open();
+	await notification(root.session, new RegExp(`^<program-result id="${id}" status="completed">\\n[\\s\\S]*answer:hold`));
+	const timedOut = /^Program (\S+) moved/.exec(await root.text({ action: "run", code: "while (true) await tools.read({ path: 'note.txt' })", timeout: 1 }))[1];
+	await notification(root.session, new RegExp(`^<program-result id="${timedOut}" status="stopped">`));
+	await root.close();
+});
+
+test("the hooks of a call started before the move follow the Program's signal after it", async () => {
+	const hookExtension = fileURLToPath(new URL("./fixtures/hook-extension.mjs", import.meta.url));
+	const root = await startRoot(undefined, undefined, {}, {}, [hookExtension], "rpc");
+	const { hooks } = await import(hookExtension);
+	hooks.calls.length = 0;
+	hooks.holdMs = 5000;
+	try {
+		const id = /^Program (\S+) moved/.exec(await root.text({ action: "run", code: "await tools.read({ path: 'note.txt' })" }))[1];
+		await root.text({ action: "stop", target: id });
+		assert.equal(hooks.calls[0].aborted, true);
+	} finally {
+		hooks.calls.length = 0;
+		hooks.holdMs = 0;
+		await root.close();
+	}
+});
+
+test("a hook's ctx.abort() in a foreground run aborts the caller's turn until the run moves", async () => {
+	const hookExtension = fileURLToPath(new URL("./fixtures/hook-extension.mjs", import.meta.url));
+	const root = await startRoot(undefined, undefined, {}, {}, [hookExtension], "rpc");
+	const { hooks } = await import(hookExtension);
+	try {
+		await root.call({ action: "run", code: "await tools.read({ path: 'abort.txt' }); return 'unreachable'" });
+		await root.session.waitForIdle();
+		// The caller's turn is aborted, so the reply after the tool result fails.
+		assert.match(root.session.messages.at(-1).errorMessage, /aborted/);
+	} finally {
+		hooks.calls.length = 0;
+		await root.close();
+	}
+});
+
+test("/program and pi -p runs stay in the foreground past the threshold", async () => {
+	const code = "const end = Date.now() + 1000; while (Date.now() < end) await tools.read({ path: 'note.txt' }); return 'stayed'";
+	const printing = await startRoot();
+	assert.match(await printing.text({ action: "run", code }), /\nstayed$/);
+	await printing.close();
+	const root = await startRoot(undefined, undefined, {}, {}, [], "rpc");
+	writeFileSync(join(root.cwd, "run.js"), code);
+	await root.session.prompt("/program run.js");
+	assert.match(textOf(root.session.messages.at(-1).content), /\nstayed$/);
 	await root.close();
 });
 
