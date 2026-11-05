@@ -243,12 +243,12 @@ export class Programs {
 		record.isError = isError;
 		// Keeps the calls the result's details list, from the result or the last partial one.
 		program.result = { content, details: program.result?.details, isError };
-		const calls = (program.result.details as { calls?: unknown[] } | undefined)?.calls;
+		const { calls, fullOutputPath } = (program.result.details ?? {}) as { calls?: unknown[]; fullOutputPath?: string };
 		if (calls?.length) record.calls = calls;
 		if (files && (files.read.length > 0 || files.written.length > 0 || files.edited.length > 0)) record.files = files;
 		program.controller = undefined;
 		this.persist(record);
-		if (!program.silent) this.notify(record);
+		if (!program.silent) this.notify(record, fullOutputPath);
 		const previous = this.change;
 		this.change = deferred();
 		previous.resolve();
@@ -260,14 +260,15 @@ export class Programs {
 		for (const listener of this.viewers) listener();
 	}
 
-	private notify(record: ProgramRecord): void {
+	/** `fullOutputPath` names the file with the output codemode truncated, unless the notification truncates it again. */
+	private notify(record: ProgramRecord, fullOutputPath?: string): void {
 		if (this.closing) return;
 		const images = (record.content ?? []).filter((item): item is Extract<Item, { type: "image" }> => item.type === "image");
-		const { kept, notice } = boundText(textOf(record.content), "pi-agents-program-notification");
+		const { kept, notice, details } = boundText(textOf(record.content), "pi-agents-program-notification");
 		const id = this.label(record);
 		const header = SCRIPT_HEADER.exec(kept);
 		const text = `<${PROGRAM_RESULT_TAG} id="${id}" status="${record.state}">\n${kept}\n</${PROGRAM_RESULT_TAG}>${notice ? `\n\n${notice}` : ""}`;
-		const result = { id, status: record.state, ...(header?.[1] !== undefined && { seconds: Number(header[1]) }), body: kept.slice(header?.[0].length ?? 0), ...(notice && { notice }) };
+		const result = { id, status: record.state, ...(header?.[1] !== undefined && { seconds: Number(header[1]) }), body: kept.slice(header?.[0].length ?? 0), ...(notice && { notice }), ...(fullOutputPath && { fullOutputPath }), ...details };
 		if (!hold(this.held, record.id, { text, result, ...(images.length ? { images } : {}) })) this.hooks.notify(text, { results: [result], ...(images.length ? { images } : {}) });
 	}
 

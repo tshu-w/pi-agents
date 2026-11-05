@@ -678,10 +678,10 @@ export class Agents {
 		queueMicrotask(() => {
 			try {
 				if (this.closing) return;
-				const { kept, notice } = boundText(record.result ?? "", "pi-agents-notification");
+				const { kept, notice, details } = boundText(record.result ?? "", "pi-agents-notification");
 				const id = shortId(agent.record.id, this.ids());
 				const text = `<${RESULT_TAG} name="${agent.record.name}" id="${id}" status="${record.state}">\n${kept}\n</${RESULT_TAG}>${notice ? `\n\n${notice}` : ""}`;
-				const result = { name: agent.record.name, id, status: record.state, body: kept, ...(notice && { notice }) };
+				const result = { name: agent.record.name, id, status: record.state, body: kept, ...(notice && { notice }), ...details };
 				if (!hold(this.held, agent.record.id, { text, result })) this.notify(text, { results: [result] });
 			} finally {
 				release();

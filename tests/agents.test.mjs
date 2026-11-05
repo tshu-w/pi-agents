@@ -116,8 +116,12 @@ test("a notification bounds its result text and keeps its closing tag", async ()
 	try {
 		await root.call({ action: "spawn", name: "long", message: "line\n".repeat(pi.DEFAULT_MAX_LINES + 1) });
 		await root.call({ action: "wait", target: "long", timeout: 10 });
-		const text = textOf((await notification(root.session, /^<agent-result name="long" /)).content);
+		const message = await notification(root.session, /^<agent-result name="long" /);
+		const text = textOf(message.content);
 		const [, kept, path] = /^([\s\S]*)\n\n\[Showing lines [^\]]* Full output: (\S+)\]$/.exec(text);
+		const [result] = message.details.results;
+		assert.equal(result.fullOutputPath, path);
+		assert.equal(result.truncation.truncatedBy, "lines");
 		const full = readFileSync(path, "utf8");
 		assert.ok(kept.startsWith('<agent-result name="long" ') && kept.endsWith("\n</agent-result>"));
 		assert.ok(full.startsWith("answer:line\n") && full.length > kept.length && kept.includes(full.slice(0, 1000)));

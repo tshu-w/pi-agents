@@ -40,6 +40,7 @@ interface ProgramCall {
 interface ProgramMessageDetails {
 	call: ProgramCall;
 	calls?: unknown[];
+	fullOutputPath?: string;
 	isError: boolean;
 }
 
@@ -335,7 +336,8 @@ export function registerProgramTools(
 			release();
 		}
 		const { result } = run;
-		const details: ProgramMessageDetails = { call, calls: (result.details as { calls?: unknown[] } | undefined)?.calls, isError: result.isError === true };
+		const { calls, fullOutputPath } = (result.details ?? {}) as { calls?: unknown[]; fullOutputPath?: string };
+		const details: ProgramMessageDetails = { call, calls, ...(fullOutputPath && { fullOutputPath }), isError: result.isError === true };
 		if (shown) {
 			// During a reply, the message comes after the reply; until then the widget shows the result.
 			partial = result;
@@ -382,7 +384,7 @@ export function registerProgramTools(
 		const { details } = message;
 		if (!details) return undefined;
 		const content = (message.content as unknown[]).slice(1);
-		return renderRun(details.call, { content, details: { calls: details.calls } }, false, details.isError, expanded, outputPad, theme);
+		return renderRun(details.call, { content, details: { calls: details.calls, fullOutputPath: details.fullOutputPath } }, false, details.isError, expanded, outputPad, theme);
 	});
 }
 

@@ -1,6 +1,7 @@
 /** The Agents loaded in this process, shared across trees: who sees whom, how targets resolve, and how messages are addressed. */
 import type { ImageContent, Usage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Truncation } from "../output.ts";
 import type { Programs } from "../programs/programs.ts";
 import type { Agents } from "./agents.ts";
 import { TreeScheduler } from "./scheduler.ts";
@@ -262,7 +263,7 @@ export function resolveIn(entries: Entry[], target: string): Entry {
 
 /** Sends a message from one Agent to another visible Agent. */
 /** A result a notification carries, as it shows: a Program has no name, and may have a wall time. */
-export interface NotifiedResult {
+export interface NotifiedResult extends Partial<Truncation> {
 	name?: string;
 	id: string;
 	status: string;

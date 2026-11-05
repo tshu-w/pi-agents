@@ -137,6 +137,10 @@ test("a background Program runs on after run returns and notifies its caller wit
 	const pictured = idOf(await root.text({ action: "run", background: true, code: `image("data:image/png;base64,${png}"); return 'pic'` }));
 	const message = await notification(root.session, new RegExp(`^<program-result id="${pictured}" `));
 	assert.deepEqual(message.content.filter((part) => part.type === "image").map((part) => part.data), [png]);
+	// The result keeps the file with the output codemode truncated.
+	const long = idOf(await root.text({ action: "run", background: true, code: 'return "abcdef ".repeat(20000)' }));
+	const [result] = (await notification(root.session, new RegExp(`^<program-result id="${long}" `))).details.results;
+	assert.ok(result.body.includes(`[Full output: ${result.fullOutputPath} `) && result.truncation === undefined);
 	await root.close();
 });
 
