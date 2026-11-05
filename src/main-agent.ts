@@ -2,19 +2,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { treeMetadata } from "./agents/registry.ts";
+import { readMains } from "./roots/mains.mjs";
 import { statePaths } from "./roots/paths.mjs";
 
 export const MAIN_FLAG = "main";
 const instructions = readFileSync(new URL("./main-agent.md", import.meta.url), "utf8").trim();
-
-/** The main Agents' Session files by entry name, as `main.json` maps them. */
-function mainEntries(): Record<string, string> {
-	try {
-		return JSON.parse(readFileSync(statePaths().mainSession, "utf8")) as Record<string, string>;
-	} catch {
-		return {};
-	}
-}
 
 /**
  * A main Agent is a Session an entry of `main.json` names: `pd main --name <entry>` starts one with `--main=<entry>`,
@@ -29,7 +21,7 @@ export function registerMainAgent(pi: ExtensionAPI): void {
 		// Absolute, as `pd main` compares it from other directories; a session directory may be relative.
 		const current = ctx.sessionManager.getSessionFile();
 		const file = current && path.resolve(current);
-		const mains = mainEntries();
+		const mains = readMains(statePaths().mainSession);
 		const flag = pi.getFlag(MAIN_FLAG);
 		const previous = event.reason === "new" && event.previousSessionFile !== undefined ? path.resolve(event.previousSessionFile) : undefined;
 		const names = event.reason === "startup" && typeof flag === "string"

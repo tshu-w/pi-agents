@@ -2,7 +2,7 @@
 // The `pd` command: runs Pi in a host, attaching this terminal to interactive Pi and connecting
 // non-interactive Pi to the hosted Session; `--no-session` and package commands run Pi directly.
 import { spawn } from 'node:child_process';
-import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
@@ -14,6 +14,7 @@ import { discoverRoots, findRoot } from '../src/roots/discovery.mjs';
 import { defaultSessionDir, resolvePath, sessionDir, statePaths } from '../src/roots/paths.mjs';
 import { piPackage } from '../src/pi.mjs';
 import { markedFiles } from '../src/daemon/sessions.mjs';
+import { readMains } from '../src/roots/mains.mjs';
 import { argGroups } from '../src/host/rpc-client.mjs';
 
 const real = process.env.PATH.split(':').map(dir => join(dir, 'pi')).find(file => {
@@ -164,10 +165,7 @@ async function openMain() {
   const name = named ?? 'main';
   // `--name` picks the entry, so it does not rename the Session.
   const options = argGroups(parseArgs, args.slice(1)).filter(([option]) => !['--name', '-n'].includes(option)).flat();
-  let file;
-  // `main.json` maps entry names to Session files.
-  try { file = JSON.parse(readFileSync(paths.mainSession, 'utf8'))[name]; }
-  catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
+  const file = readMains(paths.mainSession)[name];
   // A main Agent without messages has no file yet, but its host may be running.
   const holds = host => hostSessionFile(host) === file;
   if (file && (existsSync(file) || (await settledHosts(paths, holds)).some(holds))) args = ['--session', file, ...options];

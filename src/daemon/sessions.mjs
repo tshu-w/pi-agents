@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { relative, resolve } from 'node:path';
 import { discoverRoots, readRootFile, realPath } from '../roots/discovery.mjs';
 import { isLocked } from '../roots/locks.mjs';
+import { readMains } from '../roots/mains.mjs';
 
 const MARKS_VERSION = 1;
 
@@ -12,13 +13,6 @@ async function readMarks(file) {
     const value = JSON.parse(await readFile(file, 'utf8'));
     if (value?.version === MARKS_VERSION && value.sessions && typeof value.sessions === 'object') return value.sessions;
   } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
-  return {};
-}
-
-/** The main Agents' Session files by entry name, as `main.json` maps them. */
-async function readMains(file) {
-  try { return JSON.parse(await readFile(file, 'utf8')); }
-  catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
   return {};
 }
 
@@ -124,7 +118,7 @@ export async function createSessions(paths, sessionDir) {
       // Running Sessions report their own metadata; skip reparsing their growing files.
       const running = new Set(await Promise.all([...live.values()].flatMap(state => state.sessionFile ? [realPath(state.sessionFile)] : [])));
       const records = await discoverRoots(sessionDir, { extraFiles: files(), ids, skip: running, signal });
-      const mains = new Map(Object.entries(await readMains(paths.mainSession)).map(([name, file]) => [resolve(file), name]));
+      const mains = new Map(Object.entries(readMains(paths.mainSession)).map(([name, file]) => [resolve(file), name]));
       for (const file of mains.keys()) {
         if (running.has(await realPath(file)) || records.some(record => resolve(record.sessionFile) === file)) continue;
         const record = await readRootFile(file, { signal });
