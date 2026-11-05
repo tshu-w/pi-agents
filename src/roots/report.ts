@@ -6,6 +6,8 @@ import { openStream } from "./transport.mjs";
 
 const RECONNECT_MS = 1000;
 const SEND_DELAY_MS = 50;
+// Pi exits once its shutdown handlers finish; the end frame has this long to reach the daemon.
+const END_WAIT_MS = 1000;
 const TEXT_LIMIT = 200;
 
 export interface ReportHooks {
@@ -49,7 +51,7 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 	const paths = statePaths();
 	const sessionDir = resolveSessionDir();
 	let ctx: ExtensionContext | undefined;
-	let stream: { send(message: object): void; close(): void } | undefined;
+	let stream: { send(message: object): void; close(): void; end(timeoutMs: number): Promise<void> } | undefined;
 	let generation = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let dialog = false;
@@ -132,10 +134,10 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 		unsubscribe ??= onTreeChange(() => changed());
 		void connect(++generation);
 	});
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", async () => {
 		if (!ctx) return;
 		stream?.send({ type: "end", id: ctx.sessionManager.getSessionId() });
-		stream?.close();
+		const ended = stream?.end(END_WAIT_MS);
 		stream = undefined;
 		generation++;
 		ctx = undefined;
@@ -147,6 +149,7 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 		by = "user";
 		fromUser = false;
 		senders = sent = unanswered = [];
+		await ended;
 	});
 	pi.on("message_end", (event) => {
 		const message = event.message as { role: string; customType?: string; details?: { delivery?: string; sender?: Sender } };

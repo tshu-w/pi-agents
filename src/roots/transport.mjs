@@ -353,6 +353,15 @@ export function openStream(socketPath, input, { onMessage, onClose }) {
         result: response.result,
         send(message) { if (!socket.destroyed && !socket.writableEnded) socket.write(encode(message, streamLimit(value.role))); },
         close() { socket.destroy(); },
+        /** Closes once what was sent has been written and the server has closed too, or after `timeoutMs`. */
+        end(timeoutMs) {
+          return new Promise(resolve => {
+            if (socket.closed) return resolve();
+            const timer = setTimeout(() => socket.destroy(), timeoutMs);
+            socket.once('close', () => { clearTimeout(timer); resolve(); });
+            socket.end();
+          });
+        },
         unref() { socket.unref(); },
       });
     }, () => socket.destroy(), streamLimit(value.role));
