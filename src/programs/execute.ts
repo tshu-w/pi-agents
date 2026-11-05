@@ -111,6 +111,12 @@ let sandboxPatch: Promise<void> | undefined;
  */
 const MAX_EXITING_WORKERS = 2;
 const exitingWorkers = new Set<{ exited: boolean }>();
+/**
+ * How long a Program waits for those workers to exit before it fails. They exit within milliseconds, or
+ * hundreds of them on a loaded machine; one that takes seconds is stuck, and the Program fails instead.
+ */
+const EXIT_WAIT_MS = 5_000;
+const exitWaiters = new Set<() => void>();
 
 /** A launcher for one Program's worker, from where Pi's executor starts its own. */
 function programWorker(codemode: Awaited<ReturnType<typeof loadCodemode>>, wasmPath: string, workerUrl: string | URL | undefined) {
@@ -130,14 +136,37 @@ function programWorker(codemode: Awaited<ReturnType<typeof loadCodemode>>, wasmP
 			return () => {
 				started.exited = true;
 				exitingWorkers.delete(started);
+				for (const wake of exitWaiters) wake();
 			};
 		},
 	};
 	const sandbox = new codemode.CodemodeSandbox(options) as unknown as Record<string, unknown>;
+	const launch = sandbox.launch as (...args: unknown[]) => Promise<unknown>;
+	let wake: (() => void) | undefined;
 	return {
-		launch: sandbox.launch,
+		// acquireWorker() cannot wait, so the launcher waits before it, once the QuickJS module that Pi's launcher
+		// awaits first has loaded, and acquireWorker() checks again.
+		async launch(...args: unknown[]) {
+			// Pi's launcher reports a failure to load it.
+			await Promise.resolve(options.wasm).catch(() => {});
+			const deadline = Date.now() + EXIT_WAIT_MS;
+			while (!ended && exitingWorkers.size >= MAX_EXITING_WORKERS && Date.now() < deadline) {
+				await new Promise<void>((resolve) => {
+					const timer = setTimeout(() => wake?.(), deadline - Date.now());
+					wake = () => {
+						clearTimeout(timer);
+						exitWaiters.delete(wake!);
+						resolve();
+					};
+					exitWaiters.add(wake);
+				});
+			}
+			wake = undefined;
+			return launch(...args);
+		},
 		ended() {
 			ended = true;
+			wake?.();
 			if (worker && !worker.exited) exitingWorkers.add(worker);
 		},
 	};

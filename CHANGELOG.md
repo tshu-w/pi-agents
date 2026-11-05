@@ -13,6 +13,7 @@
 - A Session that quits normally is no longer marked failed in the workbench because its exit message was lost.
 - The workbench, its preview, and `/tasks` stay responsive with large Session files.
 - Connecting to a Session or daemon just as it starts no longer fails with `SOCKET_MODE`.
+- A Program started right after others ended waits up to 5 seconds for their workers to exit, instead of failing at once.
 
 ## [0.4.1] - 2026-11-04
 
