@@ -9,7 +9,7 @@ import { steerQueued, SUBMIT_RESULT_TOOL_NAME, type Limits } from "../agents/age
 import { settlesBy, waitText } from "../agents/wait.ts";
 import { nodes, trackTreeWork, type AgentNode } from "../agents/registry.ts";
 import { rejectFields } from "../params.ts";
-import { agentSession } from "../roots/rpc.ts";
+import { agentSession } from "../roots/rpc-patches.ts";
 import { programScope } from "./scope.ts";
 import type { PiCodemode } from "./codemode.ts";
 import { CLEANUP_TIMEOUT_MS, executeProgram, PROGRAM_TOOL_NAME, type ProgramRunOptions } from "./execute.ts";

@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import { boundText } from "../output.ts";
 import { rejectFields } from "../params.ts";
 import { renderTextResult, renderToolCall, startDuration, type DurationState } from "../render-call.ts";
-import { agentSession } from "../roots/rpc.ts";
+import { agentSession } from "../roots/rpc-patches.ts";
 import type { RootRuntime } from "../roots/runtime.ts";
 import { steerQueued, THINKING_LEVELS, type Limits } from "./agents.ts";
 import { waitText } from "./wait.ts";

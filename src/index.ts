@@ -40,7 +40,7 @@ import lockExtension from "./roots/lock-extension.mjs";
 import { statePaths } from "./roots/paths.mjs";
 import { createReporter } from "./roots/report.ts";
 import { installQueuePatches } from "./roots/queue.ts";
-import { agentSession, installRpcPatches } from "./roots/rpc.ts";
+import { agentSession, installRpcPatches } from "./roots/rpc-patches.ts";
 import { createRootRuntime } from "./roots/runtime.ts";
 import { registerMainAgent } from "./main-agent.ts";
 import { renderAgentMessage } from "./ui/message.ts";

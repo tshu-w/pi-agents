@@ -47,7 +47,7 @@ import { MESSAGE_TYPE, nodes, onTreeChange, programLabel, tasksOf, type AgentNod
 import { latestActivity } from "../agents/search.ts";
 import { PROGRAM_TOOL_NAME } from "../programs/execute.ts";
 import type { Programs } from "../programs/programs.ts";
-import { agentSession } from "../roots/rpc.ts";
+import { agentSession } from "../roots/rpc-patches.ts";
 import { execFileSync } from "node:child_process";
 
 type Message = AgentSession["messages"][number];
