@@ -24,16 +24,6 @@ export class TreeScheduler {
 		return (this.runningByRoot.get(rootId)?.size ?? 0) < maximum;
 	}
 
-	acquire(rootId: string, id: string, maximum: number): boolean {
-		this.rememberMaximum(rootId, maximum);
-		const running = this.runningByRoot.get(rootId) ?? new Set<string>();
-		if (running.has(id)) return true;
-		if (running.size >= maximum) return false;
-		running.add(id);
-		this.runningByRoot.set(rootId, running);
-		return true;
-	}
-
 	acquireQueued(rootId: string, id: string, maximum: number, signal?: AbortSignal, resume = false): Promise<void> {
 		this.rememberMaximum(rootId, maximum);
 		return new Promise<void>((resolve, reject) => {
