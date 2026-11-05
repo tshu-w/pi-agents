@@ -347,8 +347,10 @@ test("-p and --mode json run their own turns once the Session is idle, and a sig
 	assert.equal(await crossed.exited, 0);
 	gate();
 	assert.equal((await outside).success, true);
-	await since(at, (record) => answered([record], "answer:gate outside"), "the other client's turn");
+	const outsideAnswer = await since(at, (record) => answered([record], "answer:gate outside"), "the other client's turn");
 	assert.ok(answered(crossed.records(), "answer:hold"));
+	// Its agent_settled handlers have run by the time clients get agent_settled, so they do not see the next pause.
+	await since(other.records.indexOf(outsideAnswer), (record) => record.type === "agent_settled", "the other client's turn settled");
 
 	// An Agent's message that arrives while its turn settles starts a turn after it, also after the turn that its
 	// turn's extension starts then, which a signal stops.
@@ -366,9 +368,11 @@ test("-p and --mode json run their own turns once the Session is idle, and a sig
 	settling.child.kill("SIGTERM");
 	assert.equal(await settling.exited, 143);
 	const outsider = (record) => record.type === "message_end" && record.message.role === "assistant" && record.message.content[0]?.text.includes("outside");
-	assert.equal((await since(at, outsider, "the Agent's turn")).message.stopReason, "stop");
+	const outsiderAnswer = await since(at, outsider, "the Agent's turn");
+	assert.equal(outsiderAnswer.message.stopReason, "stop");
 	assert.ok(settling.records().some(chain));
 	assert.ok(!settling.records().some(outsider));
+	await since(other.records.indexOf(outsiderAnswer), (record) => record.type === "agent_settled", "the Agent's turn settled");
 
 	// A signal also stops a turn that its turn's extension starts once it settles.
 	at = other.records.length;
