@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { prepareDirectory } from '../roots/paths.mjs';
+import { SEND_TIMEOUT_MS } from './router.mjs';
 import { request } from '../roots/transport.mjs';
 
 const RETRY = ['SERVER_CLOSED', 'CONNECTION_CLOSED', 'ECONNRESET', 'INVALID_FRAME'];
@@ -60,7 +61,8 @@ export async function ensureDaemon(paths, { sessionDir, signal }) {
   }
 }
 
-export async function sendViaDaemon(paths, message, { sessionDir, launch, signal, timeoutMs = 10000 }) {
+// Longer than the daemon takes, so that its own error arrives first.
+export async function sendViaDaemon(paths, message, { sessionDir, launch, signal, timeoutMs = SEND_TIMEOUT_MS + 5000 }) {
   const deadline = AbortSignal.timeout(timeoutMs);
   const stop = signal ? AbortSignal.any([signal, deadline]) : deadline;
   try {

@@ -39,7 +39,11 @@ function validateAck(value, message) {
   return value;
 }
 
-const WAKE_TIMEOUT_MS = 10000;
+// A running Session acknowledges at once; waking one first starts Pi, which loads the Session and its extensions.
+const ACK_TIMEOUT_MS = 10000;
+const WAKE_TIMEOUT_MS = 60000;
+/** How long a send may take: a delivery, a wake, and the delivery after it. */
+export const SEND_TIMEOUT_MS = 2 * ACK_TIMEOUT_MS + WAKE_TIMEOUT_MS;
 
 export function createRouter({ deliverToSession, wake }) {
   const waking = new Map();
@@ -81,12 +85,13 @@ export function createRouter({ deliverToSession, wake }) {
     });
   }
   return {
-    async accept(message, { signal, timeoutMs = 10000, launch } = {}) {
+    async accept(message, { signal, timeoutMs = SEND_TIMEOUT_MS, launch } = {}) {
       let delivering = false;
       return bounded(async options => {
+        const deliver = () => deliverToSession(message, { signal: options.signal, timeoutMs: Math.min(options.timeoutMs, ACK_TIMEOUT_MS) });
         delivering = true;
         try {
-          return validateAck(await deliverToSession(message, options), message);
+          return validateAck(await deliver(), message);
         } catch (error) {
           options.signal.throwIfAborted();
           if (error?.uncertainDelivery || !['ENOENT', 'ECONNREFUSED'].includes(error?.code)) throw error;
@@ -95,7 +100,7 @@ export function createRouter({ deliverToSession, wake }) {
         await wakeOnce(message.recipient, { signal: options.signal, launch });
         options.signal.throwIfAborted();
         delivering = true;
-        return validateAck(await deliverToSession(message, options), message);
+        return validateAck(await deliver(), message);
       }, { signal, timeoutMs }, code => fault(code,
         `${code === 'ABORT_ERR' ? 'Send cancelled' : 'Send timed out'}${delivering ? '; the recipient may have received it' : ''}`, delivering));
     },

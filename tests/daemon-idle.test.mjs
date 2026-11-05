@@ -40,6 +40,29 @@ test('a caller that stops waiting does not cancel a wake shared with a longer ca
   assert.equal(wakes, 1);
 });
 
+test('a wake may take longer than an acknowledgement, which is bounded on its own', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let woken = false, wakes = 0;
+  const timeouts = [];
+  const router = createRouter({
+    deliverToSession: async (input, { timeoutMs }) => {
+      timeouts.push(timeoutMs);
+      if (!woken) throw Object.assign(new Error('Offline'), { code: 'ENOENT' });
+      return { accepted: true, messageId: input.id };
+    },
+    wake: async () => {
+      wakes++;
+      await new Promise(resolve => setTimeout(resolve, 30000));
+      woken = true;
+    },
+  });
+  const receipt = router.accept(message);
+  while (!wakes) await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(30000);
+  assert.deepEqual(await receipt, { accepted: true, messageId: message.id });
+  assert.deepEqual(timeouts, [10000, 10000]);
+});
+
 test('idle close waits for connections, handlers and acknowledgements', async t => {
   const directory = await mkdtemp('/tmp/pa-idle-');
   const path = join(directory, 's');
