@@ -15,12 +15,10 @@ async function readMarks(file) {
   return {};
 }
 
-/** The main Agents' Session files by entry name, as `main.json` maps them; an old `{ sessionFile }` is the entry `main`. */
+/** The main Agents' Session files by entry name, as `main.json` maps them. */
 async function readMains(file) {
-  try {
-    const entries = JSON.parse(await readFile(file, 'utf8'));
-    return typeof entries.sessionFile === 'string' ? { main: entries.sessionFile } : entries;
-  } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
+  try { return JSON.parse(await readFile(file, 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
   return {};
 }
 

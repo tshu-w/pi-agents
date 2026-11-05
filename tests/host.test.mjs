@@ -156,9 +156,8 @@ test("pd main opens the one main Agent, named main and started in ~, from any di
 	await until(async () => (await listHosts(paths)).length === 0, "host exit");
 });
 
-test("pd main --name opens the main Agent of that entry, and an old main.json names the default one", async () => {
+test("pd main --name opens the main Agent of that entry", async () => {
 	const file = JSON.parse(readFileSync(paths.mainSession, "utf8")).main;
-	writeFileSync(paths.mainSession, JSON.stringify({ sessionFile: file }));
 	const first = terminal(["main"]);
 	const main = await until(async () => (await listHosts(paths)).find((entry) => entry.session), "host");
 	assert.equal(hostSessionFile(main), file);

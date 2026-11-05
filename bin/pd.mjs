@@ -165,11 +165,9 @@ async function openMain() {
   // `--name` picks the entry, so it does not rename the Session.
   const options = argGroups(parseArgs, args.slice(1)).filter(([option]) => !['--name', '-n'].includes(option)).flat();
   let file;
-  // `main.json` maps entry names to Session files; an old one holds `{ sessionFile }` for `main`.
-  try {
-    const entries = JSON.parse(readFileSync(paths.mainSession, 'utf8'));
-    file = typeof entries.sessionFile === 'string' ? { main: entries.sessionFile }[name] : entries[name];
-  } catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
+  // `main.json` maps entry names to Session files.
+  try { file = JSON.parse(readFileSync(paths.mainSession, 'utf8'))[name]; }
+  catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
   // A main Agent without messages has no file yet, but its host may be running.
   const holds = host => hostSessionFile(host) === file;
   if (file && (existsSync(file) || (await settledHosts(paths, holds)).some(holds))) args = ['--session', file, ...options];

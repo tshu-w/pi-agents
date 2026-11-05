@@ -15,6 +15,10 @@
 - Connecting to a Session or daemon just as it starts no longer fails with `SOCKET_MODE`.
 - A Program started right after others ended waits up to 5 seconds for their workers to exit, instead of failing at once.
 
+### Removed
+
+- `pd main` no longer reads the `main.json` that 0.4.0 wrote and starts a new main Agent instead; to keep the old one, change the file to `{"main": "<Session file>"}`.
+
 ## [0.4.1] - 2026-11-04
 
 ### Added

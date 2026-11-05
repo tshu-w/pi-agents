@@ -7,11 +7,10 @@ import { statePaths } from "./roots/paths.mjs";
 export const MAIN_FLAG = "main";
 const instructions = readFileSync(new URL("./main-agent.md", import.meta.url), "utf8").trim();
 
-/** The main Agents' Session files by entry name, as `main.json` maps them; an old `{ sessionFile }` is the entry `main`. */
+/** The main Agents' Session files by entry name, as `main.json` maps them. */
 function mainEntries(): Record<string, string> {
 	try {
-		const entries = JSON.parse(readFileSync(statePaths().mainSession, "utf8")) as Record<string, string>;
-		return typeof entries.sessionFile === "string" ? { main: entries.sessionFile } : entries;
+		return JSON.parse(readFileSync(statePaths().mainSession, "utf8")) as Record<string, string>;
 	} catch {
 		return {};
 	}
