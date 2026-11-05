@@ -71,7 +71,6 @@ function removeFile(path) {
 const pause = new Int32Array(new SharedArrayBuffer(4));
 
 function createLock({ stateDir, sessionId }) {
-  if (typeof sessionId !== 'string' || sessionId.length === 0) throw new Error('Session ID is required');
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const directory = lstatSync(stateDir);
   if (!directory.isDirectory() || directory.uid !== process.getuid() || (directory.mode & 0o077) !== 0) {

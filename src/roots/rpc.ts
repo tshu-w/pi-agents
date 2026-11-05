@@ -555,7 +555,7 @@ export function createRpc() {
 		/** Connects a client to the Session `manager` holds; resolves to the Session's header. */
 		open(manager: ExtensionContext["sessionManager"], channel: RpcChannel): { header: unknown } {
 			const current = shared.sessions.get(manager);
-			if (!current || !toJsonEvent) throw new Error("The Session is not ready.");
+			if (!current) throw new Error("The Session is not ready.");
 			if (session !== current) {
 				unsubscribe?.();
 				session = current;
@@ -574,7 +574,7 @@ export function createRpc() {
 		 */
 		print(manager: ExtensionContext["sessionManager"], channel: RpcChannel): { header: unknown } {
 			const current = shared.sessions.get(manager) as Patchable | undefined;
-			if (!current || !toJsonEvent) throw new Error("The Session is not ready.");
+			if (!current) throw new Error("The Session is not ready.");
 			const queue = lane(current);
 			let job: Job | undefined;
 			const withdraw = () => {

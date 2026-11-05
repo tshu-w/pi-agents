@@ -88,7 +88,7 @@ const router = createRouter({
       const combined = AbortSignal.any([signal, stop.signal]);
       const root = await findRoot(sessionDir, id, { extraFiles: sessions.files(), signal: combined });
       if (!root) throw Object.assign(new Error(`No root Agent ${id}`), { code: 'UNKNOWN_AGENT' });
-      if (typeof root.cwd !== 'string' || !root.cwd.trim() || !isAbsolute(root.cwd)) {
+      if (!isAbsolute(root.cwd)) {
         throw Object.assign(new Error(`Agent ${id} requires a nonempty absolute working directory; refusing cwd fallback.`), { code: 'INVALID_CWD' });
       }
       // A host still starting Pi in the Session's cwd, as when a terminal has just opened the Session, may be

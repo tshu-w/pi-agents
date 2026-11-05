@@ -79,7 +79,7 @@ function start({ cols, rows }) {
     // No terminal saw why Pi failed, so its last screen goes to the log.
     if (!attachedOnce && exitCode !== 0) {
       const buffer = mirror.buffer.active;
-      const lines = Array.from({ length: buffer.length }, (_, i) => buffer.getLine(i)?.translateToString(true) ?? '');
+      const lines = Array.from({ length: buffer.length }, (_, i) => buffer.getLine(i).translateToString(true));
       console.error(`[pi-agents] Pi exited (${exitCode}) in ${config.cwd}:\n${lines.join('\n').trim()}`);
     }
     server.close();
@@ -102,7 +102,7 @@ function belowContent() {
   if (buffer.type !== 'normal') return '';
   const cursor = buffer.baseY + buffer.cursorY;
   let last = buffer.length - 1;
-  while (last > cursor && !buffer.getLine(last)?.translateToString(true).trim()) last--;
+  while (last > cursor && !buffer.getLine(last).translateToString(true).trim()) last--;
   return last > cursor ? `\x1b[${last - cursor}B` : '';
 }
 
@@ -145,12 +145,12 @@ const server = net.createServer(socket => {
   readFrames(socket, (type, body) => {
     if (type === FRAME.status) socket.end(frame(FRAME.status, status()));
     else if (type === FRAME.attach) attach(socket, json(body));
-    else if (type === FRAME.resize && terminal?.socket === socket && child) resize(json(body));
+    else if (type === FRAME.resize && terminal?.socket === socket) resize(json(body));
     else if (type === FRAME.detached && terminal?.socket === socket) {
       detach('detach');
       setAttached(undefined);
     }
-    else if (type === FRAME.data && terminal?.socket === socket && child) {
+    else if (type === FRAME.data && terminal?.socket === socket) {
       const reply = body.toString('latin1').match(COLOR_SCHEME_REPORT);
       if (reply) { terminal.colorReply = true; colorScheme = reply[1]; }
       child.write(body);

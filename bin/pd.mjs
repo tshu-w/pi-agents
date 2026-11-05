@@ -42,7 +42,7 @@ function runDirectly() {
       process.removeAllListeners(signal);
       process.kill(process.pid, signal);
     }
-    else process.exit(code ?? 1);
+    else process.exit(code);
   });
 }
 

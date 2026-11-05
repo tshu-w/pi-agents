@@ -117,21 +117,17 @@ export default function lockExtension(pi, runtime = {}) {
       const transfer = pending.get(pendingKey(file));
       if (transfer) return;
       const id = readSessionId(file);
-      const acquired = lock => {
-        if (!alive || !lock) {
-          lock?.release();
-          return { cancel: true };
-        }
-        const value = savePending(file, id, lock);
-        reopen = { file, value };
-        blocked = 'Switching to the latest Session';
-        // Switch again later so a cancellation releases the lock.
-        scheduleReopen(ctx);
-        return { cancel: true };
-      };
       const lock = reserve(stateDir, file, id);
-      if (ctx.mode === 'tui' && id) return acquired(lock);
-      lock.release();
+      if (ctx.mode !== 'tui' || !id) return void lock.release();
+      if (!alive) {
+        lock.release();
+        return { cancel: true };
+      }
+      reopen = { file, value: savePending(file, id, lock) };
+      blocked = 'Switching to the latest Session';
+      // Switch again later so a cancellation releases the lock.
+      scheduleReopen(ctx);
+      return { cancel: true };
     } catch (error) {
       notify(ctx, error.message);
       return { cancel: true };
