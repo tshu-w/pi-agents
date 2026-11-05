@@ -63,6 +63,25 @@ test('a wake may take longer than an acknowledgement, which is bounded on its ow
   assert.deepEqual(timeouts, [10000, 10000]);
 });
 
+test('a request whose handler outlasts the read timeout keeps its connection', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const directory = await mkdtemp('/tmp/pa-idle-');
+  const entered = Promise.withResolvers();
+  const server = await listen(join(directory, 's'), {
+    status: () => ({ ready: true }),
+    accept: async input => {
+      entered.resolve();
+      await new Promise(resolve => setTimeout(resolve, 30000));
+      return { accepted: true, messageId: input.id };
+    },
+  });
+  t.after(async () => { await server.close(); await rm(directory, { recursive: true, force: true }); });
+  const receipt = request(join(directory, 's'), { action: 'deliver', message }, { timeoutMs: 60000 });
+  await entered.promise;
+  t.mock.timers.tick(30000);
+  assert.deepEqual(await receipt, { accepted: true, messageId: message.id });
+});
+
 test('idle close waits for connections, handlers and acknowledgements', async t => {
   const directory = await mkdtemp('/tmp/pa-idle-');
   const path = join(directory, 's');

@@ -181,6 +181,7 @@ export async function listen(socketPath, { status, accept, stream, serialize = t
       queued.delete(socket);
     }
     socket.on('error', () => { disconnect(); socket.destroy(); });
+    // Bounds reading the request; the handler bounds its own work.
     const timer = setTimeout(() => { disconnect(); socket.destroy(); }, TIMEOUT_MS);
     socket.on('close', () => { disconnect(); clearTimeout(timer); clients.delete(socket); lastActivity = Date.now(); });
     function respond(error, result) {
@@ -191,13 +192,13 @@ export async function listen(socketPath, { status, accept, stream, serialize = t
       socket.end(bytes);
     }
     readFrame(socket, (error, value) => {
+      clearTimeout(timer);
       if (error) return respond(error);
       let input;
       try { input = validate(value); }
       catch (failure) { return respond(failure); }
       if (input.action === 'stream') {
         if (!stream) return respond(fault('INVALID_REQUEST', 'Streams are not supported here'));
-        clearTimeout(timer);
         const opened = channel(socket, signal, streamLimit(input.role));
         const send = opened.send;
         const early = [];
