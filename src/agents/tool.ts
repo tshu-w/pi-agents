@@ -10,6 +10,7 @@ import { steerQueued, THINKING_LEVELS, waitText, type Limits } from "./agents.ts
 import {
 	deliver,
 	label,
+	modelLabel,
 	nodes,
 	rememberRoots,
 	resolveIn,
@@ -17,7 +18,7 @@ import {
 	type AgentNode,
 	type Entry,
 } from "./registry.ts";
-import { listLine, searchEntries } from "./search.ts";
+import { listLine, savedModel, searchEntries } from "./search.ts";
 
 /** Registers the `agent` tool. */
 export function registerAgentTool(
@@ -155,7 +156,15 @@ export function registerAgentTool(
 					const page = items.slice(offset, offset + limit);
 					const agents = page.map(({ entry: { id, name, ownerId, state } }) => ({ id, name, ownerId, state }));
 					if (page.length === 0) return { content: [{ type: "text", text: "No matching Agents." }], details: { total: items.length, agents } };
-					const lines = page.map((item) => listLine(item, all.map((entry) => entry.id)));
+					// A loaded Agent's runtime knows its model; otherwise it is the one its Session file sets.
+					const modelOf = (entry: Entry): string | undefined => {
+						const live = nodes.get(entry.id)?.model?.() ?? entry.model;
+						if (live) return live;
+						const saved = savedModel(entry.sessionFile);
+						return saved && modelLabel(saved.provider, saved.modelId,
+							current.modelRegistry.find(saved.provider, saved.modelId)?.reasoning ? saved.thinkingLevel : undefined);
+					};
+					const lines = page.map((item) => listLine(item, all.map((entry) => entry.id), modelOf(item.entry)));
 					const remaining = items.length - offset - page.length;
 					if (remaining > 0) lines.push(`[${remaining} more results. Use offset=${offset + page.length} to continue.]`);
 					const text = boundText(lines.join("\n"), "pi-agents-list");

@@ -17,6 +17,7 @@ import {
 	liveWork,
 	MESSAGE_TYPE,
 	messageText,
+	modelLabel,
 	rememberRoots,
 	sender,
 	visibleIds,
@@ -157,6 +158,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			cwd: () => ctx?.cwd ?? current.cwd,
 			busy: () => !(ctx?.isIdle() ?? true),
 			sessionFile: () => ctx?.sessionManager.getSessionFile(),
+			model: () => {
+				const model = ctx?.model;
+				return model && modelLabel(model.provider, model.id, model.reasoning ? pi.getThinkingLevel() : undefined);
+			},
 			receive: (text, delivery, messageId, from, notice) => {
 				const as = created.stopped ? "write" : delivery;
 				pi.sendMessage(customMessage(text, as, { messageId, sender: from, notice }), as === "write"

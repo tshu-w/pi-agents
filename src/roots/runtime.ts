@@ -2,7 +2,7 @@ import { buildSessionContext, getPackageDir, hasTrustRequiringProjectResources, 
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { trackTreeWork, treeMetadata } from "../agents/registry.ts";
+import { modelLabel, trackTreeWork, treeMetadata } from "../agents/registry.ts";
 import { sendViaDaemon } from "../daemon/client.mjs";
 import { prepareDirectory, statePaths, sessionDir as resolveSessionDir } from "./paths.mjs";
 import { createRpc } from "./rpc.ts";
@@ -28,6 +28,7 @@ export interface RootEntry {
 	cwd: string;
 	state: "running" | "idle";
 	sessionFile: string;
+	model?: string;
 }
 
 export interface RootHooks {
@@ -84,7 +85,7 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 			state: idle() ? "idle" : "running",
 			ready,
 			pid: process.pid,
-			model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined,
+			model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id, ...(ctx.model.reasoning && { thinkingLevel: pi.getThinkingLevel() }) } : undefined,
 			availabilityError: availabilityError(),
 		};
 	}
@@ -121,7 +122,9 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 			const records = await rootSnapshot(paths, sessionDir, { signal, current: self });
 			return records
 				.filter((root: { id: string }) => root.id !== self.id)
-				.map(({ id, name, cwd, state, sessionFile }: RootEntry) => ({ id, name, cwd, state, sessionFile }));
+				.map(({ id, name, cwd, state, sessionFile, model }: Omit<RootEntry, "model"> & { model?: { provider: string; modelId: string; thinkingLevel?: string } }) => ({
+					id, name, cwd, state, sessionFile, ...(model && { model: modelLabel(model.provider, model.modelId, model.thinkingLevel) }),
+				}));
 		},
 
 		/** Sends to another root: inputs start it in a host through the daemon, writes reach it only while it runs. */

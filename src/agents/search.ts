@@ -8,24 +8,56 @@ interface SearchText {
 	request?: boolean;
 }
 
-/** Parsed texts by Session file, reused while the file is unchanged. */
-const cache = new Map<string, { stamp: string; texts: SearchText[] }>();
+interface SavedModel {
+	provider: string;
+	modelId: string;
+	thinkingLevel: string;
+}
+
+interface Parsed {
+	texts: SearchText[];
+	model?: SavedModel;
+}
+
+/** Parsed Session files, reused while the file is unchanged. */
+const cache = new Map<string, Parsed & { stamp: string }>();
 
 function sessionTexts(sessionFile: string | undefined): SearchText[] {
-	if (!sessionFile) return [];
+	return parse(sessionFile).texts;
+}
+
+/** The model and thinking level a Session file sets on its current branch, as Pi restores them. */
+export function savedModel(sessionFile: string | undefined): SavedModel | undefined {
+	return parse(sessionFile).model;
+}
+
+function parse(sessionFile: string | undefined): Parsed {
+	if (!sessionFile) return { texts: [] };
 	const stats = statSync(sessionFile, { throwIfNoEntry: false });
 	if (!stats) {
 		cache.delete(sessionFile);
-		return [];
+		return { texts: [] };
 	}
 	const stamp = `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}`;
 	const cached = cache.get(sessionFile);
-	if (cached?.stamp === stamp) return cached.texts;
+	if (cached?.stamp === stamp) return cached;
 	const texts: SearchText[] = [];
+	// The current branch runs from the last entry up through each entry's parent.
+	const parents = new Map<string, { parentId?: string; model?: { provider: string; modelId: string }; thinkingLevel?: string }>();
+	let leaf: string | undefined;
 	for (const line of readFileSync(sessionFile, "utf8").split("\n")) {
 		if (!line) continue;
 		let entry: Record<string, any>;
 		try { entry = JSON.parse(line); } catch { continue; }
+		if (typeof entry.id === "string" && entry.type !== "session") {
+			leaf = entry.id;
+			parents.set(entry.id, {
+				parentId: entry.parentId ?? undefined,
+				...(entry.type === "model_change" && { model: { provider: entry.provider, modelId: entry.modelId } }),
+				...(entry.type === "message" && entry.message?.role === "assistant" && { model: { provider: entry.message.provider, modelId: entry.message.model } }),
+				...(entry.type === "thinking_level_change" && { thinkingLevel: entry.thinkingLevel }),
+			});
+		}
 		const time = Date.parse(entry.timestamp ?? "") || 0;
 		if (entry.type === "compaction" || entry.type === "branch_summary") {
 			if (typeof entry.summary === "string") texts.push({ time, text: entry.summary });
@@ -40,8 +72,19 @@ function sessionTexts(sessionFile: string | undefined): SearchText[] {
 			texts.push({ time, text: entry.content, request });
 		}
 	}
-	cache.set(sessionFile, { stamp, texts });
-	return texts;
+	let model: { provider: string; modelId: string } | undefined;
+	let thinkingLevel: string | undefined;
+	// A step per entry at most, should parents loop.
+	for (let id = leaf, steps = 0; id !== undefined && !(model && thinkingLevel) && steps++ < parents.size;) {
+		const entry = parents.get(id);
+		model ??= entry?.model;
+		thinkingLevel ??= entry?.thinkingLevel;
+		id = entry?.parentId;
+	}
+	// Pi's default for a Session that never set its thinking level.
+	const parsed = { stamp, texts, ...(model && { model: { ...model, thinkingLevel: thinkingLevel ?? "off" } }) };
+	cache.set(sessionFile, parsed);
+	return parsed;
 }
 
 function matcher(query: string): (text: string) => string[] | undefined {
@@ -88,9 +131,9 @@ export function searchEntries(entries: Entry[], query: string | undefined): List
 	return items.sort((left, right) => right.time - left.time).map(({ time: _time, ...item }) => item);
 }
 
-/** An entry with its latest matching excerpt, else its latest request, and its time. */
-export function listLine(item: ListItem, ids: Iterable<string>): string {
-	const line = entryLine(item.entry, ids);
+/** An entry with its model, then its latest matching excerpt, else its latest request, and its time. */
+export function listLine(item: ListItem, ids: Iterable<string>, model?: string): string {
+	const line = entryLine(item.entry, ids, model);
 	const detail = item.match ?? latestRequest(item.entry.sessionFile);
 	return detail ? `${line}\n  ${formatTime(detail.time)}  ${detail.excerpt}` : line;
 }

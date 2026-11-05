@@ -30,6 +30,8 @@ export interface AgentNode {
 	cwd(): string;
 	busy(): boolean;
 	sessionFile(): string | undefined;
+	/** An Agent's current model, as `modelLabel` writes it. */
+	model?(): string | undefined;
 	agents: Agents;
 	/** An Agent's background Programs, which the task viewer lists. */
 	programs?: Programs;
@@ -50,6 +52,8 @@ export interface Entry {
 	createdAt?: string;
 	/** A root Agent loaded in another process. */
 	remote?: boolean;
+	/** The model a running root Agent in another process reports, as `modelLabel` writes it. */
+	model?: string;
 }
 
 interface Shared {
@@ -173,8 +177,13 @@ export function label(agent: { id: string; name?: string }, ids: Iterable<string
 	return agent.name ? `${agent.name} (${id})` : id;
 }
 
-export function entryLine(entry: Entry, ids: Iterable<string>): string {
-	return `${label(entry, ids)}  ${entry.state}  ${entry.cwd}`;
+export function entryLine(entry: Entry, ids: Iterable<string>, model?: string): string {
+	return `${label(entry, ids)}  ${entry.state}  ${model ? `${model}  ` : ""}${entry.cwd}`;
+}
+
+/** A model as Pi's `--model` takes it: `provider/modelId`, with `:thinkingLevel` for a model that thinks. */
+export function modelLabel(provider: string, modelId: string, thinkingLevel?: string): string {
+	return `${provider}/${modelId}${thinkingLevel ? `:${thinkingLevel}` : ""}`;
 }
 
 export function rememberRoots(ids: string[]): void {

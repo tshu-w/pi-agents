@@ -99,7 +99,8 @@ test("an input starts the offline root in a host on its active branch, which ans
 		{ type: "model_change", id: "abandoned", parentId: "n", provider: "unavailable", modelId: "missing", timestamp },
 		{ type: "session_info", id: "active", parentId: "n", name: "reviewer", timestamp },
 	].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
-	assert.match(await sender.call({ action: "list", query: "reviewer" }), /reviewer \(offline-\)\s+idle/);
+	// The model is the one the active branch sets, not the abandoned branch's later change.
+	assert.match(await sender.call({ action: "list", query: "reviewer" }), /reviewer \(offline-\)  idle  agents-test\/fake  \//);
 	assert.equal(await sender.call({ action: "send", target: "reviewer", message: "hello" }), "Input accepted by reviewer (offline-).");
 	const answered = await until(() => entriesOf(target.file).find((entry) => entry.type === "message" && entry.message.role === "assistant"), "answer");
 	assert.match(textOf(answered.message.content), /^answer:<agent-message name="sender" [^>]*note="Reply with send">\nhello\n/);
