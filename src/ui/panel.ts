@@ -36,14 +36,13 @@ export function panelLines(self: AgentNode, now = Date.now()): string[] {
 	const ids = self.agents.ids();
 	const line = (task: Task): string => {
 		if ("program" in task) {
-			const since = Date.parse(task.program.createdAt ?? "");
-			const time = since ? [elapsed(since, now), ...spend(task.program.spent)] : [];
+			const time = [elapsed(Date.parse(task.program.createdAt!), now), ...spend(task.program.spent)];
 			return [programLabel(task.program), "running", ...time].join("  ");
 		}
 		const { entry, owner } = task;
-		const own = owner.agents.counts(entry.id);
-		const pending = own?.pending ? [`${own.pending} pending`] : [];
-		const time = own?.since ? [elapsed(own.since, now), ...spend(own.spent)] : [];
+		const own = owner.agents.counts(entry.id)!;
+		const pending = own.pending ? [`${own.pending} pending`] : [];
+		const time = own.since ? [elapsed(own.since, now), ...spend(own.spent)] : [];
 		return `Agent ${[label(entry, ids), entry.state, ...time, ...pending].join("  ")}`;
 	};
 	// A row is listed while it is live or has live work under it, so the tree stays readable.

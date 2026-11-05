@@ -15,7 +15,7 @@ import { CLEANUP_TIMEOUT_MS, executeProgram, PROGRAM_TOOL_NAME, type ProgramRunO
 import { commandSession, runDetached } from "./host-patches.ts";
 import { programDescription, programLoadout, programRenderers } from "./loadout.ts";
 import { randomUUID } from "node:crypto";
-import { CLEANUP_ERROR, programListLine, Programs } from "./programs.ts";
+import { CLEANUP_ERROR, programListLine } from "./programs.ts";
 import { PROGRAM_MESSAGE, runOutput } from "./run-output.mjs";
 import { agentGlobals, withAgentPrefix } from "./sandbox.ts";
 
@@ -77,12 +77,11 @@ declare function agent(options?: AgentOptions): AgentHandle;
 /** Registers the `program` tool and `submit_result`, which Agents of Programs use. */
 export function registerProgramTools(
 	pi: ExtensionAPI,
-	{ agentDir, settings, piCodemode, requireNode, programs: getPrograms }: {
+	{ agentDir, settings, piCodemode, requireNode }: {
 		agentDir: string;
 		settings: Limits & { extensions: string[] };
 		piCodemode: PiCodemode;
 		requireNode: (current: ExtensionContext) => AgentNode;
-		programs: () => Programs | undefined;
 	},
 ): void {
 	const renderers = programRenderers(piCodemode);
@@ -174,8 +173,7 @@ export function registerProgramTools(
 		}),
 		async execute(toolCallId, params, signal, onUpdate, current) {
 			const self = requireNode(current);
-			const programs = getPrograms();
-			if (!programs) throw new Error("pi-agents is not initialized");
+			const programs = self.programs!;
 			const targets = params.target === undefined ? undefined : Array.isArray(params.target) ? params.target : [params.target];
 			switch (params.action) {
 				case "run": {
@@ -199,9 +197,9 @@ export function registerProgramTools(
 					const selected = programs.select(targets);
 					onUpdate?.({ content: [], details: undefined });
 					const session = agentSession(current.sessionManager);
-					const waitFor = () => programs!.wait(selected, timeout, signal, () => steerQueued(session?.agent));
+					const waitFor = () => programs.wait(selected, timeout, signal, () => steerQueued(session?.agent));
 					const { end, running } = programs.running(selected) ? await self.agents.whileSuspended(waitFor, signal, true) : await waitFor();
-					const text = waitText(end, `Still running: ${running.map((record) => programs!.label(record)).join(", ")}`);
+					const text = waitText(end, `Still running: ${running.map((record) => programs.label(record)).join(", ")}`);
 					return {
 						content: [{ type: "text", text }],
 						details: { running: running.map((record) => record.id), ...(end === "timedOut" && { timedOut: true }), ...(end === "interrupted" && { interrupted: true }) },
@@ -214,7 +212,7 @@ export function registerProgramTools(
 					const records = programs.list();
 					if (records.length === 0) return { content: [{ type: "text", text: "No Programs." }], details: { total: 0 } };
 					const page = records.slice(offset, offset + limit);
-					const lines = page.map((record) => programListLine(record, programs!.ids()));
+					const lines = page.map((record) => programListLine(record, programs.ids()));
 					const remaining = records.length - offset - page.length;
 					if (remaining > 0) lines.push(`[${remaining} more results. Use offset=${offset + page.length} to continue.]`);
 					return { content: [{ type: "text", text: lines.join("\n") }], details: { total: records.length } };

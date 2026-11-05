@@ -321,11 +321,11 @@ export class Agents {
 	private agents = new Map<string, Owned>();
 	private change = deferred();
 	private closing = false;
-	private ctx?: ExtensionContext;
 
 	constructor(
 		private pi: ExtensionAPI,
 		private self: { id: string; rootId: string; scopeId: string; ownerId?: string; name(): string | undefined },
+		private ctx: ExtensionContext,
 		private agentDir: string,
 		private limits: Limits,
 		private extensions: string[],
@@ -735,7 +735,7 @@ export class Agents {
 		if (turn.finished) return;
 		turn.finished = true;
 		if (turn.slot) scheduler.release(this.self.rootId, agent.record.id);
-		if (agent.turn === turn) agent.turn = undefined;
+		agent.turn = undefined;
 		this.end(agent, turn.inputs, answer.outcome, answer.result);
 		turn.done.resolve();
 		this.changed();
@@ -856,14 +856,9 @@ export class Agents {
 		treeChanged();
 	}
 
-	private requireContext(): ExtensionContext {
-		if (!this.ctx) throw new Error("pi-agents is not initialized");
-		return this.ctx;
-	}
-
 	/** Creates the Session of a root Agent the caller does not own; a message to it starts it. */
 	disown(request: Omit<SpawnRequest, "message" | "context">): { id: string; name: string } {
-		const ctx = this.requireContext();
+		const ctx = this.ctx;
 		const name = request.name.trim();
 		const env = ctx.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "env-state").pop();
 		if (env?.type === "custom" && (env.data as { environment?: string | null }).environment) throw new Error("An Agent in a pi-env environment cannot disown an Agent.");
@@ -886,7 +881,7 @@ export class Agents {
 	}
 
 	private resolveModel(request: Pick<SpawnRequest, "model" | "thinkingLevel">): Pick<Prepared, "model" | "thinkingLevel"> {
-		const ctx = this.requireContext();
+		const ctx = this.ctx;
 		let model = ctx.model;
 		if (request.model !== undefined) {
 			const separator = request.model.indexOf("/");
@@ -900,7 +895,7 @@ export class Agents {
 	}
 
 	private prepare(request: Omit<SpawnRequest, "message">, name: string, id?: string): Prepared {
-		const ctx = this.requireContext();
+		const ctx = this.ctx;
 		const { model, thinkingLevel } = this.resolveModel(request);
 		// In a pi-env execution environment, the Agent runs in the same environment and `cwd` is a path there.
 		const envEntry = ctx.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "env-state").pop();
@@ -941,7 +936,7 @@ export class Agents {
 	}
 
 	private async createSession(agent: Owned): Promise<AgentSession> {
-		const ctx = this.requireContext();
+		const ctx = this.ctx;
 		const { cwd, sessionFile } = agent.record;
 		const settingsManager = SettingsManager.create(cwd, this.agentDir, { projectTrusted: resolveProjectTrust(cwd, ctx, this.agentDir) });
 		const resourceLoader = new DefaultResourceLoader({

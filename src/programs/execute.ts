@@ -75,9 +75,9 @@ export interface ProgramRunOptions {
 	/** Seconds until the Program stops; the script's `timeout_ms` option applies as well. */
 	timeout?: number;
 	/** Globals added to the script, such as the host side of `agent()`; `track` records their calls. */
-	globals?: (track: CallTracker) => CodemodeTool[];
+	globals: (track: CallTracker) => CodemodeTool[];
 	/** Rewrites the code before it runs, such as prepending the `agent()` prelude. */
-	prepare?: (code: string) => string;
+	prepare: (code: string) => string;
 	onUpdate?: AgentToolUpdateCallback<unknown>;
 	/**
 	 * Whether the Program runs outside a tool call: after its tool call returns, or from `/program`.
@@ -254,7 +254,7 @@ export async function executeProgram(
 	const executeTool = (name: string, args: unknown, callOptions: { signal?: AbortSignal }) => {
 		if (!options.detached) return ctx.executeTool(name, args, callOptions);
 		addFile(name, args);
-		const detachedOptions = { ...callOptions, detachedCallerId: `${toolCallId}:${++detachedCalls}`, detachedAbort: () => options.abort?.() } satisfies DetachedCallOptions;
+		const detachedOptions = { ...callOptions, detachedCallerId: `${toolCallId}:${++detachedCalls}`, detachedAbort: () => options.abort!() } satisfies DetachedCallOptions;
 		return ctx.executeTool(name, args, detachedOptions as never);
 	};
 	const programCtx = Object.create(ctx, {
@@ -305,8 +305,8 @@ export async function executeProgram(
 	// Calls still running when the script ends are cut off by it.
 	let cutOff: CallRecord[] = [];
 	const extras: SandboxExtras = {
-		globals: options.globals?.(track) ?? [],
-		prepare: options.prepare ?? ((code) => code),
+		globals: options.globals(track),
+		prepare: options.prepare,
 		timeoutMs: options.timeout === undefined ? Number.POSITIVE_INFINITY : options.timeout * 1000,
 		used: false,
 		ended: () => {

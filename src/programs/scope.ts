@@ -25,8 +25,7 @@ export function programScope(
 	options: { agentDir: string; limits: Limits; extensions: string[]; background: boolean },
 ): ProgramScope {
 	const self = { id, rootId: caller.rootId, scopeId: id, ownerId: caller.id, name: () => "program" };
-	const agents = new Agents(pi, self, options.agentDir, options.limits, options.extensions, true);
-	agents.setContext(ctx);
+	const agents = new Agents(pi, self, ctx, options.agentDir, options.limits, options.extensions, true);
 	nodes.set(id, {
 		...self,
 		program: true,

@@ -77,7 +77,7 @@ export class Programs {
 			/** Delivers a notification with Programs' results and their images. */
 			notify(text: string, notice: Notice): void;
 			/** Called when a Program starts or ends. */
-			changed?(): void;
+			changed(): void;
 		},
 	) {}
 
@@ -127,7 +127,7 @@ export class Programs {
 		// The tree stays busy until the Program ends and its notification is delivered.
 		const release = program.release = trackTreeWork(this.rootId);
 		this.persist(record);
-		this.hooks.changed?.();
+		this.hooks.changed();
 		program.done = run(record.id, controller.signal, () => controller.abort(new Error("Program stopped")), update).then(
 			({ outcome, result, files, abandoned }) => {
 				if (abandoned) program.abandoned = true;
@@ -260,7 +260,7 @@ export class Programs {
 		const previous = this.change;
 		this.change = deferred();
 		previous.resolve();
-		this.hooks.changed?.();
+		this.hooks.changed();
 		this.viewed();
 	}
 

@@ -97,7 +97,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	const piCodemode = await loadPiCodemode();
 	let node: AgentNode | undefined;
 	let programs: Programs | undefined;
-	let ctx: ExtensionContext | undefined;
+	let ctx!: ExtensionContext;
 	const panel = createPanel(() => node);
 
 	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: statePaths().locks });
@@ -147,19 +147,18 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		const metadata = treeMetadata(current);
 		const rootId = metadata?.rootId ?? id;
 		const self = { id, rootId, scopeId: metadata?.scopeId ?? rootId, ownerId: metadata?.ownerId, name: () => pi.getSessionName() };
-		const agents = new Agents(pi, self, agentDir, settings, settings.extensions);
-		agents.setContext(current);
+		const agents = new Agents(pi, self, current, agentDir, settings, settings.extensions);
 		agents.restore(current);
 		const manager = current.sessionManager;
 		const queue = showQueue(current, () => agentSession(manager));
 		const created: AgentNode = {
 			...self,
 			agents,
-			cwd: () => ctx?.cwd ?? current.cwd,
-			busy: () => !(ctx?.isIdle() ?? true),
-			sessionFile: () => ctx?.sessionManager.getSessionFile(),
+			cwd: () => ctx.cwd,
+			busy: () => !ctx.isIdle(),
+			sessionFile: () => ctx.sessionManager.getSessionFile(),
 			model: () => {
-				const model = ctx?.model;
+				const model = ctx.model;
 				return model && modelLabel(model.provider, model.id, model.reasoning ? pi.getThinkingLevel() : undefined);
 			},
 			receive: (text, delivery, messageId, from, notice) => {
@@ -221,7 +220,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	});
 
 	registerAgentTool(pi, { limits: settings, roots, requireNode });
-	registerProgramTools(pi, { agentDir, settings, piCodemode, requireNode, programs: () => programs });
+	registerProgramTools(pi, { agentDir, settings, piCodemode, requireNode });
 	pi.registerMessageRenderer(MESSAGE_TYPE, renderAgentMessage);
 
 	pi.registerCommand("tasks", {
