@@ -2,13 +2,15 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-06
+
 ### Added
 
 - `list` shows each Agent's model as `--model` takes it, such as `anthropic/claude-opus-5-5:high`.
 
 ### Changed
 
-- The workbench preview shows only the last reply of each finished turn, after a rule such as `─── Worked for 1m 23s, 4 steps: bash, read ───` that folds its other replies, tool calls, retries, and messages.
+- The workbench preview folds each finished turn into one rule before its last reply, such as `─── Worked for 1m 23s, 4 steps: bash, read ───`.
 - A foreground Program still running after 120 seconds moves to the background, and its caller gets a notification when it ends.
 
 ### Fixed
