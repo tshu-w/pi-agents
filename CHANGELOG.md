@@ -8,6 +8,7 @@
 
 ### Changed
 
+- The workbench preview shows only the last reply of each finished turn, after a rule such as `─── Worked for 1m 23s, 4 steps: bash, read ───` that folds its other replies, tool calls, retries, and messages.
 - A foreground Program still running after 120 seconds moves to the background, and its caller gets a notification when it ends.
 
 ### Fixed

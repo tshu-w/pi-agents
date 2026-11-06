@@ -17,7 +17,7 @@ import { openStream } from './roots/transport.mjs';
 const ALT_SCREEN = '\x1b[?1049h\x1b[H\x1b[2J';
 const MAIN_SCREEN = '\x1b[?1049l';
 
-async function loadPi(executable) {
+export async function loadPi(executable) {
   const root = piPackage(executable);
   const load = path => import(pathToFileURL(path).href);
   // Internal modules are the same files Pi's index loads, so their state is shared with it.
@@ -53,6 +53,129 @@ async function branchMessages(pi, file) {
   const branch = [];
   for (let entry = leaf; entry && entry.type !== 'compaction'; entry = byId.get(entry.parentId)) branch.push(entry);
   return branch.reverse().flatMap(entry => pi.sessionEntryToContextMessages(entry));
+}
+
+// As Codex shows elapsed time: 45s, 1m 05s, 1h 02m.
+function elapsed(ms) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
+  return `${Math.floor(seconds / 3600)}h ${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}m`;
+}
+
+const FAILED = ['error', 'aborted', 'length'];
+
+/**
+ * Messages and replies as Pi shows them, thinking left out. A turn starts at the user's input, or at a custom message
+ * after the Agent stopped, such as a notification. A finished turn shows only its last text, and its other texts, tool
+ * calls, retries, and custom messages fold to one rule before it, such as `─── Worked for 1m 23s, 6 steps: bash, read ───`.
+ * While the Session is `working` and its last turn has not ended, that turn shows its texts, and only its steps fold;
+ * background work, such as a Program, keeps the Session working after its turn ended.
+ */
+export function conversation({ tui: T, pi, themes }, messages, { outputPad, working }) {
+  const { theme } = themes;
+  const markdown = themes.getMarkdownTheme();
+  const view = new T.Container();
+  const isUser = message => message.role === 'user' || (message.role === 'custom' && message.customType === 'pi-agents' && message.details?.user);
+  // As in Pi's chat, a custom message not for display is skipped, and so is empty input.
+  messages = messages.filter(message => isUser(message) ? textOf(message.content).trim() : message.role !== 'custom' || message.display);
+  const hasText = message => message.content.some(part => part.type === 'text' && part.text.trim());
+  // A failure is recovered when its turn goes on before the next user input.
+  const recovered = index => {
+    for (const message of messages.slice(index + 1)) {
+      if (isUser(message)) return false;
+      if (message.role === 'assistant') return true;
+    }
+    return false;
+  };
+  // Each turn by the index of its first message, with its start and the start of its last assistant message.
+  const folded = new Set(), starts = new Map(), first = {};
+  let last = first, texts = [], ended = true;
+  const finish = () => { for (const index of texts.slice(0, -1)) folded.add(index); texts = []; };
+  for (const [index, message] of messages.entries()) {
+    if (isUser(message) || (ended && message.role === 'custom')) {
+      finish();
+      last = { start: message.timestamp === undefined ? undefined : new Date(message.timestamp).getTime() };
+      starts.set(index, last);
+      ended = false;
+    } else if (message.role === 'assistant') {
+      ended = message.stopReason !== 'toolUse';
+      last.start ??= message.timestamp;
+      last.end = message.timestamp;
+      if (hasText(message) && (!FAILED.includes(message.stopReason) || recovered(index))) texts.push(index);
+    }
+  }
+  const running = working && !ended;
+  if (!running) finish();
+  const current = running ? last : undefined;
+  let turn = starts.get(0) ?? first, timed = false;
+  let steps = 0, retries = 0, notes = false, custom = false;
+  let tools = [];
+  // Tool names are dropped from the end, then elided, before the label is truncated.
+  const rule = (head, retry = '', names = []) => {
+    if (!(view.children.at(-1) instanceof T.Spacer)) view.addChild(new T.Spacer(1));
+    const label = shown => theme.fg('muted', head) + retry + theme.fg('muted', shown.length ? `: ${shown.join(', ')}` : '');
+    view.addChild({
+      invalidate() {},
+      render(width) {
+        // The rule is indented like Pi's text.
+        const inner = Math.max(0, width - 2 * outputPad), room = Math.max(0, inner - 8);
+        let text = label(names);
+        for (let count = names.length - 1; count >= 0 && T.visibleWidth(text) > room; count--) text = label([...names.slice(0, count), '…']);
+        const line = theme.fg('borderMuted', '─── ') + T.truncateToWidth(text, room) + theme.fg('borderMuted', ' ───');
+        return [' '.repeat(Math.min(outputPad, width)) + T.truncateToWidth(line, inner)];
+      },
+    });
+  };
+  const fold = () => {
+    if (!steps && !retries && !notes) return;
+    let head = steps ? `${steps} step${steps > 1 ? 's' : ''}` : '';
+    // The first rule of a finished turn tells how long it took.
+    if (!timed && turn !== current && turn.start !== undefined && turn.end !== undefined) {
+      head = [`Worked for ${elapsed(turn.end - turn.start)}`, head].filter(Boolean).join(', ');
+    }
+    timed = true;
+    const retry = retries ? theme.fg('muted', head ? ', ' : '') + theme.fg('warning', `${retries} ${retries > 1 ? 'retries' : 'retry'}`) : '';
+    rule(head, retry, [...new Set(tools), ...(custom ? ['messages'] : [])]);
+    steps = retries = 0;
+    notes = custom = false;
+    tools = [];
+  };
+  for (const [index, message] of messages.entries()) {
+    if (starts.has(index)) {
+      fold();
+      turn = starts.get(index);
+      timed = false;
+    }
+    if (isUser(message)) {
+      view.addChild(new T.Spacer(1));
+      view.addChild(new pi.UserMessageComponent(textOf(message.content).trim(), markdown, outputPad));
+    } else if (message.role === 'assistant') {
+      const content = message.content.filter(part => part.type === 'text' && part.text.trim());
+      const failed = FAILED.includes(message.stopReason);
+      const retried = failed && recovered(index);
+      const calls = message.content.flatMap(part => part.type === 'toolCall' ? [part.name] : []);
+      if (folded.has(index)) notes = true;
+      else if (content.length || (failed && !retried)) {
+        fold();
+        // A retried failure keeps its text but not its error.
+        const shown = retried ? { ...message, content, stopReason: 'stop', errorMessage: undefined } : { ...message, content };
+        view.addChild(new pi.AssistantMessageComponent(shown, true, markdown, undefined, outputPad));
+      }
+      if (retried) retries++;
+      steps += calls.length;
+      tools.push(...calls);
+    } else if (message.role === 'branchSummary') {
+      fold();
+      rule('Branch summary');
+    } else if (message.role === 'custom') {
+      steps++;
+      custom = true;
+    }
+  }
+  fold();
+  if (!view.children.length) view.addChild(new T.Text(theme.fg('dim', 'No messages yet.'), 1, 1));
+  return view;
 }
 
 function age(ms) {
@@ -91,7 +214,8 @@ function stateOf(session) {
  * @param {{ pi: string, paths: ReturnType<typeof import('./roots/paths.mjs').statePaths>, sessionDir: string }} options
  */
 export async function workbench({ pi: executable, paths, sessionDir }) {
-  const { tui: T, pi, themes, themeController, keys, logo, hints } = await loadPi(executable);
+  const modules = await loadPi(executable);
+  const { tui: T, pi, themes, themeController, keys, logo, hints } = modules;
   const { theme } = themes;
   const agentDir = pi.getAgentDir();
   const settings = pi.SettingsManager.create(process.cwd(), agentDir);
@@ -430,7 +554,11 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     let messages;
     try { messages = await branchMessages(pi, session.sessionFile); }
     catch (error) { return say(error.message, 'error'); }
-    let body = conversation(messages);
+    // A turn left unended, as when Pi quit mid-turn, folds as finished once the daemon reports the Session stopped working.
+    const working = () => ['working', 'blocked'].includes(sessions.find(other => other.id === session.id)?.status ?? session.status);
+    let busy = working();
+    const show = () => conversation(modules, messages, { outputPad: settings.getOutputPad(), working: busy });
+    let body = show();
     const border = themes.getEditorTheme().borderColor;
     let scroll = 0, page = 1, timer, reading, stale, closed, scrolled, hideBar;
     // A turn the preview shows counts as seen.
@@ -450,7 +578,8 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
       timer = undefined;
       if (closed) return;
       if (latest) {
-        body = conversation(latest);
+        messages = latest;
+        body = show();
         see();
         ui.requestRender();
       }
@@ -481,6 +610,10 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
       invalidate() { body.invalidate(); },
       /** A short conversation takes only its own height; a longer one takes `max` lines and scrolls. */
       render(width, max) {
+        if (busy !== working()) {
+          busy = !busy;
+          body = show();
+        }
         // The selected row and the input's mention name the Session, so the preview needs no title. A blank line
         // sets it apart from the list.
         const top = ['', border('─'.repeat(width))];
@@ -531,82 +664,6 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     };
     editor.setText(pane.mention);
     ui.requestRender(true);
-  }
-
-  /**
-   * Messages and replies as Pi shows them; thinking is left out, and each run of tool calls, branch summary, and custom
-   * message other than the user's input folds to one line.
-   */
-  function conversation(messages) {
-    const markdown = themes.getMarkdownTheme();
-    const view = new T.Container();
-    let steps = 0, retries = 0, custom = false;
-    let tools = [];
-    // Pi's hint for folded output: "... (36 more lines, …)"; `names` are dropped from the end, then elided, until it fits.
-    const summarize = (head, names = [], warning = '') => {
-      if (!(view.children.at(-1) instanceof T.Spacer)) view.addChild(new T.Spacer(1));
-      const tail = (warning ? theme.fg('muted', ' · ') + theme.fg('warning', warning) : '') + theme.fg('muted', ')');
-      const line = shown => ` ${theme.fg('muted', `... (${head}${shown.length ? `: ${shown.join(', ')}` : ''}`)}${tail}`;
-      view.addChild({
-        invalidate() {},
-        render(width) {
-          let label = line(names);
-          for (let count = names.length - 1; count >= 0 && T.visibleWidth(label) > width; count--) label = line([...names.slice(0, count), '…']);
-          return [T.truncateToWidth(label, width)];
-        },
-      });
-    };
-    const fold = () => {
-      if (!steps && !retries) return;
-      const retry = retries ? `${retries} ${retries > 1 ? 'retries' : 'retry'}` : '';
-      if (steps) summarize(`${steps} step${steps > 1 ? 's' : ''}`, [...new Set(tools), ...(custom ? ['messages'] : [])], retry);
-      else summarize(retry);
-      steps = retries = 0;
-      custom = false;
-      tools = [];
-    };
-    const isUser = message => message.role === 'user' || (message.role === 'custom' && message.customType === 'pi-agents' && message.details?.user);
-    // A failure is recovered when its turn goes on before the next user input.
-    const recovered = index => {
-      for (const message of messages.slice(index + 1)) {
-        if (isUser(message)) return false;
-        if (message.role === 'assistant') return true;
-      }
-      return false;
-    };
-    for (const [index, message] of messages.entries()) {
-      // As in Pi's chat, a custom message not for display is skipped.
-      if (message.role === 'custom' && !message.display) continue;
-      if (isUser(message)) {
-        const text = textOf(message.content).trim();
-        if (!text) continue;
-        fold();
-        view.addChild(new T.Spacer(1));
-        view.addChild(new pi.UserMessageComponent(text, markdown));
-      } else if (message.role === 'assistant') {
-        const content = message.content.filter(part => part.type === 'text' && part.text.trim());
-        const failed = ['error', 'aborted', 'length'].includes(message.stopReason);
-        const retried = failed && recovered(index);
-        if (content.length || (failed && !retried)) {
-          fold();
-          // A retried failure keeps its text but not its error.
-          view.addChild(new pi.AssistantMessageComponent(retried ? { ...message, content, stopReason: 'stop', errorMessage: undefined } : { ...message, content }, true, markdown));
-        }
-        if (retried) retries++;
-        const calls = message.content.flatMap(part => part.type === 'toolCall' ? [part.name] : []);
-        steps += calls.length;
-        tools.push(...calls);
-      } else if (message.role === 'branchSummary') {
-        fold();
-        summarize('branch summary');
-      } else if (message.role === 'custom') {
-        steps++;
-        custom = true;
-      }
-    }
-    fold();
-    if (!view.children.length) view.addChild(new T.Text(theme.fg('dim', 'No messages yet.'), 1, 1));
-    return view;
   }
 
   async function send(session, body) {
