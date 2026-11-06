@@ -85,7 +85,7 @@ A turn counts as seen once it has been shown in an attached terminal or a previe
 Keys:
 
 - `Enter` (`tui.select.confirm`) attaches; detaching returns here.
-- `Space` previews the selected Session below the list: the conversation since the last compaction, with thinking left out. A finished turn shows only its last reply, after one rule that folds its other replies, tool calls, retries, and custom messages, such as `─── Worked for 1m 23s, 6 steps, 1 retry: bash, read, messages ───`; the running turn shows its replies, and its tool calls fold as they come. A turn starts at the user's input, or at a notification that arrives after the Session stopped. The preview follows the Session as it works. The input keeps `@<session>` at its start, so a message goes to the previewed Session. In the preview:
+- `Space` previews the selected Session below the list: the conversation since the last compaction, without thinking. Each finished turn folds into one rule before its last reply, such as `─── Worked for 1m 23s, 6 steps: bash, read ───`. The preview follows the Session as it works. The input keeps `@<session>` at its start, so a message goes to the previewed Session. In the preview:
   - With no message typed, `Enter` attaches, as `Ctrl+O` (`app.tools.expand`) always does.
   - It scrolls as fullscreen mode does; with no message typed, `↑`/`↓` (`tui.select.up`/`tui.select.down`) scroll too.
   - `Esc` (`tui.select.cancel`) clears a typed message; with none typed, it or `Space` closes the preview, as `Ctrl+Z` always does.
