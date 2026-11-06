@@ -178,6 +178,8 @@ type Message = Pick<Input, "text" | "user" | "sender" | "notice">;
 
 interface Turn {
 	inputs: Input[];
+	/** Notifications of queued inputs an abort ended while the turn ran; they are sent with the turn's. */
+	withheld: InputRecord[];
 	/** Messages that joined after the turn started and still need delivery. */
 	pending: Message[];
 	abort: AbortController;
@@ -448,7 +450,7 @@ export class Agents {
 		const turn = agent.turn;
 		if (!turn && agent.queue.length === 0) return false;
 		if (silent) for (const input of [...agent.queue, ...(turn?.inputs ?? [])]) input.silent = true;
-		this.end(agent, agent.queue.splice(0), "aborted", "");
+		this.end(agent, agent.queue.splice(0), "aborted", "", { withhold: turn?.withheld });
 		this.changed();
 		if (turn) await this.stop(agent, turn, deadline);
 		return true;
@@ -587,7 +589,7 @@ export class Agents {
 		if (agent.turn || this.closing) return;
 		const head = agent.queue.shift();
 		if (!head) return;
-		const turn: Turn = { inputs: [head], pending: [], abort: new AbortController(), started: false, slot: false, spent: { cost: 0, tokens: 0, unpriced: false }, finished: false, done: deferred() };
+		const turn: Turn = { inputs: [head], withheld: [], pending: [], abort: new AbortController(), started: false, slot: false, spent: { cost: 0, tokens: 0, unpriced: false }, finished: false, done: deferred() };
 		agent.turn = turn;
 		void this.runTurn(agent, turn);
 	}
@@ -635,15 +637,18 @@ export class Agents {
 		turn.finished = true;
 		if (turn.slot) scheduler.release(this.self.rootId, agent.record.id);
 		agent.turn = undefined;
-		this.end(agent, turn.inputs, answer.outcome, answer.result);
+		this.end(agent, turn.inputs, answer.outcome, answer.result, { withheld: turn.withheld });
 		turn.done.resolve();
 		this.changed();
 		this.pump(agent);
 	}
 
-	/** Ends inputs together; those that end with the same state and result share one notification. */
-	private end(agent: Owned, inputs: Input[], outcome: Outcome, result: string): void {
-		const answers = new Map<string, InputRecord>();
+	/**
+	 * Ends inputs together; those that end with the same state and result share one notification. `withhold` collects
+	 * their notifications instead, and `withheld` adds notifications collected before.
+	 */
+	private end(agent: Owned, inputs: Input[], outcome: Outcome, result: string, { withhold, withheld = [] }: { withhold?: InputRecord[]; withheld?: InputRecord[] } = {}): void {
+		const notices: InputRecord[] = [];
 		let changed = false;
 		for (const input of inputs) {
 			if (input.permit) scheduler.releaseOutstanding(this.self.rootId, input.permit);
@@ -663,11 +668,18 @@ export class Agents {
 				}
 			}
 			input.done?.resolve();
-			if (input.silent) continue;
+			if (!input.silent) notices.push(record);
+		}
+		if (changed) this.persist(agent);
+		if (withhold) {
+			withhold.push(...notices);
+			return;
+		}
+		const answers = new Map<string, InputRecord>();
+		for (const record of [...notices, ...withheld]) {
 			const key = JSON.stringify([record.state, record.result]);
 			if (!answers.has(key)) answers.set(key, record);
 		}
-		if (changed) this.persist(agent);
 		for (const record of answers.values()) this.notifyLater(agent, record);
 	}
 

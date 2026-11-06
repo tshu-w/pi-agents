@@ -280,6 +280,29 @@ test("abort ends the current turn and queued inputs, and the Agent stays usable"
 	await root.close();
 });
 
+test("the user's abort of a running turn and a queued input ends the queued input at once and sends one notification", async () => {
+	const root = await startRoot({ maxConcurrent: 2, maxOutstanding: 2 });
+	root.state.hold = gate();
+	root.state.stuck = true;
+	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "one" }));
+	await root.call({ action: "send", target: "worker", message: "two" });
+	await root.waitBusy(1);
+	const owner = globalThis[Symbol.for("pi-agents:runtime")].nodes.get(root.session.sessionManager.getSessionId());
+	const worker = owner.agents.ownedTarget(id).record;
+	const aborting = owner.agents.abortAgent(worker.id);
+	// While the turn stops, the withdrawn input has ended and no longer counts against the input limit.
+	await root.call({ action: "spawn", name: "other", message: "three" });
+	assert.deepEqual(worker.inputs.map((input) => input.state), ["running", "aborted"]);
+	root.state.stuck = false;
+	root.state.hold.open();
+	assert.equal(await aborting, true);
+	await root.call({ action: "wait", target: "other", timeout: 10 });
+	await resultsOf(root, 2);
+	await root.session.waitForIdle();
+	assert.deepEqual((await resultsOf(root, 2)).filter(([name]) => name === "worker"), [["worker", "aborted", ""]]);
+	await root.close();
+});
+
 test("a turn that does not stop within the abort timeout is abandoned, and the tree becomes idle", async () => {
 	const root = await startRoot();
 	root.state.hold = gate();
