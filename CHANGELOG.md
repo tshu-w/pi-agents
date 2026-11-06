@@ -18,6 +18,7 @@
 - The workbench, its preview, and `/tasks` stay responsive with large Session files.
 - Connecting to a Session or daemon just as it starts no longer fails with `SOCKET_MODE`.
 - A Program started right after others ended waits up to 5 seconds for their workers to exit, instead of failing at once.
+- A message sent in `/tasks` while an Agent stops stays queued and goes with its next turn, as in Pi, instead of ending with the stopped turn.
 
 ### Removed
 

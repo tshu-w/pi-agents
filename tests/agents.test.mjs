@@ -385,6 +385,61 @@ test("a user's steer withdrawn from a running turn ends at once, so it can be se
 	await root.close();
 });
 
+test("a user's steer sent while a turn stops stays queued and goes with the next turn, as in Pi", async () => {
+	const root = await startRoot();
+	const stopping = gate();
+	root.state.hold = stopping;
+	root.state.stuck = true;
+	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "one" }));
+	await root.waitBusy(1);
+	const owner = globalThis[Symbol.for("pi-agents:runtime")].nodes.get(root.session.sessionManager.getSessionId());
+	const fullId = owner.agents.ownedTarget(id).record.id;
+	const aborting = owner.agents.abortAgent(fullId);
+	owner.agents.prompt(fullId, "during", "steer");
+	assert.deepEqual(owner.agents.userQueue(fullId), [{ text: "during", delivery: "steer" }]);
+	root.state.hold = gate();
+	root.state.stuck = false;
+	stopping.open();
+	assert.equal(await aborting, true);
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	// The steer starts no turn by itself.
+	assert.equal(root.state.busy, 1);
+	assert.equal(owner.agents.counts(fullId).state, "idle");
+	assert.deepEqual(owner.agents.userQueue(fullId), [{ text: "during", delivery: "steer" }]);
+	owner.agents.prompt(fullId, "two", "steer");
+	await root.waitBusy(2);
+	assert.deepEqual(owner.agents.userQueue(fullId), []);
+	root.state.hold.open();
+	await until(() => owner.agents.counts(fullId).state === "idle", "second turn");
+	const last = owner.agents.conversation(fullId).messages.at(-1);
+	assert.match(textOf(last.content), /^answer:during\|seen:one,two,during$/);
+	await root.close();
+});
+
+test("after a held message, a notification still does not start a turn", async () => {
+	const root = await startRoot();
+	const stopping = gate();
+	root.state.hold = stopping;
+	root.state.stuck = true;
+	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "one" }));
+	await root.waitBusy(1);
+	const owner = globalThis[Symbol.for("pi-agents:runtime")].nodes.get(root.session.sessionManager.getSessionId());
+	const fullId = owner.agents.ownedTarget(id).record.id;
+	const aborting = owner.agents.abortAgent(fullId);
+	owner.agents.prompt(fullId, "held", "steer");
+	root.state.hold = gate();
+	root.state.stuck = false;
+	stopping.open();
+	await aborting;
+	assert.deepEqual(owner.agents.accept(fullId, "result", "steer", { fromOwner: false, notice: { results: [] } }), { queued: false });
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	assert.equal(root.state.busy, 1);
+	assert.deepEqual(owner.agents.counts(fullId), { state: "idle", pending: 1, since: undefined, spent: undefined });
+	assert.deepEqual(owner.agents.userQueue(fullId), [{ text: "held", delivery: "steer" }]);
+	root.state.hold.open();
+	await root.close();
+});
+
 test("a turn that does not stop within the abort timeout is abandoned, and the tree becomes idle", async () => {
 	const root = await startRoot();
 	root.state.hold = gate();

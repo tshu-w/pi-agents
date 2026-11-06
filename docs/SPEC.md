@@ -34,7 +34,7 @@ An input to an Agent with a turn in progress is either answered by the current t
 
 A write is added at the recipient's next tool boundary, or at once if it is idle. A write can go to several Agents at once.
 
-When the user of a root Agent clears its queued messages, messages from other Agents stay queued. After an Agent's turn is stopped, messages from other Agents, notifications included, become writes until its next input from its user or owner.
+When the user of a root Agent clears its queued messages, messages from other Agents stay queued. After an Agent's turn is stopped, messages from other Agents, notifications included, become writes until its next input from its user or owner. A message its user sends while the turn is stopping waits for that input and goes with its turn; it does not start a turn or end the writes.
 
 ### 2.3 wait
 

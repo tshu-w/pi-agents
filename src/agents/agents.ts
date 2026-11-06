@@ -174,6 +174,8 @@ interface Input {
 	done?: Deferred;
 	/** Ended by the owner's abort, so the owner is not notified. */
 	silent?: boolean;
+	/** The user's input sent while a turn stopped; it waits for the next turn without starting one. */
+	held?: boolean;
 }
 
 type Message = Pick<Input, "text" | "user" | "sender" | "notice">;
@@ -608,6 +610,13 @@ export class Agents {
 
 	/** A steer joins the current turn; other inputs queue. Returns whether the input waits for a slot. */
 	private add(agent: Owned, input: Input, delivery: "followUp" | "steer"): boolean {
+		// As in Pi, the user's input while a turn stops stays queued for the next turn, and the turn stays stopped.
+		if (input.user && agent.turn?.abort.signal.aborted) {
+			input.held = true;
+			agent.queue.push(input);
+			this.changed();
+			return false;
+		}
 		// While stopped, other senders' messages become writes, so this is the owner's or user's next input.
 		agent.stopped = false;
 		if (delivery !== "steer" || !agent.turn) return this.enqueue(agent, input);
@@ -630,9 +639,13 @@ export class Agents {
 
 	private pump(agent: Owned): void {
 		if (agent.turn || this.closing) return;
-		const head = agent.queue.shift();
+		const head = agent.queue.find((input) => !input.held);
 		if (!head) return;
-		const turn: Turn = { inputs: [head], withheld: [], pending: [], abort: new AbortController(), started: false, slot: false, spent: { cost: 0, tokens: 0, unpriced: false }, finished: false, done: deferred() };
+		// Held steers go with the next turn, after its first input, as Pi delivers queued steers with its next run.
+		const steers = agent.queue.filter((input) => input.held && input.delivery === "steer");
+		agent.queue = agent.queue.filter((input) => input !== head && !steers.includes(input));
+		for (const input of agent.queue) input.held = false;
+		const turn: Turn = { inputs: [head, ...steers], withheld: [], pending: [], abort: new AbortController(), started: false, slot: false, spent: { cost: 0, tokens: 0, unpriced: false }, finished: false, done: deferred() };
 		agent.turn = turn;
 		void this.runTurn(agent, turn);
 	}
