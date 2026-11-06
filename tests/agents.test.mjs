@@ -303,6 +303,88 @@ test("the user's abort of a running turn and a queued input ends the queued inpu
 	await root.close();
 });
 
+test("aborting from the viewer puts the user's inputs the Agent did not receive back in the editor, as Pi does", async () => {
+	const root = await startRoot();
+	root.state.hold = gate();
+	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "one" }));
+	await root.waitBusy(1);
+	const owner = globalThis[Symbol.for("pi-agents:runtime")].nodes.get(root.session.sessionManager.getSessionId());
+	const fullId = owner.agents.ownedTarget(id).record.id;
+	pi.initTheme();
+	const { theme } = await import(join(PI_PACKAGE, "dist/modes/interactive/theme/theme.js"));
+	const noop = () => {};
+	let text;
+	let again;
+	let selected = false;
+	const custom = async (factory) => {
+		if (!selected) return (selected = true, fullId);
+		const viewer = factory({ terminal: { rows: 60, columns: 100 }, requestRender: noop }, theme, { matches: () => false, getKeys: () => [] }, noop);
+		viewer.send("later", "followUp");
+		viewer.send("now", "steer");
+		// Another sender's input is not the user's to restore.
+		await root.call({ action: "send", target: "worker", message: "other" });
+		viewer.editor.setText("draft");
+		viewer.editor.onEscape();
+		// An Esc while the abort runs restores nothing again.
+		viewer.editor.onEscape();
+		text = await until(() => viewer.editor.getText() !== "draft" && viewer.editor.getText(), "restored text");
+		// A received steer accounts for one of two inputs with its text; the queued follow-up is restored.
+		await until(() => owner.agents.counts(fullId).state === "idle", "first abort");
+		const busy = root.state.busy;
+		viewer.send("again", "steer");
+		await until(() => root.state.busy > busy, "second turn");
+		viewer.send("same", "followUp");
+		viewer.send("same", "steer");
+		const held = root.state.hold;
+		root.state.hold = gate();
+		held.open();
+		await until(() => owner.agents.conversation(fullId).messages.some((message) => message.content === "same"), "steer received");
+		viewer.editor.setText("draft");
+		viewer.editor.onEscape();
+		again = await until(() => viewer.editor.getText() !== "draft" && viewer.editor.getText(), "restored follow-up");
+		// A follow-up the Agent receives after its history shrinks, as on compaction, is no longer queued.
+		await until(() => owner.agents.counts(fullId).state === "idle", "aborted");
+		viewer.send("third", "steer");
+		await until(() => root.state.busy > busy + 2, "third turn");
+		viewer.send("fourth", "followUp");
+		const session = owner.agents.conversation(fullId).session;
+		session.agent.state.messages = session.messages.slice(0, 2);
+		const third = root.state.hold;
+		root.state.hold = gate();
+		third.open();
+		await until(() => session.messages.some((message) => message.content === "fourth"), "follow-up received");
+		assert.deepEqual(owner.agents.userQueue(fullId), []);
+		viewer.editor.setText("draft");
+		viewer.editor.onEscape();
+		assert.equal(viewer.editor.getText(), "draft");
+		viewer.dispose();
+	};
+	const runner = root.session.extensionRunner;
+	await runner.getCommand("tasks").handler("", { ...runner.createCommandContext(), ui: { notify: noop, custom } });
+	assert.equal(text, "now\n\nlater\n\ndraft");
+	assert.equal(again, "same\n\ndraft");
+	root.state.hold.open();
+	await root.close();
+});
+
+test("a user's steer withdrawn from a running turn ends at once, so it can be sent again while the turn stops", async () => {
+	const root = await startRoot({ maxConcurrent: 1, maxOutstanding: 2 });
+	root.state.hold = gate();
+	root.state.stuck = true;
+	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "one" }));
+	await root.waitBusy(1);
+	const owner = globalThis[Symbol.for("pi-agents:runtime")].nodes.get(root.session.sessionManager.getSessionId());
+	const fullId = owner.agents.ownedTarget(id).record.id;
+	owner.agents.prompt(fullId, "now", "steer");
+	assert.deepEqual(owner.agents.userQueue(fullId, true), [{ text: "now", delivery: "steer" }]);
+	const aborting = owner.agents.abortAgent(fullId);
+	owner.agents.prompt(fullId, "now", "steer");
+	root.state.stuck = false;
+	root.state.hold.open();
+	assert.equal(await aborting, true);
+	await root.close();
+});
+
 test("a turn that does not stop within the abort timeout is abandoned, and the tree becomes idle", async () => {
 	const root = await startRoot();
 	root.state.hold = gate();

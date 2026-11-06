@@ -162,6 +162,8 @@ interface Input {
 	text: string;
 	/** The user's input from the task viewer. */
 	user?: boolean;
+	/** How the user sent it, which the viewer shows while it is queued. */
+	delivery?: "followUp" | "steer";
 	/** The Agent that sent it. */
 	sender?: Sender;
 	notice?: Notice;
@@ -305,7 +307,48 @@ export class Agents {
 	 * result. `steer` joins the current turn, or starts one when the Agent is idle.
 	 */
 	prompt(id: string, text: string, delivery: "followUp" | "steer"): void {
-		this.add(this.agent(id), { text, user: true, permit: this.reserve() }, delivery);
+		this.add(this.agent(id), { text, user: true, delivery, permit: this.reserve() }, delivery);
+	}
+
+	/**
+	 * The user's inputs an owned Agent has not received, steers first, as Pi lists its queued messages. `withdraw` takes
+	 * them out, as Pi's abort takes its queued messages back to the editor; `abortAgent` follows it.
+	 */
+	userQueue(id: string, withdraw = false): Array<{ text: string; delivery: "followUp" | "steer" }> {
+		const agent = this.agents.get(id);
+		if (!agent) return [];
+		const turn = agent.turn;
+		const queued = [...turn && !turn.started ? turn.inputs : [], ...agent.queue].filter((input) => input.user);
+		const pending = turn?.pending.filter((message) => message.user) ?? [];
+		const session = turn?.started ? agent.session?.agent : undefined;
+		const queue = session && (session as unknown as { steeringQueue: { messages: QueuedMessage[] } }).steeringQueue.messages.slice();
+		const user = (message: QueuedMessage) => message.role === "custom" && message.customType === MESSAGE_TYPE
+			&& Boolean((message as { details?: { user?: boolean } }).details?.user);
+		const steering = queue?.filter(user) ?? [];
+		const joined = [...pending.map(({ text }) => text), ...steering.map((message) => messageParts(message as Parameters<typeof messageParts>[0]).text)];
+		if (withdraw && queued.length + joined.length > 0) {
+			// A steer that joined the turn ends with its input; the user's inputs differ only in their text.
+			const ending = [...queued];
+			for (const text of joined) {
+				const input = turn!.inputs.find((input) => input.user && input.text === text && !ending.includes(input));
+				if (input) ending.push(input);
+			}
+			if (turn) turn.inputs = turn.inputs.filter((input) => !ending.includes(input));
+			agent.queue = agent.queue.filter((input) => !input.user);
+			if (turn) turn.pending = turn.pending.filter((message) => !message.user);
+			if (session && steering.length > 0) {
+				session.clearSteeringQueue();
+				for (const message of queue!) if (!user(message)) session.steer(message);
+			}
+			this.end(agent, ending, "aborted", "");
+			this.changed();
+		}
+		// A user's input joins a started turn only as a steer.
+		const inputs = [
+			...queued.map(({ text, delivery }) => ({ text, delivery: delivery! })),
+			...joined.map((text) => ({ text, delivery: "steer" as const })),
+		];
+		return [...inputs.filter(({ delivery }) => delivery === "steer"), ...inputs.filter(({ delivery }) => delivery === "followUp")];
 	}
 
 	/** Loads an owned Agent's Session without starting a turn. */

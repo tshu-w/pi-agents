@@ -153,8 +153,6 @@ class AgentViewer implements Component, Focusable {
 	private fullscreen: boolean;
 	private status = "";
 	private indicator?: WorkingStatus;
-	/** Inputs sent from the viewer that the Agent has not received yet, as Pi shows queued messages. */
-	private outbox: Array<{ text: string; delivery: "followUp" | "steer"; after: number }> = [];
 	private disposers: Array<() => void> = [];
 	private _focused = false;
 
@@ -175,8 +173,7 @@ class AgentViewer implements Component, Focusable {
 			embedWorkingStatus: true,
 		});
 		this.editor.onSubmit = (text) => this.send(text, "steer");
-		this.editor.onEscape = () => void this.owner.agents.abortAgent(this.entry.id).catch((error: unknown) =>
-			this.ctx.ui.notify(error instanceof Error ? error.message : String(error), "error"));
+		this.editor.onEscape = () => this.abort();
 		this.editor.onAction("app.clear", () => {
 			if (this.editor.getText()) this.editor.setText("");
 			else this.done();
@@ -239,7 +236,7 @@ class AgentViewer implements Component, Focusable {
 		return this.transcript.render(width);
 	}
 
-	/** Brings the transcript, the outbox and the working status up to the conversation, before any of them renders. */
+	/** Brings the transcript and the working status up to the conversation, before any of them renders. */
 	private prepare(): void {
 		const conversation = this.owner.agents.conversation(this.entry.id);
 		this.sync(conversation);
@@ -248,7 +245,8 @@ class AgentViewer implements Component, Focusable {
 
 	private renderQueue(width: number): string[] {
 		this.prepare();
-		return this.outbox.map(({ text, delivery }) =>
+		// The user's inputs the Agent has not received, as Pi shows queued messages.
+		return this.owner.agents.userQueue(this.entry.id).map(({ text, delivery }) =>
 			truncateToWidth(this.theme.fg("dim", ` ${delivery === "steer" ? "Steering" : "Follow-up"}: ${text.replace(/\s+/g, " ")}`), width));
 	}
 
@@ -276,9 +274,7 @@ class AgentViewer implements Component, Focusable {
 		const trimmed = text.trim();
 		if (!trimmed) return;
 		try {
-			const after = this.owner.agents.conversation(this.entry.id)?.messages.length ?? 0;
 			this.owner.agents.prompt(this.entry.id, trimmed, delivery);
-			this.outbox.push({ text: trimmed, delivery, after });
 			this.editor.addToHistory(trimmed);
 			this.editor.setText("");
 			this.scroll = 0;
@@ -286,6 +282,14 @@ class AgentViewer implements Component, Focusable {
 		} catch (error) {
 			this.ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 		}
+	}
+
+	/** Stops the Agent, and first puts the user's inputs it has not received back in the editor, as Pi does on abort. */
+	private abort(): void {
+		const queued = this.owner.agents.userQueue(this.entry.id, true).map(({ text }) => text).join("\n\n");
+		if (queued) this.editor.setText([queued, this.editor.getText()].filter((text) => text.trim()).join("\n\n"));
+		this.owner.agents.abortAgent(this.entry.id).catch((error: unknown) =>
+			this.ctx.ui.notify(error instanceof Error ? error.message : String(error), "error"));
 	}
 
 	/** Follows the Agent's Session once it is loaded. */
@@ -372,11 +376,6 @@ class AgentViewer implements Component, Focusable {
 			this.shown = 0;
 			this.ended = 0;
 		}
-		// An input leaves the outbox once it is in the conversation, or when the Agent ends its work without it.
-		const state = this.owner.agents.counts(this.entry.id)?.state;
-		const working = state !== undefined && state !== "idle";
-		this.outbox = this.outbox.filter(({ text, after }) => working && !messages.slice(after).some((message) =>
-			message.role === "custom" && message.content === text && (message.details as { user?: boolean } | undefined)?.user));
 		if (!conversation) return;
 		const streaming = this.streaming?.role === "assistant" && !this.live && !messages.includes(this.streaming) ? this.streaming : undefined;
 		if (messages.length === this.shown && !streaming) return;
