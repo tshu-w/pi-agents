@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -93,6 +94,36 @@ test("an owned Agent answers its first input, and its owner waits for it and is 
 	assert.match(await root.call({ action: "list", query: "zebra" }), /zebra/);
 	assert.match(await root.call({ action: "list" }), /\n  \d{4}-\d\d-\d\d \d\d:\d\d  zebra$/);
 	await root.close();
+});
+
+const lockFiles = () => readdirSync(join(process.env.PI_AGENTS_STATE_DIR, "runtime/locks")).sort();
+
+/** The hashes of the lock files of the root's only owned Agent. */
+async function agentLockHashes(root) {
+	const id = (await root.callResult({ action: "list" })).details.agents[0].id;
+	const dir = join(root.session.sessionManager.getSessionDir(), "subagents");
+	const file = readdirSync(dir).find((name) => name.endsWith(`_${id}.jsonl`));
+	return [`path:${realpathSync(join(dir, file))}`, `id:${id}`].map((key) => createHash("sha256").update(key).digest("hex"));
+}
+
+test("an owned Agent holds its Session's locks while it is online and releases them when its owner closes", async () => {
+	const root = await startRoot();
+	const before = lockFiles();
+	await root.call({ action: "spawn", name: "worker", message: "hello" });
+	await root.call({ action: "wait", target: "worker", timeout: 10 });
+	const hashes = await agentLockHashes(root);
+	assert.deepEqual(lockFiles().filter((name) => !before.includes(name)).map((name) => name.slice(0, 64)).sort(), hashes.sort());
+	await root.close();
+	assert.deepEqual(lockFiles().filter((name) => hashes.includes(name.slice(0, 64))), []);
+});
+
+test("an owned Agent whose Session fails to load after its owner closed releases its Session's locks", async () => {
+	const root = await startRoot({ extensions: [fileURLToPath(new URL("./fixtures/slow-extension.mjs", import.meta.url))] });
+	await root.call({ action: "spawn", name: "worker", message: "hello" });
+	const hashes = await agentLockHashes(root);
+	await root.close();
+	globalThis.piAgentsSlowLoad.open();
+	await until(() => !lockFiles().some((name) => hashes.includes(name.slice(0, 64))), "released locks", 2000);
 });
 
 test("an owned Agent runs in its owner's execution environment, with cwd resolved there", async () => {

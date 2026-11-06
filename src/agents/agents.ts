@@ -301,6 +301,7 @@ export class Agents {
 		const manager = agent.prepared?.sessionManager ??
 			(existsSync(record.sessionFile) ? SessionManager.open(record.sessionFile, path.dirname(record.sessionFile), record.cwd) : undefined);
 		const context = manager?.buildSessionContext();
+		if (manager && !agent.prepared) releaseSession(manager);
 		return { messages: context?.messages ?? [], cwd: record.cwd, model: context?.model ?? undefined, thinkingLevel: context?.thinkingLevel };
 	}
 
@@ -570,12 +571,15 @@ export class Agents {
 		const closed = await Promise.allSettled(agents.map(async (agent) => {
 			const loading = agent.loading;
 			if (!agent.session && loading && !await settlesBy(loading, deadline)) {
-				// A Session that loads after the timeout is closed once it does.
-				void loading.then((late) => close(agent, late).catch(() => {}), () => {});
+				// A Session that loads after the timeout is closed once it does, and its locks are released if it fails.
+				void loading.then((late) => close(agent, late).catch(() => {}), () => {
+					if (agent.prepared) releaseSession(agent.prepared.sessionManager);
+				});
 				throw new Error(`Agent ${label(agent.record, this.ids())} did not shut down within the timeout and may still be running.`);
 			}
 			const session = agent.session ?? await loading?.catch(() => undefined);
 			if (session) await close(agent, session);
+			else if (agent.prepared) releaseSession(agent.prepared.sessionManager);
 		}));
 		const errors = [...aborted, ...closed].flatMap((result) => result.status === "rejected" ? [result.reason] : []);
 		if (errors.length > 0) throw new Error(errors.map((error) => error instanceof Error ? error.message : String(error)).join("\n"));
@@ -828,7 +832,7 @@ export class Agents {
 		const ctx = this.ctx;
 		const name = request.name.trim();
 		const env = ctx.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "env-state").pop();
-		if (env?.type === "custom" && (env.data as { environment?: string | null }).environment) throw new Error("An Agent in a pi-env environment cannot disown an Agent.");
+		if (env?.type === "custom" && (env.data as { environment?: string | null }).environment) throw new Error("An Agent in a pi-exec environment cannot disown an Agent.");
 		const { model, thinkingLevel } = this.resolveModel(request);
 		const cwd = path.resolve(ctx.cwd, request.cwd ?? ".");
 		// Where Pi keeps the cwd's Sessions without `--session-dir`, which the daemon searches.
@@ -864,7 +868,7 @@ export class Agents {
 	private prepare(request: Omit<SpawnRequest, "message">, name: string, id?: string): Prepared {
 		const ctx = this.ctx;
 		const { model, thinkingLevel } = this.resolveModel(request);
-		// In a pi-env execution environment, the Agent runs in the same environment and `cwd` is a path there.
+		// In a pi-exec execution environment, the Agent runs in the same environment and `cwd` is a path there.
 		const envEntry = ctx.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "env-state").pop();
 		const envState = envEntry?.type === "custom" ? structuredClone(envEntry.data) as { environment?: string | null } : undefined;
 		const envTarget = envState?.environment?.match(/^((?:docker|ssh):[^:]+):(.+)$/);
@@ -874,22 +878,27 @@ export class Agents {
 			id: id ?? randomUUID(),
 			parentSession: ctx.sessionManager.getSessionFile(),
 		});
-		// Each of a Program's Agents heads its own scope, so it sees only itself and the Agents under it.
-		const scopeId = this.program ? sessionManager.getSessionId() : this.self.scopeId;
-		sessionManager.appendCustomEntry(TREE_ENTRY, { rootId: this.self.rootId, ownerId: this.self.id, scopeId } satisfies TreeMetadata);
-		sessionManager.appendSessionInfo(name);
-		sessionManager.appendModelChange(model.provider, model.id);
-		sessionManager.appendThinkingLevelChange(thinkingLevel);
-		if (envState) sessionManager.appendCustomEntry("env-state", envState);
-		if (request.context === "fork") {
-			// Tools run after Pi persists the assistant message that called them; fork before it
-			// so the child never inherits a tool call without its result.
-			const messages = (ctx.sessionManager as SessionManager).buildSessionContext().messages;
-			const last = messages.at(-1);
-			const forked = last?.role === "assistant" && last.content.some((part) => part.type === "toolCall") ? messages.slice(0, -1) : messages;
-			for (const message of forked) sessionManager.appendMessage(structuredClone(message) as Parameters<SessionManager["appendMessage"]>[0]);
+		try {
+			// Each of a Program's Agents heads its own scope, so it sees only itself and the Agents under it.
+			const scopeId = this.program ? sessionManager.getSessionId() : this.self.scopeId;
+			sessionManager.appendCustomEntry(TREE_ENTRY, { rootId: this.self.rootId, ownerId: this.self.id, scopeId } satisfies TreeMetadata);
+			sessionManager.appendSessionInfo(name);
+			sessionManager.appendModelChange(model.provider, model.id);
+			sessionManager.appendThinkingLevelChange(thinkingLevel);
+			if (envState) sessionManager.appendCustomEntry("env-state", envState);
+			if (request.context === "fork") {
+				// Tools run after Pi persists the assistant message that called them; fork before it
+				// so the child never inherits a tool call without its result.
+				const messages = (ctx.sessionManager as SessionManager).buildSessionContext().messages;
+				const last = messages.at(-1);
+				const forked = last?.role === "assistant" && last.content.some((part) => part.type === "toolCall") ? messages.slice(0, -1) : messages;
+				for (const message of forked) sessionManager.appendMessage(structuredClone(message) as Parameters<SessionManager["appendMessage"]>[0]);
+			}
+			return { sessionManager: persistPreparedSession(sessionManager, cwd), model, thinkingLevel };
+		} finally {
+			// The reopened manager holds the locks while the Agent is online.
+			releaseSession(sessionManager);
 		}
-		return { sessionManager: persistPreparedSession(sessionManager, cwd), model, thinkingLevel };
 	}
 
 	private load(agent: Owned): Promise<AgentSession> {

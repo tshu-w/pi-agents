@@ -20,6 +20,7 @@
 - A Program started right after others ended waits up to 5 seconds for their workers to exit, instead of failing at once.
 - After Pi replaces itself with `execve`, as a restart does, its Sessions no longer fail with `EEXIST` on the lock files it held before.
 - A message sent in `/tasks` while an Agent stops stays queued and goes with its next turn, as in Pi, instead of ending with the stopped turn.
+- An owned Agent's Session is no longer left locked after its owner closes, so another Pi can open it.
 
 ### Removed
 
