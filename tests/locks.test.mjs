@@ -50,6 +50,57 @@ test("a killed holder's locks are taken over at once, as are locks whose PID ano
 	} finally { await kill(child); }
 });
 
+test("a process that replaces itself with execve takes over the locks its previous image left", async () => {
+	const locksModule = JSON.stringify(new URL("../src/roots/locks.mjs", import.meta.url).href);
+	const other = join(dir, "2026-01-01T00-00-00-000Z_lock-b.jsonl");
+	// A second lock directory where the previous image held the same Session.
+	const second = mkdtempSync("/tmp/pa-locks-");
+	const next = `const { reserve } = await import(${locksModule});
+		try { reserve(${JSON.stringify(dir)}, ${JSON.stringify(file)}, "lock-a"); reserve(${JSON.stringify(second)}, ${JSON.stringify(file)}, "lock-a"); console.log("held"); }
+		catch (error) { console.log(error.code); }
+		setInterval(() => {}, 1000);`;
+	// The first image holds two Sessions' locks and replaces itself without releasing them, as Pi's restart does.
+	const child = spawn(process.execPath, ["--input-type=module", "-e", `const { reserve } = await import(${locksModule});
+		reserve(${JSON.stringify(dir)}, ${JSON.stringify(file)}, "lock-a");
+		reserve(${JSON.stringify(dir)}, ${JSON.stringify(other)}, "lock-b");
+		reserve(${JSON.stringify(second)}, ${JSON.stringify(file)}, "lock-a");
+		process.execve(process.execPath, [process.execPath, "--input-type=module", "-e", ${JSON.stringify(next)}]);`,
+	], { stdio: ["ignore", "pipe", "inherit"] });
+	try {
+		const output = await new Promise((resolve) => child.stdout.once("data", resolve));
+		assert.equal(String(output).trim(), "held");
+		reserve(dir, other, "lock-b").release();
+	} finally { await kill(child); }
+	pruneLocks(dir);
+	pruneLocks(second);
+	assert.deepEqual([...locks(), ...readdirSync(second)], []);
+	rmSync(second, { recursive: true });
+});
+
+test("an image clears its previous image's locks without dropping the ones it holds", async () => {
+	const locksModule = new URL("../src/roots/locks.mjs", import.meta.url).href;
+	const session = (name) => JSON.stringify(join(dir, `2026-01-01T00-00-00-000Z_${name}.jsonl`));
+	const child = spawn(process.execPath, ["--input-type=module", "-e", `
+		import { readdirSync, realpathSync } from "node:fs";
+		const count = () => readdirSync(${JSON.stringify(dir)}).filter((name) => name.endsWith(".lock")).length;
+		const first = await import(${JSON.stringify(`${locksModule}?first`)});
+		first.reserve(${JSON.stringify(dir)}, ${session("lock-a")}, "lock-a");
+		// A copy loaded by /reload whose earlier copy cleared nothing, as before this cleanup existed.
+		delete globalThis[Symbol.for("pi-agents.cleared-lock-dirs")];
+		const next = await import(${JSON.stringify(`${locksModule}?next`)});
+		next.reserve(${JSON.stringify(dir)}, ${session("lock-b")}, "lock-b");
+		const reloaded = count();
+		// The same directory through a symlinked ancestor.
+		next.reserve(realpathSync(${JSON.stringify(dir)}), ${session("lock-c")}, "lock-c");
+		console.log(reloaded, count());`,
+	], { stdio: ["ignore", "pipe", "inherit"] });
+	const output = await new Promise((resolve) => child.stdout.once("data", resolve));
+	await new Promise((resolve) => child.once("exit", resolve));
+	assert.equal(String(output).trim(), "4 6");
+	pruneLocks(dir);
+	assert.deepEqual(locks(), []);
+});
+
 test("contenders and a pruner never let two processes hold a lock at once", async () => {
 	const locksModule = new URL("../src/roots/locks.mjs", import.meta.url).href;
 	const log = join(dir, "log");

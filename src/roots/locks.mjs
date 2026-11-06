@@ -70,6 +70,24 @@ function removeFile(path) {
 
 const pause = new Int32Array(new SharedArrayBuffer(4));
 
+// A process that replaced itself with execve keeps its PID and start but not the lock table below,
+// so the files its previous image left are stale. Each image removes them before its first lock,
+// except those of locks in the table, which an earlier copy of this module may have created.
+const cleared = globalThis[Symbol.for('pi-agents.cleared-lock-dirs')] ??= new Set();
+
+function clearPreviousImage(stateDir, owner) {
+  const directory = realpathSync(stateDir);
+  if (cleared.has(directory)) return;
+  cleared.add(directory);
+  const held = new Set([...locks.keys()].flatMap(key => {
+    const separator = key.indexOf('\n');
+    return realpathSync(key.slice(0, separator)) === directory ? [keyHash(key.slice(separator + 1))] : [];
+  }));
+  for (const lock of lockFiles(stateDir)) {
+    if (lock.owner.pid === owner.pid && lock.owner.start === owner.start && !held.has(basename(lock.path).slice(0, 64))) removeFile(lock.path);
+  }
+}
+
 function createLock({ stateDir, sessionId }) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const directory = lstatSync(stateDir);
@@ -78,6 +96,7 @@ function createLock({ stateDir, sessionId }) {
   }
   const hash = keyHash(sessionId);
   const owner = { pid: process.pid, start: ownStart() };
+  clearPreviousImage(stateDir, owner);
   const path = join(stateDir, `${hash}.${owner.pid}-${owner.start}.lock`);
   for (let attempt = 0; ; attempt++) {
     closeSync(openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600));
