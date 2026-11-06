@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Pi no longer crashes with `This extension ctx is stale` after a reload whose Session failed to tell the workbench it ended.
+
 ## [0.5.0] - 2026-11-06
 
 ### Added

@@ -149,10 +149,13 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 		unsubscribe ??= onTreeChange(() => changed());
 		void connect(++generation);
 	});
+	// Pi invalidates `ctx` after this, so nothing may reach it later even if the end frame fails.
 	pi.on("session_shutdown", async () => {
 		if (!ctx) return;
-		stream?.send({ type: "end", id: ctx.sessionManager.getSessionId() });
-		const ended = stream?.end(END_WAIT_MS);
+		const current = ctx;
+		const opened = stream;
+		clearTimeout(timer);
+		timer = undefined;
 		stream = undefined;
 		generation++;
 		ctx = undefined;
@@ -164,7 +167,12 @@ export function createReporter(pi: ExtensionAPI, hooks: ReportHooks): void {
 		by = "user";
 		fromUser = false;
 		senders = sent = unanswered = [];
-		await ended;
+		if (!opened) return;
+		try {
+			opened.send({ type: "end", id: current.sessionManager.getSessionId() });
+		} finally {
+			await opened.end(END_WAIT_MS);
+		}
 	});
 	pi.on("message_end", (event) => {
 		const message = event.message as { role: string; customType?: string; details?: { delivery?: string; sender?: Sender } };

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const home = mkdtempSync("/tmp/pa-root-runtime-");
 Object.assign(process.env, { PI_CODING_AGENT_DIR: home, PI_AGENTS_STATE_DIR: join(home, "state") });
 process.on("exit", () => rmSync(home, { recursive: true, force: true }));
-const { pi, gate } = await import("./pi.mjs");
+const { pi, gate, until } = await import("./pi.mjs");
 const { statePaths } = await import("../src/roots/paths.mjs");
 const { request } = await import("../src/roots/transport.mjs");
 const loader = new pi.DefaultResourceLoader({
@@ -15,7 +15,7 @@ const loader = new pi.DefaultResourceLoader({
 });
 await loader.reload();
 assert.deepEqual(loader.getExtensions().errors, []);
-const { createRootRuntime, treeIdle } = globalThis.piAgentsTree;
+const { createRootRuntime, createReporter, treeChanged, treeIdle } = globalThis.piAgentsTree;
 
 test("a root stays busy while it receives a message from another root", async (t) => {
 	const manager = pi.SessionManager.create(home, join(home, "sessions"));
@@ -44,4 +44,42 @@ test("a root stays busy while it receives a message from another root", async (t
 	receiving.open();
 	await receipt;
 	assert.equal((await request(socket, { action: "status" })).state, "idle");
+});
+
+test("a reporter whose end frame fails at shutdown stops reporting until the next start", async (t) => {
+	t.after(async () => process.kill((await request(statePaths().daemon, { action: "status" })).pid, "SIGTERM"));
+	const events = new Map();
+	let reports = 0;
+	createReporter({ on: (event, handler) => events.set(event, handler), getSessionName: () => undefined }, {
+		treeIdle: () => true,
+		liveWork: () => { reports++; return 0; },
+		browsing: () => false,
+	});
+	// Like Pi's, a context throws once its extension is reloaded; the first one also fails the end frame.
+	const context = (sessionManager) => ({
+		cwd: home,
+		stale: false,
+		failing: false,
+		get sessionManager() {
+			if (this.stale) throw new Error("stale ctx");
+			if (this.failing) throw new Error("end frame failed");
+			return sessionManager;
+		},
+		isIdle: () => true,
+		hasPendingMessages: () => false,
+	});
+	const first = context(pi.SessionManager.create(home, join(home, "sessions")));
+	events.get("session_start")({}, first);
+	await until(() => reports > 0, "the first report");
+	events.get("agent_start")();
+	first.failing = true;
+	await assert.rejects(events.get("session_shutdown")(), /end frame failed/);
+	first.stale = true;
+	treeChanged();
+	const before = reports;
+	await new Promise((resolve) => setTimeout(resolve, 200));
+	assert.equal(reports, before);
+
+	events.get("session_start")({}, context(pi.SessionManager.create(home, join(home, "sessions"))));
+	await until(() => reports > before, "a report after the next start");
 });
