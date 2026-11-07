@@ -17,6 +17,7 @@ Files live in `${XDG_STATE_HOME:-~/.local/state}/pi/agents/`:
 - `workbench.json`: seen marks and which Sessions are listed.
 - `host.log`, `daemon.log`: logs.
 - `main.json`: which Session is the main Agent of each entry name.
+- `mailboxes/`: each Session's messages not yet in it, and inputs it sent that have not ended.
 
 Sockets and Session locks go in `$XDG_RUNTIME_DIR/pi-agents/`. macOS has no `XDG_RUNTIME_DIR`, so there they go in `runtime/` under the state directory.
 

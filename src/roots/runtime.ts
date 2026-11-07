@@ -2,9 +2,10 @@ import { buildSessionContext, getPackageDir, hasTrustRequiringProjectResources, 
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { modelLabel, trackTreeWork, treeMetadata } from "../agents/registry.ts";
+import { MESSAGE_TYPE, modelLabel, trackTreeWork, treeMetadata } from "../agents/registry.ts";
 import { sendViaDaemon } from "../daemon/client.mjs";
 import { prepareDirectory, statePaths, sessionDir as resolveSessionDir } from "./paths.mjs";
+import { readMailbox, updateMailbox } from "./mailbox.ts";
 import { createRpc } from "./rpc.ts";
 import { rootSnapshot } from "./snapshot.mjs";
 import { recoverSocket } from "./socket-recovery.mjs";
@@ -57,6 +58,7 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 	let server: Awaited<ReturnType<typeof listen>> | undefined;
 	let ready = false;
 	let seen = new Set<string>();
+	let redelivered: Promise<void> = Promise.resolve();
 	const rpc = createRpc();
 
 	function availabilityError(): string | undefined {
@@ -96,23 +98,87 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 		const error = availabilityError();
 		if (error) throw new Error(error);
 		signal.throwIfAborted();
+		await redelivered;
 		if (!seen.has(message.id)) {
-			seen.add(message.id);
-			// The tree stays busy until the message is in the Session.
-			const release = trackTreeWork(message.recipient);
+			// Kept until it is in the Session, so that a restart delivers it; the user's message carries no ID there.
+			if (!message.user) updateMailbox(message.recipient, (mailbox) => { mailbox.inbox.push(message); });
 			try {
-				await hooks.receive(message);
-			} finally {
-				release();
+				await receive(message);
+			} catch (error) {
+				forget(message.recipient, message.id);
+				throw error;
 			}
+			settle();
 		}
 		return { accepted: true, messageId: message.id };
 	}
 
+	async function receive(message: RootMessage) {
+		seen.add(message.id);
+		// The tree stays busy until the message is in the Session.
+		const release = trackTreeWork(message.recipient);
+		try {
+			await hooks.receive(message);
+		} catch (error) {
+			seen.delete(message.id);
+			throw error;
+		} finally {
+			release();
+		}
+	}
+
+	/** Delivers the messages accepted before this Session's process exited that are not in the Session, in the order they arrived. */
+	async function redeliver(sessionId: string) {
+		// A Session that refuses messages keeps them until it starts able to take them.
+		if (!ready || availabilityError()) return;
+		for (const message of readMailbox(sessionId).inbox) {
+			if (!ready) return;
+			if (seen.has(message.id)) continue;
+			try {
+				await receive(message);
+			} catch (error) {
+				console.warn(`[pi-agents] redelivery of message ${message.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+		settle();
+	}
+
+	function forget(sessionId: string, messageId: string) {
+		updateMailbox(sessionId, (mailbox) => {
+			const kept = mailbox.inbox.filter((message) => message.id !== messageId);
+			if (kept.length === mailbox.inbox.length) return false;
+			mailbox.inbox = kept;
+		});
+	}
+
+	/** Forgets the accepted messages that are in the Session. */
+	function settle() {
+		if (!active) return;
+		const ctx = active;
+		updateMailbox(ctx.sessionManager.getSessionId(), (mailbox) => {
+			// Pi writes a Session's file once it holds a conversation; until then its entries are only in memory.
+			if (mailbox.inbox.length === 0 || !existsSync(ctx.sessionManager.getSessionFile()!)) return false;
+			const received = new Set(hooks.receivedIds(ctx));
+			const kept = mailbox.inbox.filter((message) => !received.has(message.id));
+			if (kept.length === mailbox.inbox.length) return false;
+			mailbox.inbox = kept;
+		});
+	}
+
 	pi.on("resources_discover", () => {
-		if (!active || !server) return;
+		if (!active || !server || ready) return;
 		ready = true;
+		// Messages that arrive meanwhile follow those accepted before.
+		const sessionId = active.sessionManager.getSessionId();
+		redelivered = new Promise((resolve) => setTimeout(resolve)).then(() => redeliver(sessionId));
 	});
+
+	// Pi adds a message to the Session after this event's handlers. One added while the Session is idle has no event; the other places settle it.
+	pi.on("message_end", (event) => {
+		const message = event.message;
+		if (message.role === "custom" && message.customType === MESSAGE_TYPE && (message.details as { messageId?: string } | undefined)?.messageId) setTimeout(settle);
+	});
+	pi.on("agent_end", () => settle());
 
 	return {
 		/** Other root Agents with their state. Only a root Agent sees them. */
@@ -132,26 +198,35 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 			if (!active || !ready) throw new Error("Root messaging is not ready; only persistent root Sessions participate.");
 			const sender = { id: active.sessionManager.getSessionId(), ...(pi.getSessionName() ? { name: pi.getSessionName() } : {}) };
 			const message: RootMessage = { id: randomUUID(), sender, recipient: target.id, body, deliverAs: delivery };
-			if (delivery === "write") {
-				let receipt: { accepted?: boolean; messageId?: string };
-				try {
-					receipt = await request(paths.session(target.id), { action: "deliver", message }, { signal });
-				} catch (error) {
-					const code = (error as NodeJS.ErrnoException).code;
-					if (code === "ENOENT" || code === "ECONNREFUSED") throw new Error(`${target.label} is offline.`);
-					throw error;
+			const deliver = async () => {
+				if (delivery === "write") {
+					let receipt: { accepted?: boolean; messageId?: string };
+					try {
+						receipt = await request(paths.session(target.id), { action: "deliver", message }, { signal });
+					} catch (error) {
+						const code = (error as NodeJS.ErrnoException).code;
+						if (code === "ENOENT" || code === "ECONNREFUSED") throw new Error(`${target.label} is offline.`);
+						throw error;
+					}
+					if (receipt?.accepted !== true || receipt.messageId !== message.id) {
+						throw Object.assign(new Error(`Invalid acknowledgement from ${target.label}; it may have received the message.`), { uncertainDelivery: true });
+					}
+					return;
 				}
-				if (receipt?.accepted !== true || receipt.messageId !== message.id) {
-					throw new Error(`Invalid acknowledgement from ${target.label}; it may have received the message.`);
-				}
-				return;
+				// The recipient runs with this Session's Pi, environment, and pi-agents, which Pi loads once.
+				// The daemon has checked the recipient's acknowledgement.
+				const extension = pi.getAllTools().find((tool) => tool.name === "agent")!.sourceInfo.path;
+				const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+				const launch = { command: process.execPath, args: [piCli(), "-e", extension], env };
+				await sendViaDaemon(paths, message, { sessionDir, launch, signal });
+			};
+			try {
+				await deliver();
+			} catch (error) {
+				// The recipient adds each message ID to its Session once, so a message that may not have arrived is sent again once.
+				if (!(error as { uncertainDelivery?: boolean }).uncertainDelivery || signal?.aborted) throw error;
+				await deliver();
 			}
-			// The recipient runs with this Session's Pi, environment, and pi-agents, which Pi loads once.
-			// The daemon has checked the recipient's acknowledgement.
-			const extension = pi.getAllTools().find((tool) => tool.name === "agent")!.sourceInfo.path;
-			const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-			const launch = { command: process.execPath, args: [piCli(), "-e", extension], env };
-			await sendViaDaemon(paths, message, { sessionDir, launch, signal });
 		},
 
 		async start(ctx: ExtensionContext): Promise<void> {
@@ -181,6 +256,7 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 		rpcClients: () => rpc.clients(),
 
 		async stop(): Promise<void> {
+			settle();
 			ready = false;
 			rpc.close();
 			await server?.close();
