@@ -6,6 +6,7 @@
 
 - A message another root Agent accepted is no longer lost when it exits before taking the message in; it is delivered once when it starts again.
 - A message whose delivery is uncertain is sent again once, with the same ID, before `send` reports an error.
+- An owner that went offline while its owned Agents had inputs gets one notification of them when it is loaded again.
 - Pi no longer crashes with `This extension ctx is stale` after a reload whose Session failed to tell the workbench it ended.
 
 ## [0.5.0] - 2026-11-06

@@ -45,6 +45,7 @@ import {
 import { deferred, hold, settlesBy, waitFor, type Deferred, type Held, type WaitEnd } from "./wait.ts";
 import { releaseSession } from "../roots/guard.mjs";
 import { defaultSessionDir, sessionDir as rootSessionDir } from "../roots/paths.mjs";
+import { readMailbox, updateMailbox } from "../roots/mailbox.ts";
 
 const AGENT_ENTRY = "pi-agents-agent";
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -153,6 +154,7 @@ export function steerQueued(agent: AgentSession["agent"] | undefined): boolean {
 }
 
 export const RESULT_TAG = "agent-result";
+const OFFLINE_RESULT = "Interrupted because you went offline.";
 
 function ended(input: InputRecord): boolean {
 	return input.state === "completed" || input.state === "failed" || input.state === "aborted";
@@ -495,7 +497,12 @@ export class Agents {
 	async abort(agent: Owned, { silent = false, deadline = Date.now() + SHUTDOWN_TIMEOUT_MS } = {}): Promise<boolean> {
 		const turn = agent.turn;
 		if (!turn && agent.queue.length === 0) return false;
-		if (silent) for (const input of [...agent.queue, ...(turn?.inputs ?? [])]) input.silent = true;
+		if (silent) {
+			const inputs = [...agent.queue, ...(turn?.inputs ?? [])];
+			for (const input of inputs) input.silent = true;
+			// The owner is not told of them, even if its process exits before the turn stops.
+			this.settle(inputs.flatMap((input) => input.record ? [input.record] : []));
+		}
 		this.end(agent, agent.queue.splice(0), "aborted", "", { withhold: turn?.withheld });
 		this.changed();
 		if (turn) await this.stop(agent, turn, deadline);
@@ -550,6 +557,18 @@ export class Agents {
 			}
 			this.persist(agent);
 		}
+	}
+
+	/** Reports the inputs that ended because this Agent went offline in one notification, as a write. */
+	reportOffline(): void {
+		if (this.program) return;
+		const inputs = readMailbox(this.self.id).outbox;
+		if (inputs.length === 0) return;
+		const ids = this.ids();
+		const results = inputs.map(({ agentId, name }) => ({ name, id: shortId(agentId, ids), status: "aborted", body: OFFLINE_RESULT }));
+		const text = results.map(({ name, id }) => `<${RESULT_TAG} name="${name}" id="${id}" status="aborted">\n${OFFLINE_RESULT}\n</${RESULT_TAG}>`).join("\n\n");
+		this.pi.sendMessage(customMessage(text, "write", { notice: { results } }), { deliverAs: "steer" });
+		updateMailbox(this.self.id, (mailbox) => { mailbox.outbox = []; });
 	}
 
 	/** Takes the Agents offline; aborting and shutting down share one timeout, after which work is abandoned and this throws. */
@@ -709,6 +728,7 @@ export class Agents {
 	 */
 	private end(agent: Owned, inputs: Input[], outcome: Outcome, result: string, { withhold, withheld = [] }: { withhold?: InputRecord[]; withheld?: InputRecord[] } = {}): void {
 		const notices: InputRecord[] = [];
+		const silenced: InputRecord[] = [];
 		let changed = false;
 		for (const input of inputs) {
 			if (input.permit) scheduler.releaseOutstanding(this.self.rootId, input.permit);
@@ -728,23 +748,26 @@ export class Agents {
 				}
 			}
 			input.done?.resolve();
-			if (!input.silent) notices.push(record);
+			(input.silent ? silenced : notices).push(record);
 		}
 		if (changed) this.persist(agent);
+		this.settle(silenced);
 		if (withhold) {
 			withhold.push(...notices);
 			return;
 		}
-		const answers = new Map<string, InputRecord>();
+		const answers = new Map<string, InputRecord[]>();
 		for (const record of [...notices, ...withheld]) {
 			const key = JSON.stringify([record.state, record.result]);
-			if (!answers.has(key)) answers.set(key, record);
+			answers.set(key, [...answers.get(key) ?? [], record]);
 		}
-		for (const record of answers.values()) this.notifyLater(agent, record);
+		for (const records of answers.values()) this.notifyLater(agent, records);
 	}
 
-	private notifyLater(agent: Owned, record: InputRecord): void {
+	/** Notifies the owner of inputs that ended with the same state and result. */
+	private notifyLater(agent: Owned, records: InputRecord[]): void {
 		if (this.program) return;
+		const record = records[0]!;
 		// The tree stays busy until the notification is delivered.
 		const release = trackTreeWork(this.self.rootId);
 		queueMicrotask(() => {
@@ -754,19 +777,21 @@ export class Agents {
 				const id = shortId(agent.record.id, this.ids());
 				const text = `<${RESULT_TAG} name="${agent.record.name}" id="${id}" status="${record.state}">\n${kept}\n</${RESULT_TAG}>${notice ? `\n\n${notice}` : ""}`;
 				const result = { name: agent.record.name, id, status: record.state, body: kept, ...(notice && { notice }), ...details };
-				if (!hold(this.held, agent.record.id, { text, result })) this.notify(text, { results: [result] });
+				if (hold(this.held, agent.record.id, { text, result }) || this.notify(text, { results: [result] })) this.settle(records);
 			} finally {
 				release();
 			}
 		});
 	}
 
-	/** Delivers a notification to this Agent as a steer. */
-	notify(text: string, notice: Notice): void {
+	/** Delivers a notification to this Agent as a steer; returns whether it was delivered. */
+	notify(text: string, notice: Notice): boolean {
 		try {
 			deliver(undefined, { id: this.self.id, name: this.self.name(), ownerId: this.self.ownerId, cwd: "", state: "running" }, "steer", text, notice);
+			return true;
 		} catch (error) {
 			console.warn(`[pi-agents] notification failed: ${error instanceof Error ? error.message : String(error)}`);
+			return false;
 		}
 	}
 
@@ -805,7 +830,19 @@ export class Agents {
 	private newRecord(agent: Owned): InputRecord {
 		const record: InputRecord = { id: `${agent.record.id}:${agent.record.inputs.length + 1}`, state: "queued" };
 		agent.record.inputs.push(record);
+		// Kept until its notification is delivered, so that an owner that went offline learns of it when loaded again.
+		if (!this.program) updateMailbox(this.self.id, (mailbox) => { mailbox.outbox.push({ id: record.id, agentId: agent.record.id, name: agent.record.name }); });
 		return record;
+	}
+
+	/** Forgets inputs that need no notification on the owner's next load. */
+	private settle(records: InputRecord[]): void {
+		if (this.program || records.length === 0) return;
+		updateMailbox(this.self.id, (mailbox) => {
+			const kept = mailbox.outbox.filter((input) => !records.some((record) => record.id === input.id));
+			if (kept.length === mailbox.outbox.length) return false;
+			mailbox.outbox = kept;
+		});
 	}
 
 	private reserve(): symbol {

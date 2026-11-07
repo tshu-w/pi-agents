@@ -171,6 +171,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		};
 		node = created;
 		nodes.set(id, node);
+		agents.reportOffline();
 		programs = new Programs(rootId, {
 			appendEntry: (customType, data) => pi.appendEntry(customType, data),
 			notify: (text, notice) => agents.notify(text, notice),

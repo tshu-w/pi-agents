@@ -78,6 +78,8 @@ An input sent to an owned Agent ends as `completed` when its turn answers it, `f
 
 When an input ends, its owner receives a notification carrying the result, unless the owner aborted it or is going offline. Inputs that a turn ends with the same outcome and result share one notification. The notification is an input delivered as `steer` (a write after the owner's turn is stopped, §2.2).
 
+Inputs that ended because their owner went offline are reported in one notification when the owner is loaded again, delivered as a write.
+
 `wait` ends when the Agents it waits for have no pending inputs, when its timeout expires, or when a steer input arrives; a write does not end it. Their notifications are held until it ends, then delivered as one.
 
 A recipient sees each message with its sender's name and ID.

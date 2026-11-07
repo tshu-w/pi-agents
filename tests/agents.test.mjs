@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -18,11 +18,11 @@ const bodyOf = (text) => text.startsWith("<agent-message ") ? text.split("\n").s
  * Starts a root Session whose model answers from its last message: owned Agents answer
  * `answer:<first input>`, and the root acknowledges notifications with plain text. While
  * `state.hold` is set, owned Agents count their turns in `state.busy` and answer once it opens,
- * or end when their turn is aborted unless `state.stuck` is set.
+ * or end when their turn is aborted unless `state.stuck` is set. `sessionFile` opens a Session that exists.
  */
-async function startRoot(limits = {}) {
+async function startRoot(limits = {}, sessionFile) {
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ "pi-agents": { maxConcurrent: 3, maxOutstanding: 8, ...limits } }));
-	const cwd = mkdtempSync(join(agentDir, "cwd-"));
+	const cwd = sessionFile ? dirname(dirname(sessionFile)) : mkdtempSync(join(agentDir, "cwd-"));
 	const state = { hold: undefined, stuck: false, busy: 0, rootMessages: [] };
 	const route = async (context, options) => {
 		const messages = context.messages;
@@ -44,7 +44,7 @@ async function startRoot(limits = {}) {
 		const inputs = messages.filter((message) => message.role === "user").map((message) => bodyOf(textOf(message.content)));
 		return ai.fauxAssistantMessage(`answer:${inputs.slice(-1)[0]}|seen:${inputs.join(",")}`);
 	};
-	const sessionManager = pi.SessionManager.create(cwd, join(cwd, "sessions"));
+	const sessionManager = sessionFile ? pi.SessionManager.open(sessionFile, dirname(sessionFile), cwd) : pi.SessionManager.create(cwd, join(cwd, "sessions"));
 	const session = await createSession({ cwd, route, extensions: [EXTENSION, fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))], sessionManager, tools: ["read", "agent"] });
 	await session.bindExtensions({ mode: "print" });
 	const tool = session.getToolDefinition("agent");
@@ -201,6 +201,34 @@ test("the owner is notified when an input ends while it is not waiting", async (
 	await until(() => root.state.rootMessages.includes(`<agent-result name="worker" id="${id}" status="completed">\nanswer:hello|seen:hello\n</agent-result>`), "notification");
 	assert.equal(await root.call({ action: "wait", target: id, timeout: 10 }), "Nothing to wait for.");
 	await root.close();
+});
+
+test("inputs that end because their owner went offline are reported in one write when it is loaded again", async () => {
+	const root = await startRoot();
+	const mailboxFile = join(process.env.PI_AGENTS_STATE_DIR, "mailboxes", `${root.session.sessionManager.getSessionId()}.json`);
+	// A model reply makes Pi write the Session file.
+	await root.session.prompt("hello");
+	await root.call({ action: "spawn", name: "done", message: "one" });
+	await root.call({ action: "wait", target: "done", timeout: 10 });
+	assert.equal(existsSync(mailboxFile), false);
+	root.state.hold = gate();
+	const ids = [];
+	for (const name of ["first", "second"]) ids.push(idOf(await root.call({ action: "spawn", name, message: name })));
+	await root.waitBusy(2);
+	assert.equal(JSON.parse(readFileSync(mailboxFile, "utf8")).outbox.length, 2);
+	const file = root.session.sessionManager.getSessionFile();
+	await root.close();
+
+	const reopened = await startRoot({}, file);
+	const offline = "Interrupted because you went offline.";
+	const reported = notificationsOf(reopened.session).filter((message) => message.details.results.some(({ body }) => body === offline));
+	assert.equal(reported.length, 1);
+	assert.equal(textOf(reported[0].content), ["first", "second"].map((name, index) => `<agent-result name="${name}" id="${ids[index]}" status="aborted">\n${offline}\n</agent-result>`).join("\n\n"));
+	assert.equal(reported[0].details.delivery, "write");
+	assert.equal(reopened.session.isStreaming, false);
+	assert.deepEqual(reopened.state.rootMessages, []);
+	assert.equal(existsSync(mailboxFile), false);
+	await reopened.close();
 });
 
 test("the user's input from the viewer reaches the Agent without a sender header and gives its owner no result", async () => {
