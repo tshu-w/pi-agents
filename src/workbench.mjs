@@ -13,6 +13,7 @@ import { detachKey, detachMatcher } from './host/keys.mjs';
 import { piPackage } from './pi.mjs';
 import { ensureDaemon, sendViaDaemon } from './daemon/client.mjs';
 import { openStream } from './roots/transport.mjs';
+import { canonicalPath } from './roots/locks.mjs';
 
 const ALT_SCREEN = '\x1b[?1049h\x1b[H\x1b[2J';
 const MAIN_SCREEN = '\x1b[?1049l';
@@ -690,7 +691,7 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
       (onProgress, signal) => configured ? SessionManager.listAll(configured, onProgress, signal) : SessionManager.listAll(onProgress, signal),
       async file => {
         closeModal();
-        const known = sessions.find(session => session.sessionFile === file);
+        const known = sessions.find(session => session.sessionFile && canonicalPath(session.sessionFile) === canonicalPath(file));
         if (known) return onPick(known);
         try {
           const header = JSON.parse((await readFile(file, 'utf8')).split('\n', 1)[0]);

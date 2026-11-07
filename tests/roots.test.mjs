@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -154,6 +154,20 @@ test("a write to an offline root is rejected and does not wake it", async () => 
 	reserve(paths.locks, target.file, target.id).release();
 	assert.equal(existsSync(paths.session(target.id)), false);
 	assert.equal(entriesOf(target.file).length, 3);
+});
+
+test("an offline root the workbench marks by its real path behind a symlinked session directory is listed once", async () => {
+	const real = mkdtempSync(join(home, "real-"));
+	symlinkSync(real, join(sessionDir, "--linked--"));
+	const file = join(real, "linked-e.jsonl");
+	const timestamp = new Date().toISOString();
+	writeFileSync(file, `${JSON.stringify({ type: "session", version: 3, id: "linked-e", cwd: real, timestamp })}\n`);
+	mkdirSync(paths.state, { recursive: true });
+	const marks = existsSync(paths.workbench) ? JSON.parse(readFileSync(paths.workbench, "utf8")) : { version: 1, sessions: {} };
+	marks.sessions["linked-e"] = { sessionFile: file };
+	writeFileSync(paths.workbench, JSON.stringify(marks));
+	assert.equal((await sender.call({ action: "list", query: "linked-e" })).match(/linked-e/g)?.length, 1);
+	await assert.rejects(sender.call({ action: "send", target: "linked", message: "note", deliverAs: "write" }), / linked-e is offline\./);
 });
 
 test("a root in another process is listed with its state and cannot be opened twice", async () => {

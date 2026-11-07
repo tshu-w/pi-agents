@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { FRAME, frame, json, readFrames } from './frames.mjs';
 import { prepareDirectory } from '../roots/paths.mjs';
+import { canonicalPath } from '../roots/locks.mjs';
 
 const HOST = fileURLToPath(new URL('../../bin/host.mjs', import.meta.url));
 const START_TIMEOUT_MS = 10000;
@@ -59,6 +60,12 @@ export function hostStatus(path) {
 /** The file of the Session a host runs; Pi keeps a relative session directory relative, so it resolves against the host's cwd. */
 export function hostSessionFile(host) {
   return host.session?.file && resolve(host.cwd, host.session.file);
+}
+
+/** Whether a host runs the Session in `file`, though either may name it by another path, as through a symlink. */
+export function holdsFile(host, file) {
+  const held = hostSessionFile(host);
+  return Boolean(held) && canonicalPath(held) === canonicalPath(file);
 }
 
 export function alive(pid) {

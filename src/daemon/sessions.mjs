@@ -3,7 +3,7 @@ import { open, readFile, realpath, rename, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { relative, resolve } from 'node:path';
 import { discoverRoots, readRootFile, realPath } from '../roots/discovery.mjs';
-import { isLocked } from '../roots/locks.mjs';
+import { canonicalPath, isLocked } from '../roots/locks.mjs';
 import { readMains } from '../roots/mains.mjs';
 
 const MARKS_VERSION = 1;
@@ -118,9 +118,11 @@ export async function createSessions(paths, sessionDir) {
       // Running Sessions report their own metadata; skip reparsing their growing files.
       const running = new Set(await Promise.all([...live.values()].flatMap(state => state.sessionFile ? [realPath(state.sessionFile)] : [])));
       const records = await discoverRoots(sessionDir, { extraFiles: files(), ids, skip: running, signal });
-      const mains = new Map(Object.entries(readMains(paths.mainSession)).map(([name, file]) => [resolve(file), name]));
+      // By real path, as main.json and a record may name one file by different paths.
+      const mains = new Map(Object.entries(readMains(paths.mainSession)).map(([name, file]) => [canonicalPath(resolve(file)), name]));
+      const recorded = new Set(await Promise.all(records.map(record => realPath(record.sessionFile))));
       for (const file of mains.keys()) {
-        if (running.has(await realPath(file)) || records.some(record => resolve(record.sessionFile) === file)) continue;
+        if (running.has(file) || recorded.has(file)) continue;
         const record = await readRootFile(file, { signal });
         if (record) records.push(record);
       }
@@ -146,7 +148,7 @@ export async function createSessions(paths, sessionDir) {
       return [...rows.values()].map(row => {
         const mark = marks[row.id];
         const attention = unseen(mark) ? (mark.last.failed ? 'failed' : 'done') : undefined;
-        const main = row.sessionFile && mains.get(resolve(row.sessionFile));
+        const main = row.sessionFile && mains.get(canonicalPath(resolve(row.sessionFile)));
         return { ...row, ...(attention ? { attention } : {}), ...(mark?.last ? { finishedAt: mark.last.at } : {}), ...(main ? { main } : {}) };
       });
     },

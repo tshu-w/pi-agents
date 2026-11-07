@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { styleText } from 'node:util';
-import { attach, hostSessionFile, settledHosts, startHost } from '../src/host/client.mjs';
+import { attach, holdsFile, hostSessionFile, settledHosts, startHost } from '../src/host/client.mjs';
 import { detachKey, detachMatcher } from '../src/host/keys.mjs';
 import { discoverRoots, findRoot } from '../src/roots/discovery.mjs';
 import { defaultSessionDir, resolvePath, sessionDir, statePaths } from '../src/roots/paths.mjs';
@@ -16,6 +16,7 @@ import { piPackage } from '../src/pi.mjs';
 import { markedFiles } from '../src/daemon/sessions.mjs';
 import { readMains } from '../src/roots/mains.mjs';
 import { readSessionId } from '../src/roots/guard.mjs';
+import { canonicalPath } from '../src/roots/locks.mjs';
 import { argGroups } from '../src/host/rpc-client.mjs';
 
 const real = process.env.PATH.split(':').map(dir => join(dir, 'pi')).find(file => {
@@ -79,18 +80,18 @@ async function runningTarget() {
     const file = resolve(session);
     // The host may name the file by another path, as through a symlink.
     const id = readSessionId(file);
-    running = host => host.session && (host.session.id.startsWith(session) || host.session.id === id || hostSessionFile(host) === file);
+    running = host => host.session && (host.session.id.startsWith(session) || host.session.id === id || holdsFile(host, file));
   } else if (sessionId && parsed.fork === undefined) {
     // With `--fork`, the ID names a new Session.
     const file = await sessionById(sessionId);
     // A Session without messages has no file yet; its host reports where it will be.
     const directory = await sessionDirOption() ?? defaultSessionDir(process.cwd(), getAgentDir());
     running = host => host.session && (file
-      ? hostSessionFile(host) === file
-      : host.session.id === sessionId && dirname(hostSessionFile(host)) === directory && host.session.cwd === process.cwd());
+      ? holdsFile(host, file)
+      : host.session.id === sessionId && canonicalPath(dirname(hostSessionFile(host))) === canonicalPath(directory) && host.session.cwd === process.cwd());
   } else if (parsed.continue) {
     const file = await recentSession();
-    if (file) running = host => hostSessionFile(host) === file;
+    if (file) running = host => holdsFile(host, file);
   }
   return running && (await settledHosts(paths, running)).find(running);
 }
@@ -170,7 +171,7 @@ async function openMain() {
   const options = argGroups(parseArgs, args.slice(1)).filter(([option]) => !['--name', '-n'].includes(option)).flat();
   const file = readMains(paths.mainSession)[name];
   // A main Agent without messages has no file yet, but its host may be running.
-  const holds = host => hostSessionFile(host) === file;
+  const holds = host => holdsFile(host, file);
   if (file && (existsSync(file) || (await settledHosts(paths, holds)).some(holds))) args = ['--session', file, ...options];
   else {
     if (named === undefined) process.chdir(homedir());

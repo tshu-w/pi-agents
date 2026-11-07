@@ -3,7 +3,7 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { alive, hostSessionFile, hostStatus, settledHosts, startHost } from './client.mjs';
+import { alive, holdsFile, hostStatus, settledHosts, startHost } from './client.mjs';
 import { readSessionHeader, readSessionId } from '../roots/guard.mjs';
 import { isLocked, lockKeys, SessionOccupiedError } from '../roots/locks.mjs';
 import { openStream, request } from '../roots/transport.mjs';
@@ -132,7 +132,7 @@ export async function runHeadless({ pi, paths, args, mode, findRunning, warnIgno
     const deadline = performance.now() + TIMEOUT_MS;
     for (;;) {
       const id = readSessionId(file);
-      const holds = h => h.session && (h.session.id === id || hostSessionFile(h) === file);
+      const holds = h => h.session && (h.session.id === id || holdsFile(h, file));
       try {
         const held = (await settledHosts(paths, holds)).find(holds);
         if (held) return await connect(paths, held.session.id, handlers, () => alive(held.pid));

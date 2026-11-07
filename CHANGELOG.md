@@ -13,6 +13,7 @@
 - `pd --session <file>` and `pd main` attach to the host running the Session even when the host names its file by another path, as through a symlink, instead of starting a Pi that exits because the Session is in use.
 - Dialogs, such as `/tasks`, open in the attached terminal after an owned Agent has started, and are cancelled once the terminal detaches.
 - An owner's Session file grows by one small entry per input change, instead of a copy of all its owned Agent's inputs and results.
+- An offline root Agent whose Session file is reachable by two paths, as through a symlinked session directory, is listed once and found by its ID, instead of twice with `matches several Agents`; main Agents and running hosts are recognized by either path.
 
 ## [0.5.0] - 2026-11-06
 

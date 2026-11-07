@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { treeMetadata } from "./agents/registry.ts";
+import { canonicalPath } from "./roots/locks.mjs";
 import { readMains } from "./roots/mains.mjs";
 import { statePaths } from "./roots/paths.mjs";
 
@@ -12,6 +13,9 @@ const instructions = readFileSync(new URL("./main-agent.md", import.meta.url), "
  * A main Agent is a Session an entry of `main.json` names: `pd main --name <entry>` starts one with `--main=<entry>`,
  * and `/new` in it starts the next for the same entry. It gets the main Agent's instructions.
  */
+// A Session may be opened by another path than main.json names, as through a symlinked session directory.
+const same = (a: string, b: string) => canonicalPath(a) === canonicalPath(b);
+
 export function registerMainAgent(pi: ExtensionAPI): void {
 	pi.registerFlag(MAIN_FLAG, { type: "string", description: "Start the main Agent of this entry (used by pd main)" });
 	let main = false;
@@ -26,7 +30,7 @@ export function registerMainAgent(pi: ExtensionAPI): void {
 		const previous = event.reason === "new" && event.previousSessionFile !== undefined ? path.resolve(event.previousSessionFile) : undefined;
 		const names = event.reason === "startup" && typeof flag === "string"
 			? [flag]
-			: Object.keys(mains).filter((name) => previous !== undefined && mains[name] === previous);
+			: Object.keys(mains).filter((name) => previous !== undefined && same(mains[name], previous));
 		if (file && names.length > 0) {
 			for (const name of names) mains[name] = file;
 			const record = statePaths().mainSession;
@@ -36,7 +40,7 @@ export function registerMainAgent(pi: ExtensionAPI): void {
 			writeFileSync(temporary, JSON.stringify(mains), { mode: 0o600 });
 			renameSync(temporary, record);
 		}
-		main = file !== undefined && Object.values(mains).includes(file);
+		main = file !== undefined && Object.values(mains).some((entry) => same(entry, file));
 	});
 	pi.on("before_agent_start", (event) => {
 		if (main) event.systemPromptOptions.sections["main-agent"] = instructions;

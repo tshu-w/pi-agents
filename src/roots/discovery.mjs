@@ -79,11 +79,14 @@ async function sessionFiles(sessionDir, extraFiles, signal) {
   let directories;
   try { directories = await readdir(sessionDir, { withFileTypes: true }); }
   catch (error) { if (error.code === 'ENOENT') directories = []; else throw error; }
-  const files = new Set(extraFiles);
+  // By real path, so that a file reached by several paths, as through a symlinked sessionDir, is read once.
+  const files = new Map();
+  const add = async file => { const real = await realPath(file); if (!files.has(real)) files.set(real, file); };
+  for (const file of extraFiles) await add(file);
   for (const directory of directories) {
     signal?.throwIfAborted();
     // A configured sessionDir holds roots directly, and child runtimes in subagents/.
-    if (directory.isFile() && directory.name.endsWith('.jsonl')) files.add(join(sessionDir, directory.name));
+    if (directory.isFile() && directory.name.endsWith('.jsonl')) await add(join(sessionDir, directory.name));
     if ((!directory.isDirectory() && !directory.isSymbolicLink()) || directory.name === 'subagents') continue;
     const path = join(sessionDir, directory.name);
     let entries;
@@ -92,10 +95,10 @@ async function sessionFiles(sessionDir, extraFiles, signal) {
     // Pi's default layout keeps roots one level below sessions/. Child runtimes use nested
     // directories; parentSession alone cannot distinguish children from forks.
     for (const entry of entries) {
-      if ((entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith('.jsonl')) files.add(join(path, entry.name));
+      if ((entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith('.jsonl')) await add(join(path, entry.name));
     }
   }
-  return files;
+  return files.values();
 }
 
 /**
