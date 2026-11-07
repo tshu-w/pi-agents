@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import net from "node:net";
 import { treeMetadata } from "../agents/registry.ts";
+import { setDialogHost } from "../roots/rpc-patches.ts";
 import { FRAME, frame, json, readFrames } from "./frames.mjs";
 
 const IDLE_EXIT_MS = 10 * 60_000;
@@ -58,12 +59,24 @@ export function hostExtension(pi: ExtensionAPI, { treeIdle, rpcClients }: { tree
 		if (Date.now() - idleSince >= IDLE_EXIT_MS) ctx.shutdown();
 	};
 	let timer: ReturnType<typeof setInterval> | undefined;
+	const host: Host = {
+		socket: hostSocket,
+		attached: () => attached,
+		onChange: (listener) => {
+			listeners.push(listener);
+			return () => {
+				const at = listeners.indexOf(listener);
+				if (at >= 0) listeners.splice(at, 1);
+			};
+		},
+	};
 
 	pi.on("session_start", (_event, current) => {
 		// Owned Agents run in the same process; only the root speaks for the host.
 		if (treeMetadata(current)) return;
 		ctx = current;
 		socket ??= connect(hostSocket);
+		setDialogHost(host);
 		if (!timer) {
 			process.on("SIGTSTP", resume);
 			timer = setInterval(checkIdle, 1000);
@@ -84,15 +97,5 @@ export function hostExtension(pi: ExtensionAPI, { treeIdle, rpcClients }: { tree
 	});
 
 	pi.registerCommand("detach", { description: "Detach this terminal; Pi keeps running", handler: async () => send({ type: "detach" }) });
-	return {
-		socket: hostSocket,
-		attached: () => attached,
-		onChange: (listener) => {
-			listeners.push(listener);
-			return () => {
-				const at = listeners.indexOf(listener);
-				if (at >= 0) listeners.splice(at, 1);
-			};
-		},
-	};
+	return host;
 }

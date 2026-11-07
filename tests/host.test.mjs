@@ -488,3 +488,22 @@ test("RPC clients share a Session, dialogs wait only for an attached terminal, a
 	assert.equal(await second.end(), 0);
 	await until(async () => (await listHosts(paths)).length === 0, "idle exit without clients", 15000);
 });
+
+test("dialogs follow the terminal attached to a host an RPC client started, after an owned Agent loads the extension", async () => {
+	const client = rpc([]);
+	const { sessionId } = (await client.call({ type: "get_state" })).data;
+	await client.call({ type: "prompt", message: "spawn" });
+	// The second turn takes in the owned Agent's result, so the Agent has loaded the extension.
+	await until(() => client.records.filter((record) => record.type === "agent_end").length === 2, "the owned Agent's result");
+	const screen = terminal(["attach", sessionId]);
+	await until(() => screen.text().includes("answer:"), "attached");
+	const asking = client.call({ type: "prompt", message: "/ask" });
+	await until(() => screen.text().includes("Proceed?"), "dialog");
+	screen.child.write("\x1a");
+	await screen.exited;
+	await client.find(notified("edited:undefined"), "dialog cancelled on detach");
+	await asking;
+	assert.equal(await client.end(), 0);
+	for (const host of await listHosts(paths)) process.kill(host.pid, "SIGTERM");
+	await until(async () => (await listHosts(paths)).length === 0, "host exit");
+});

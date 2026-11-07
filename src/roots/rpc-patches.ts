@@ -130,9 +130,13 @@ export function agentSession(manager: object): AgentSession | undefined {
 	return shared.sessions.get(manager);
 }
 
-/** Keeps each Session's `AgentSession`, and shares the terminal's UI with RPC clients. */
-export function installRpcPatches(Session: typeof AgentSession, Runner: typeof ExtensionRunner, host: DialogHost | undefined): void {
+/** Makes dialogs follow `host`, which the root Session reports to. */
+export function setDialogHost(host: DialogHost): void {
 	shared.host = host;
+}
+
+/** Keeps each Session's `AgentSession`, and shares the terminal's UI with RPC clients. */
+export function installRpcPatches(Session: typeof AgentSession, Runner: typeof ExtensionRunner): void {
 	if (shared.patched) return;
 	shared.patched = true;
 	const session = Session.prototype as Patchable;

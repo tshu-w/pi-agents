@@ -120,7 +120,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	lockExtension(pi, { start: (current: ExtensionContext) => roots.start(current), stop: () => roots.stop(), runner: ExtensionRunner });
 	const idle = () => node === undefined || treeIdle(node.rootId);
 	const host = hostExtension(pi, { treeIdle: idle, rpcClients: () => roots.rpcClients() });
-	installRpcPatches(AgentSession, ExtensionRunner, host);
+	installRpcPatches(AgentSession, ExtensionRunner);
 	let browsing = false;
 	createReporter(pi, { treeIdle: idle, liveWork: () => node ? liveWork(node) : 0, browsing: () => browsing, host });
 	// Event bus handlers run synchronously, so an extension that emits a query object reads the answer right after emit.

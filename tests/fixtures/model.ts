@@ -3,7 +3,7 @@ import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 
 /**
  * A local model that answers `answer:<last message>`; the tests never call a real provider. With `AGENTS_TEST_RELEASE`,
- * it holds a turn on "hold" until that file exists or the turn is aborted.
+ * it holds a turn on "hold" until that file exists or the turn is aborted. "spawn" spawns an owned Agent named `kid`.
  */
 export default function (pi: any) {
 	pi.registerProvider("agents-test", {
@@ -15,10 +15,13 @@ export default function (pi: any) {
 			const stream = createAssistantMessageEventStream();
 			const last = context.messages.at(-1);
 			const text = typeof last.content === "string" ? last.content : last.content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("");
+			const spawn = last.role === "user" && text === "spawn";
 			const output = {
-				role: "assistant", content: [{ type: "text", text: `answer:${text}` }], api: model.api, provider: model.provider, model: model.id,
+				role: "assistant",
+				content: spawn ? [{ type: "toolCall", id: "spawn", name: "agent", arguments: { action: "spawn", name: "kid", message: "hi" } }] : [{ type: "text", text: `answer:${text}` }],
+				api: model.api, provider: model.provider, model: model.id,
 				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-				stopReason: "stop", timestamp: Date.now(),
+				stopReason: spawn ? "toolUse" : "stop", timestamp: Date.now(),
 			};
 			const release = process.env.AGENTS_TEST_RELEASE;
 			queueMicrotask(async () => {
@@ -28,7 +31,7 @@ export default function (pi: any) {
 					rmSync(release, { force: true });
 				}
 				if (options?.signal?.aborted) stream.push({ type: "error", reason: "aborted", error: { ...output, stopReason: "aborted" } } as any);
-				else stream.push({ type: "done", reason: "stop", message: output } as any);
+				else stream.push({ type: "done", reason: output.stopReason, message: output } as any);
 				stream.end();
 			});
 			return stream;

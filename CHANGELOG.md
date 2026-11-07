@@ -11,6 +11,7 @@
 - `pd --mode rpc --session <file>` joins the Session a Pi outside a host holds, or reports it in use, without starting another host.
 - Pi no longer crashes with `This extension ctx is stale` after a reload whose Session failed to tell the workbench it ended.
 - `pd --session <file>` and `pd main` attach to the host running the Session even when the host names its file by another path, as through a symlink, instead of starting a Pi that exits because the Session is in use.
+- Dialogs, such as `/tasks`, open in the attached terminal after an owned Agent has started, and are cancelled once the terminal detaches.
 
 ## [0.5.0] - 2026-11-06
 
