@@ -15,6 +15,7 @@ import { defaultSessionDir, resolvePath, sessionDir, statePaths } from '../src/r
 import { piPackage } from '../src/pi.mjs';
 import { markedFiles } from '../src/daemon/sessions.mjs';
 import { readMains } from '../src/roots/mains.mjs';
+import { readSessionId } from '../src/roots/guard.mjs';
 import { argGroups } from '../src/host/rpc-client.mjs';
 
 const real = process.env.PATH.split(':').map(dir => join(dir, 'pi')).find(file => {
@@ -76,7 +77,9 @@ async function runningTarget() {
   const { session, sessionId } = parsed;
   if (session) {
     const file = resolve(session);
-    running = host => host.session && (host.session.id.startsWith(session) || hostSessionFile(host) === file);
+    // The host may name the file by another path, as through a symlink.
+    const id = readSessionId(file);
+    running = host => host.session && (host.session.id.startsWith(session) || host.session.id === id || hostSessionFile(host) === file);
   } else if (sessionId && parsed.fork === undefined) {
     // With `--fork`, the ID names a new Session.
     const file = await sessionById(sessionId);
