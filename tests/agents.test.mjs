@@ -231,6 +231,63 @@ test("inputs that end because their owner went offline are reported in one write
 	await reopened.close();
 });
 
+const linesOf = (file) => readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+const agentEntries = (file) => linesOf(file).filter((entry) => entry.customType === "pi-agents-agent" || entry.customType === "pi-agents-input");
+
+/** A root whose owned Agent "worker" answered two inputs, closed; returns its Session file and the Agent's ID. */
+async function answeredTwice() {
+	const root = await startRoot();
+	await root.session.prompt("hello");
+	await root.call({ action: "spawn", name: "worker", message: "one" });
+	await root.call({ action: "wait", target: "worker", timeout: 10 });
+	await root.call({ action: "send", target: "worker", message: "two" });
+	await root.call({ action: "wait", target: "worker", timeout: 10 });
+	const id = (await root.callResult({ action: "list" })).details.agents[0].id;
+	const file = root.session.sessionManager.getSessionFile();
+	await root.close();
+	return { file, id };
+}
+
+/** Reopens `file`, sends "three" to its Agent "worker", and returns the inputs restore and the send appended. */
+async function reopenAndSend(file) {
+	const before = agentEntries(file).length;
+	const root = await startRoot({}, file);
+	await root.call({ action: "send", target: "worker", message: "three" });
+	await root.call({ action: "wait", target: "worker", timeout: 10 });
+	await root.close();
+	return agentEntries(file).slice(before).map(({ data }) => [data.id.split(":")[1], data.state, data.result]);
+}
+
+test("the owner's Session records an owned Agent once and each input change as one entry, and restores from them", async () => {
+	const { file, id } = await answeredTwice();
+	const entries = agentEntries(file);
+	assert.deepEqual(entries.filter((entry) => entry.customType === "pi-agents-agent").map(({ data }) => Object.keys(data).sort()), [["createdAt", "cwd", "id", "name", "sessionFile"]]);
+	const inputs = entries.filter((entry) => entry.customType === "pi-agents-input").map(({ data }) => [data.agentId, data.id.split(":")[1], data.state, data.result]);
+	assert.deepEqual(inputs, [
+		[id, "1", "queued", undefined], [id, "1", "running", undefined], [id, "1", "completed", "answer:one|seen:one"],
+		[id, "2", "queued", undefined], [id, "2", "running", undefined], [id, "2", "completed", "answer:two|seen:one,two"],
+	]);
+	// Restored inputs are not written again, and the next input follows them.
+	assert.deepEqual(await reopenAndSend(file), [["3", "queued", undefined], ["3", "running", undefined], ["3", "completed", "answer:three|seen:one,two,three"]]);
+});
+
+test("a full Agent record from an older Session is the baseline for the input entries after it", async () => {
+	const { file, id } = await answeredTwice();
+	// As older versions wrote: the record with its inputs, here before the second input ran, then a later change to it.
+	const lines = linesOf(file).map((entry) => {
+		if (entry.customType === "pi-agents-agent") {
+			return { ...entry, data: { ...entry.data, inputs: [{ id: `${id}:1`, state: "completed", result: "answer:one|seen:one" }, { id: `${id}:2`, state: "queued" }] } };
+		}
+		if (entry.customType === "pi-agents-input" && !(entry.data.id === `${id}:2` && entry.data.state === "running")) return { ...entry, customType: "dropped" };
+		return entry;
+	});
+	writeFileSync(file, lines.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+	assert.deepEqual(await reopenAndSend(file), [
+		["2", "aborted", "The process exited before this input ended."],
+		["3", "queued", undefined], ["3", "running", undefined], ["3", "completed", "answer:three|seen:one,two,three"],
+	]);
+});
+
 test("the user's input from the viewer reaches the Agent without a sender header and gives its owner no result", async () => {
 	const root = await startRoot();
 	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "one" }));

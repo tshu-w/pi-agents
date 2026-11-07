@@ -48,6 +48,7 @@ import { defaultSessionDir, sessionDir as rootSessionDir } from "../roots/paths.
 import { readMailbox, updateMailbox } from "../roots/mailbox.ts";
 
 const AGENT_ENTRY = "pi-agents-agent";
+const INPUT_ENTRY = "pi-agents-input";
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 const EXTENSION_PATH = fileURLToPath(new URL("../index.ts", import.meta.url));
 export const SUBMIT_RESULT_TOOL_NAME = "submit_result";
@@ -215,6 +216,8 @@ interface Owned {
 	prepared?: Prepared;
 	/** Its turn was stopped: messages from other Agents become writes until its owner's or user's next input. */
 	stopped?: boolean;
+	/** Each input as last written to the owner's Session; set once the Agent's metadata is written. */
+	persisted?: Map<string, string>;
 }
 
 export interface SpawnRequest {
@@ -540,14 +543,24 @@ export class Agents {
 	}
 
 	restore(ctx: ExtensionContext): void {
+		// An Agent's metadata, then one entry per input change; older Sessions hold full records with their inputs.
 		const records = new Map<string, AgentRecord>();
 		for (const entry of ctx.sessionManager.getEntries()) {
-			if (entry.type !== "custom" || entry.customType !== AGENT_ENTRY) continue;
-			const record = entry.data as AgentRecord;
-			records.set(record.id, record);
+			if (entry.type !== "custom") continue;
+			if (entry.customType === AGENT_ENTRY) {
+				const data = entry.data as Omit<AgentRecord, "inputs"> & { inputs?: InputRecord[] };
+				records.set(data.id, { ...data, inputs: data.inputs ?? records.get(data.id)?.inputs ?? [] });
+			} else if (entry.customType === INPUT_ENTRY) {
+				const { agentId, ...input } = entry.data as InputRecord & { agentId: string };
+				const inputs = records.get(agentId)?.inputs;
+				if (!inputs) continue;
+				const index = inputs.findIndex((candidate) => candidate.id === input.id);
+				if (index === -1) inputs.push(input);
+				else inputs[index] = input;
+			}
 		}
 		for (const record of records.values()) {
-			const agent: Owned = { record, queue: [] };
+			const agent: Owned = { record, queue: [], persisted: new Map(record.inputs.map((input) => [input.id, JSON.stringify(input)])) };
 			this.agents.set(record.id, agent);
 			if (!record.inputs.some((input) => !ended(input))) continue;
 			for (const input of record.inputs) {
@@ -854,7 +867,17 @@ export class Agents {
 	private persist(agent: Owned): void {
 		if (this.program) return;
 		if (this.closing && !agent.record.inputs.some((input) => !ended(input))) return;
-		this.pi.appendEntry(AGENT_ENTRY, agent.record);
+		if (!agent.persisted) {
+			const { inputs: _, ...metadata } = agent.record;
+			this.pi.appendEntry(AGENT_ENTRY, metadata);
+			agent.persisted = new Map();
+		}
+		for (const input of agent.record.inputs) {
+			const json = JSON.stringify(input);
+			if (agent.persisted.get(input.id) === json) continue;
+			this.pi.appendEntry(INPUT_ENTRY, { agentId: agent.record.id, ...input });
+			agent.persisted.set(input.id, json);
+		}
 	}
 
 	private changed(): void {

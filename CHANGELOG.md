@@ -12,6 +12,7 @@
 - Pi no longer crashes with `This extension ctx is stale` after a reload whose Session failed to tell the workbench it ended.
 - `pd --session <file>` and `pd main` attach to the host running the Session even when the host names its file by another path, as through a symlink, instead of starting a Pi that exits because the Session is in use.
 - Dialogs, such as `/tasks`, open in the attached terminal after an owned Agent has started, and are cancelled once the terminal detaches.
+- An owner's Session file grows by one small entry per input change, instead of a copy of all its owned Agent's inputs and results.
 
 ## [0.5.0] - 2026-11-06
 
