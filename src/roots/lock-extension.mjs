@@ -98,9 +98,7 @@ export default function lockExtension(pi, runtime = {}) {
       blocked = undefined;
     } catch (error) {
       blocked = error.message;
-      if (ctx.mode === 'tui' && error.code === 'SESSION_OCCUPIED') {
-        await ctx.ui.select(blocked, ['Quit']);
-      } else notify(ctx, blocked);
+      notify(ctx, blocked);
       // A thrown session_start error is swallowed by Pi. Explicitly quarantine
       // normal input/tool execution while the host performs graceful shutdown.
       ctx.shutdown();

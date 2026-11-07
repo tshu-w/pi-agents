@@ -285,6 +285,37 @@ test("-c finds the Session running in a host when the project keeps Sessions in 
 	await until(async () => (await listHosts(paths)).length === 0, "host exit");
 });
 
+test("--mode rpc --session joins a Session a Pi outside a host holds, or reports it occupied, without starting a host", async () => {
+	assert.equal((await run(["-p", "hello"])).code, 0);
+	const [host] = await listHosts(paths);
+	const sessionFile = hostSessionFile(host);
+	process.kill(host.pid, "SIGTERM");
+	await until(async () => (await listHosts(paths)).length === 0, "host exit");
+
+	const plain = spawn(process.execPath, [join(PI_PACKAGE, "dist/bundle/cli.js"), "--mode", "rpc", "--session", sessionFile], { cwd: home, env: process.env, stdio: ["pipe", "ignore", "ignore"] });
+	await until(async () => {
+		try { return (await request(paths.session(host.session.id), { action: "status" }, { timeoutMs: 1000 })).ready; }
+		catch (error) { if (!["ENOENT", "ECONNREFUSED"].includes(error.code)) throw error; }
+	}, "plain Pi");
+	const joined = rpc(["--session", sessionFile]);
+	assert.equal((await joined.call({ type: "get_state" })).data.sessionId, host.session.id);
+	assert.equal(await joined.end(), 0);
+	assert.deepEqual(await listHosts(paths), []);
+	plain.kill("SIGTERM");
+	await new Promise((resolve) => plain.once("exit", resolve));
+
+	const locks = fileURLToPath(new URL("../src/roots/locks.mjs", import.meta.url));
+	const holder = spawn(process.execPath, ["--input-type=module", "-e",
+		`const { reserve } = await import(${JSON.stringify(locks)}); reserve(${JSON.stringify(paths.locks)}, ${JSON.stringify(sessionFile)}, ${JSON.stringify(host.session.id)}); console.log("held"); setInterval(() => {}, 1000);`,
+	], { env: { ...process.env, NODE_OPTIONS: "" }, stdio: ["ignore", "pipe", "inherit"] });
+	await new Promise((resolve) => holder.stdout.once("data", resolve));
+	const occupied = await run(["--mode", "rpc", "--session", sessionFile]);
+	holder.kill("SIGKILL");
+	assert.equal(occupied.code, 1);
+	assert.match(occupied.stderr, new RegExp(`Session ${host.session.id} is in use`));
+	assert.deepEqual(await listHosts(paths), []);
+});
+
 test("-p and --mode json run their own turns once the Session is idle, and a signal withdraws or stops them", async () => {
 	const release = () => writeFileSync(process.env.AGENTS_TEST_RELEASE, "");
 	const gate = () => writeFileSync(`${process.env.AGENTS_TEST_RELEASE}-gate`, "");

@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { alive, hostSessionFile, hostStatus, settledHosts, startHost } from './client.mjs';
 import { readSessionHeader, readSessionId } from '../roots/guard.mjs';
+import { isLocked, lockKeys, SessionOccupiedError } from '../roots/locks.mjs';
 import { openStream, request } from '../roots/transport.mjs';
 import { piPackage } from '../pi.mjs';
 import { PROGRAM_MESSAGE, runOutput } from '../programs/run-output.mjs';
@@ -151,6 +152,16 @@ export async function runHeadless({ pi, paths, args, mode, findRunning, warnIgno
   /** Opens a `role` stream to the Session `args` choose. */
   async function start(handlers, role) {
     let running = await findRunning(), status;
+    // A Pi outside a host may hold the Session `--session` names: join it, or fail while it starts or stops.
+    const file = !running && parsed.session && resolve(parsed.session);
+    const id = file && readSessionId(file);
+    if (id) {
+      if (await request(paths.session(id), { action: 'status' }).then(() => true, () => false)) {
+        warnIgnored(hostArgs);
+        return connect(paths, id, handlers, () => true, role);
+      }
+      if (isLocked(paths.locks, file, id)) throw new SessionOccupiedError(lockKeys(file, id)[1]);
+    }
     if (!running) {
       try { status = await host(hostArgs, process.cwd()); }
       catch (error) {

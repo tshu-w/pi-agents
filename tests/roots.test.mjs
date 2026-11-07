@@ -172,25 +172,18 @@ test("a root in another process is listed with its state and cannot be opened tw
 
 	const handlers = new Map();
 	lockExtension({ on: (event, handler) => handlers.set(event, handler) });
-	let dialog, dismiss;
-	let shutdown = false;
-	const opening = handlers.get("session_start")({ reason: "startup" }, {
+	let notice, dialog = false, shutdown = false;
+	await handlers.get("session_start")({ reason: "startup" }, {
 		mode: "tui", hasUI: true,
 		sessionManager: { getSessionFile: () => target.file, getSessionId: () => target.id },
 		ui: {
-			notify() {},
-			select(title, options) {
-				dialog = { title, options };
-				return new Promise((resolve) => { dismiss = resolve; });
-			},
+			notify(message) { notice = message; },
+			select() { dialog = true; return new Promise(() => {}); },
 		},
 		shutdown() { shutdown = true; },
 	});
-	assert.match(dialog?.title ?? "", /Session live-c is in use/);
-	assert.deepEqual(dialog.options, ["Quit"]);
-	assert.equal(shutdown, false);
-	dismiss("Quit");
-	await opening;
+	assert.match(notice ?? "", /Session live-c is in use/);
+	assert.equal(dialog, false);
 	assert.equal(shutdown, true);
 
 	await sender.call({ action: "send", target: "live-c", message: "note", deliverAs: "write" });
