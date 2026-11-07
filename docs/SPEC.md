@@ -90,7 +90,7 @@ A recipient sees each message with its sender's name and ID.
 
 description:
 
-Create, message, and coordinate Agents. `spawn` creates an Agent and sends its first input; `send` sends an input or a write to a visible Agent; `wait` waits for owned Agents to finish; `list` finds visible Agents; `abort` stops an owned Agent's current turn and queued inputs while keeping it available. When an owned Agent finishes an input, its owner receives a notification with the result. Owned Agents under the same root share `${maxConcurrent}` execution slots and a limit of `${maxOutstanding}` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.
+Create, message, and coordinate Agents. `spawn` creates an Agent and sends its first input; `send` sends an input or a write to a visible Agent; `wait` waits for owned Agents to finish; `list` finds visible Agents; `abort` stops an owned Agent's current turn and queued inputs while keeping it available. An Agent is owned by its spawner unless spawned with `disown`. When an owned Agent finishes an input, its owner receives a notification with the result; the Agent goes offline when its owner does. A disowned Agent is an independent root Agent that replies to its spawner with `send`. Owned Agents under the same root share `${maxConcurrent}` execution slots and a limit of `${maxOutstanding}` inputs that have not ended. Inputs that start a new turn queue when all slots are busy; new inputs are rejected at the input limit.
 
 promptSnippet:
 
@@ -101,6 +101,7 @@ promptGuidelines:
 - Use `agent(action='spawn', name=..., message=...)` for concrete, bounded work with a clear expected result. Keep the first message self-contained; use `context='fork'` only when the Agent needs the caller's conversation.
 - For independent work, start the Agents before waiting and partition tasks into non-overlapping responsibilities.
 - Use `agent(action='wait', ...)` when your next step or answer depends on Agent results. Prefer one longer wait over repeated short polling.
+- Keep Agents owned for bounded work; use `disown` for lasting work that should continue after you go offline.
 
 parameters:
 
@@ -111,7 +112,7 @@ parameters:
 - `context`: Context for `spawn` (default: fresh). fresh starts without the caller's conversation; fork snapshots it.
 - `model`: Model for `spawn` as provider/modelId (default: the caller's model).
 - `thinkingLevel`: Thinking level for `spawn`: off, minimal, low, medium, high, xhigh, or max (default: the caller's level).
-- `disown`: For `spawn`, start a root Agent the caller does not own; it replies with send instead of returning a result (default: false).
+- `disown`: For `spawn`, start a root Agent the caller does not own (default: false).
 - `target`: Agent ID, name, or unique ID prefix for `send`, `wait`, or `abort`. `wait` and `send` with `deliverAs='write'` also accept an array. When omitted for `wait`, selects all owned Agents with pending inputs.
 - `deliverAs`: Delivery for `send` (default: followUp). followUp waits until the recipient's current turn ends; steer delivers after its current tool calls, before the next model call; write delivers like steer but does not wake an idle recipient and has no result.
 - `timeout`: Maximum seconds for `wait` (default: 30, min: 10, max: 3600). Timeout does not abort Agents.
