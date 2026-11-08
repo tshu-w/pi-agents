@@ -4,22 +4,6 @@ Multi-agent runtime for [Pi](https://pi.dev): hand work to agents that run in th
 
 Built on it is a personal agent that delegates and stays free to talk.
 
-https://github.com/user-attachments/assets/52dd1de6-bf26-45ea-8775-2b1a1a187f4f
-
-<details>
-<summary>Play by play</summary>
-
-1. Ask for three background reviews. Three Agents start, and the task panel lists them.
-2. Ask about `res.redirect` while they run. The first review finishes, and its notification arrives.
-3. `/tasks` opens `review-application` to watch it work; `Ctrl+C` returns.
-4. The other notifications arrive, and the main Agent reports each review.
-5. Ask for a summary of each file in `lib/`. A background Program starts one Agent per file; the panel shows three running and the rest queued.
-6. `Ctrl+Z` detaches and leaves the Session running. `pd agents` opens the workbench, and `Space` previews the Session.
-7. Type a message in the preview to send it to the Session.
-8. `Enter` attaches to the Session with the reply.
-
-</details>
-
 - **Async agents**: Agents run in parallel and report back when done.
 - **Persistent agents**: Agents keep running after the terminal closes; check on and attach to them from the workbench.
 - **Inter-agent messaging**: Agents message each other, across Pi instances too.
