@@ -220,6 +220,8 @@ interface Owned {
 	stopped?: boolean;
 	/** Each input as last written to the owner's Session; set once the Agent's metadata is written. */
 	persisted?: Map<string, string>;
+	/** The run of its last turn, which an abandoned turn leaves going on its Session. */
+	running?: Promise<void>;
 }
 
 export interface SpawnRequest {
@@ -688,7 +690,7 @@ export class Agents {
 	}
 
 	private pump(agent: Owned): void {
-		if (agent.turn || this.closing) return;
+		if (agent.turn || agent.running || this.closing) return;
 		const head = agent.queue.find((input) => !input.held);
 		if (!head) return;
 		// Held steers go with the next turn, after its first input, as Pi delivers queued steers with its next run.
@@ -697,7 +699,10 @@ export class Agents {
 		for (const input of agent.queue) input.held = false;
 		const turn: Turn = { inputs: [head, ...steers], withheld: [], pending: [], abort: new AbortController(), started: false, slot: false, spent: { cost: 0, tokens: 0, unpriced: false }, finished: false, done: deferred() };
 		agent.turn = turn;
-		void this.runTurn(agent, turn);
+		agent.running = this.runTurn(agent, turn).finally(() => {
+			agent.running = undefined;
+			this.pump(agent);
+		});
 	}
 
 	private async runTurn(agent: Owned, turn: Turn): Promise<void> {

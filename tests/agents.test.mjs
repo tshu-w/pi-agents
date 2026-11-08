@@ -582,16 +582,25 @@ test("after a held message, a notification still does not start a turn", async (
 	await root.close();
 });
 
-test("a turn that does not stop within the abort timeout is abandoned, and the tree becomes idle", async () => {
+test("a turn that does not stop within the abort timeout is abandoned, and the tree becomes idle; the next turn starts once it returns", async () => {
 	const root = await startRoot();
 	root.state.hold = gate();
 	root.state.stuck = true;
-	await root.call({ action: "spawn", name: "worker", message: "one" });
+	const id = idOf(await root.call({ action: "spawn", name: "worker", message: "one" }));
 	await root.waitBusy(1);
 	await assert.rejects(root.call({ action: "abort", target: "worker" }), /did not stop within the timeout/);
 	assert.equal(await root.call({ action: "wait", target: "worker", timeout: 10 }), "Nothing to wait for.");
 	assert.equal(globalThis.piAgentsTree.treeIdle(root.session.sessionManager.getSessionId()), true);
+	// An input sent meanwhile waits for the abandoned turn instead of joining it.
+	await root.call({ action: "send", target: "worker", message: "two" });
+	const owner = globalThis[Symbol.for("pi-agents:runtime")].nodes.get(root.session.sessionManager.getSessionId());
+	const inputs = owner.agents.ownedTarget(id).record.inputs;
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	assert.equal(inputs[1].state, "queued");
+	root.state.stuck = false;
 	root.state.hold.open();
+	await root.call({ action: "wait", target: "worker", timeout: 10 });
+	assert.match(inputs[1].result, /^answer:two\|/);
 	await root.close();
 });
 
