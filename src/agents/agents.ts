@@ -72,6 +72,8 @@ export interface InputRecord {
 	result?: string;
 	/** The value submitted with `submit_result`, for an input with a schema. */
 	value?: unknown;
+	/** Ended because its owner went offline. */
+	offline?: boolean;
 }
 
 export interface AgentRecord {
@@ -567,6 +569,7 @@ export class Agents {
 				if (ended(input)) continue;
 				input.state = "aborted";
 				input.result = "The process exited before this input ended.";
+				input.offline = true;
 			}
 			this.persist(agent);
 		}
@@ -582,7 +585,7 @@ export class Agents {
 			const short = shortId(agentId, ids);
 			// An input that ended before, whose notification a wait held, keeps its result.
 			const input = this.agents.get(agentId)?.record.inputs.find((candidate) => candidate.id === id);
-			if (!input || input.state === "aborted") {
+			if (!input || input.offline) {
 				return { text: `<${RESULT_TAG} name="${name}" id="${short}" status="aborted">\n${OFFLINE_RESULT}\n</${RESULT_TAG}>`, result: { name, id: short, status: "aborted", body: OFFLINE_RESULT } };
 			}
 			const { kept, notice, details } = boundText(input.result ?? "", "pi-agents-notification");
@@ -762,6 +765,7 @@ export class Agents {
 			changed = true;
 			record.state = outcome;
 			record.result = result;
+			if (this.closing) record.offline = true;
 			if (input.schema !== undefined && outcome !== "aborted") {
 				if (input.submitted) {
 					record.state = "completed";
