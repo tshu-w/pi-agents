@@ -238,6 +238,8 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
   let sessions = [], stream, connected = false, quitting = false;
   // `picked` is the Session last chosen with `@` and its mention; a message starting with the mention goes to it.
   let selectedKey, top = 0, notice, modal, pane, picked, lastCtrlC = 0, finish;
+  // The list, or a Session it is opening or attached to.
+  let mode = { kind: 'list' };
   // Messages in flight by Session ID; each settles once the daemon has delivered it, waking the Session if needed.
   const sending = new Map();
 
@@ -408,6 +410,7 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
       const empty = ['', pane?.mention].includes(editor.getText());
       // As in a Session, the detach key leaves and everything keeps running; in the preview, it returns to the list.
       if (isDetach(data)) return void (pane ? pane.close() : quit());
+      if (mode.kind !== 'list') return;
       if (pane?.handleInput(data, empty)) return;
       if (keybindings.matches(data, 'app.clear')) {
         if (!empty) return editor.setText(pane?.mention ?? '');
@@ -477,7 +480,8 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
     }
   }
 
-  async function attachTo(socket) {
+  async function attachTo(socket, id) {
+    mode = { kind: 'attached', id };
     ui.stop();
     let result;
     // The list reads the terminal again at once, and skips late key releases itself.
@@ -495,13 +499,15 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
 
   /** Attaches to a Session, starting it in a host when it is not running. */
   async function openSession(session) {
+    if (mode.kind !== 'list') return;
+    mode = { kind: 'opening', id: session.id };
     stream?.send({ type: 'show', id: session.id });
     try {
       // A message just sent may be waking the Session in a host.
       await sending.get(session.id);
       const running = host => host.session?.id === session.id;
       const hosted = (await settledHosts(paths, running)).find(running);
-      if (hosted) return await attachTo(hosted.socket);
+      if (hosted) return await attachTo(hosted.socket, session.id);
       if (session.running || session.status === 'unknown') {
         return say(`${named(session)} runs outside a host; attach it after it exits.`, 'warning');
       }
@@ -510,8 +516,9 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
         pi: executable, args: ['--session', session.sessionFile], cwd: session.cwd,
         cols: process.stdout.columns, rows: process.stdout.rows, waitForTerminal: true,
       });
-      await attachTo(socket);
+      await attachTo(socket, session.id);
     } catch (error) { say(error.message, 'error'); }
+    finally { mode = { kind: 'list' }; }
   }
 
   async function open(row) {

@@ -115,6 +115,26 @@ test("a detached host outlives the idle limit while an extension answers that it
 	await until(async () => (await listHosts(paths)).length === 0, "idle exit", 15000);
 });
 
+test("the workbench opens a Session once when Enter is pressed again while it opens", async () => {
+	const opener = terminal(["--name", "twice"]);
+	const host = await until(async () => (await listHosts(paths)).find((entry) => entry.session?.name === "twice"), "host");
+	opener.child.write("\x1a");
+	assert.equal((await opener.exited).exitCode, 0);
+	const workbench = terminal(["agents"]);
+	await until(() => workbench.text().includes("twice"), "listed");
+	workbench.child.write("\r\r");
+	await until(async () => (await listHosts(paths)).find((entry) => entry.pid === host.pid)?.attached, "attached");
+	// A second attach would take the terminal over from the first, which would return to the list.
+	await delay(500);
+	assert.doesNotMatch(stripVTControlCharacters(workbench.output()), /Attached in another terminal/);
+	workbench.child.write("\x1a");
+	await until(() => workbench.text().includes("Pi Agents ·"), "back to the list");
+	workbench.child.write("\x1a");
+	await workbench.exited;
+	process.kill(host.pid, "SIGTERM");
+	await until(async () => !(await listHosts(paths)).some((entry) => entry.pid === host.pid), "host exit");
+});
+
 test("a message given to a running Session reaches Pi only once the terminal is attached", async () => {
 	const opener = terminal([]);
 	const host = await until(async () => (await listHosts(paths)).find((entry) => entry.session), "host");
