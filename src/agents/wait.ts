@@ -66,6 +66,8 @@ interface HeldNotice {
 	result: NotifiedResult;
 	images?: NonNullable<Notice["images"]>;
 	delivered?: boolean;
+	/** Called once a wait has delivered it. */
+	settle?: () => void;
 }
 
 /** A wait in progress: the IDs of the Agents or Programs it waits for, and their notifications it holds. */
@@ -82,12 +84,16 @@ export function hold(waits: Held[], id: string, notice: HeldNotice): boolean {
 }
 
 /** The notifications a wait holds that no other wait has delivered, as one notification, or undefined if none. */
-function release(wait: Held): { text: string; notice: Notice } | undefined {
+function release(wait: Held): { text: string; notice: Notice; settles: Array<() => void> } | undefined {
 	const notices = wait.notices.filter(({ delivered }) => !delivered);
 	if (notices.length === 0) return undefined;
 	for (const notice of notices) notice.delivered = true;
 	const images = notices.flatMap((notice) => notice.images ?? []);
-	return { text: notices.map(({ text }) => text).join("\n\n"), notice: { results: notices.map(({ result }) => result), ...(images.length ? { images } : {}) } };
+	return {
+		text: notices.map(({ text }) => text).join("\n\n"),
+		notice: { results: notices.map(({ result }) => result), ...(images.length ? { images } : {}) },
+		settles: notices.flatMap(({ settle }) => settle ?? []),
+	};
 }
 
 /** The Agents or Programs of one caller that its waits wait for. */
@@ -98,7 +104,8 @@ export interface Waitable {
 	change(): Promise<void>;
 	/** Whether the caller is going offline, so a wait that ends delivers nothing. */
 	closing(): boolean;
-	notify(text: string, notice: Notice): void;
+	/** Delivers a notification; returns false when it was not delivered. */
+	notify(text: string, notice: Notice): boolean | void;
 }
 
 /**
@@ -134,6 +141,6 @@ export async function waitFor<T>(
 	} finally {
 		waitable.waits.splice(waitable.waits.indexOf(held), 1);
 		const released = waitable.closing() ? undefined : release(held);
-		if (released) waitable.notify(released.text, released.notice);
+		if (released && waitable.notify(released.text, released.notice) !== false) for (const settle of released.settles) settle();
 	}
 }

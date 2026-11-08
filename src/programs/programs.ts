@@ -23,7 +23,7 @@ export interface ProgramRecord {
 	files?: ProgramFiles;
 	/** The tool calls its result lists, which the task viewer shows after a restart. */
 	calls?: unknown[];
-	/** Stopped because the caller went offline, which the caller has not been told of yet. */
+	/** Ended while the caller went offline, or with its notification held by a wait, and the caller has not been told of it yet. */
 	offline?: boolean;
 }
 
@@ -118,12 +118,17 @@ export class Programs {
 		this.reportOffline();
 	}
 
-	/** Reports the Programs that stopped because the caller went offline in one notification, as a write. */
+	/** Reports the Programs the caller was not told of before it went offline in one notification, as a write; a stopped one was interrupted. */
 	private reportOffline(): void {
 		const records = this.list().filter((record) => record.offline).reverse();
 		if (records.length === 0) return;
-		const results = records.map((record) => ({ id: this.label(record), status: record.state, body: OFFLINE_RESULT }));
-		this.hooks.write(results.map(({ id, status }) => `<${PROGRAM_RESULT_TAG} id="${id}" status="${status}">\n${OFFLINE_RESULT}\n</${PROGRAM_RESULT_TAG}>`).join("\n\n"), { results });
+		const notices = records.map((record) => {
+			if (record.state !== "stopped") return this.notice(record);
+			const id = this.label(record);
+			return { text: `<${PROGRAM_RESULT_TAG} id="${id}" status="stopped">\n${OFFLINE_RESULT}\n</${PROGRAM_RESULT_TAG}>`, result: { id, status: record.state, body: OFFLINE_RESULT }, images: [] };
+		});
+		const images = notices.flatMap((notice) => notice.images);
+		this.hooks.write(notices.map(({ text }) => text).join("\n\n"), { results: notices.map(({ result }) => result), ...(images.length ? { images } : {}) });
 		for (const record of records) {
 			delete record.offline;
 			this.persist(record);
@@ -258,7 +263,7 @@ export class Programs {
 		record.state = outcome;
 		record.content = content;
 		record.isError = isError;
-		if (this.closing && outcome === "stopped") record.offline = true;
+		if (this.closing) record.offline = true;
 		// Keeps the calls the result's details list, from the result or the last partial one.
 		program.result = { content, details: program.result?.details, isError };
 		const { calls, fullOutputPath } = (program.result.details ?? {}) as { calls?: unknown[]; fullOutputPath?: string };
@@ -281,13 +286,26 @@ export class Programs {
 	/** `fullOutputPath` names the file with the output codemode truncated, unless the notification truncates it again. */
 	private notify(record: ProgramRecord, fullOutputPath?: string): void {
 		if (this.closing) return;
+		const { text, result, images } = this.notice(record, fullOutputPath);
+		const settle = () => {
+			delete record.offline;
+			this.persist(record);
+		};
+		if (hold(this.held, record.id, { text, result, ...(images.length ? { images } : {}), settle })) {
+			// Until a wait delivers it, a restart reports it.
+			record.offline = true;
+			this.persist(record);
+		} else this.hooks.notify(text, { results: [result], ...(images.length ? { images } : {}) });
+	}
+
+	private notice(record: ProgramRecord, fullOutputPath?: string) {
 		const images = (record.content ?? []).filter((item): item is Extract<Item, { type: "image" }> => item.type === "image");
 		const { kept, notice, details } = boundText(textOf(record.content), "pi-agents-program-notification");
 		const id = this.label(record);
 		const header = SCRIPT_HEADER.exec(kept);
 		const text = `<${PROGRAM_RESULT_TAG} id="${id}" status="${record.state}">\n${kept}\n</${PROGRAM_RESULT_TAG}>${notice ? `\n\n${notice}` : ""}`;
 		const result = { id, status: record.state, ...(header?.[1] !== undefined && { seconds: Number(header[1]) }), body: kept.slice(header?.[0].length ?? 0), ...(notice && { notice }), ...(fullOutputPath && { fullOutputPath }), ...details };
-		if (!hold(this.held, record.id, { text, result, ...(images.length ? { images } : {}) })) this.hooks.notify(text, { results: [result], ...(images.length ? { images } : {}) });
+		return { text, result, images };
 	}
 
 	private persist(record: ProgramRecord): void {

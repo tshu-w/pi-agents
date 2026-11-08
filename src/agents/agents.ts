@@ -578,9 +578,20 @@ export class Agents {
 		const inputs = readMailbox(this.self.id).outbox;
 		if (inputs.length === 0) return;
 		const ids = this.ids();
-		const results = inputs.map(({ agentId, name }) => ({ name, id: shortId(agentId, ids), status: "aborted", body: OFFLINE_RESULT }));
-		const text = results.map(({ name, id }) => `<${RESULT_TAG} name="${name}" id="${id}" status="aborted">\n${OFFLINE_RESULT}\n</${RESULT_TAG}>`).join("\n\n");
-		this.pi.sendMessage(customMessage(text, "write", { notice: { results } }), { deliverAs: "steer" });
+		const notices = inputs.map(({ id, agentId, name }) => {
+			const short = shortId(agentId, ids);
+			// An input that ended before, whose notification a wait held, keeps its result.
+			const input = this.agents.get(agentId)?.record.inputs.find((candidate) => candidate.id === id);
+			if (!input || input.state === "aborted") {
+				return { text: `<${RESULT_TAG} name="${name}" id="${short}" status="aborted">\n${OFFLINE_RESULT}\n</${RESULT_TAG}>`, result: { name, id: short, status: "aborted", body: OFFLINE_RESULT } };
+			}
+			const { kept, notice, details } = boundText(input.result ?? "", "pi-agents-notification");
+			return {
+				text: `<${RESULT_TAG} name="${name}" id="${short}" status="${input.state}">\n${kept}\n</${RESULT_TAG}>${notice ? `\n\n${notice}` : ""}`,
+				result: { name, id: short, status: input.state, body: kept, ...(notice && { notice }), ...details },
+			};
+		});
+		this.pi.sendMessage(customMessage(notices.map(({ text }) => text).join("\n\n"), "write", { notice: { results: notices.map(({ result }) => result) } }), { deliverAs: "steer" });
 		updateMailbox(this.self.id, (mailbox) => { mailbox.outbox = []; });
 	}
 
@@ -790,7 +801,9 @@ export class Agents {
 				const id = shortId(agent.record.id, this.ids());
 				const text = `<${RESULT_TAG} name="${agent.record.name}" id="${id}" status="${record.state}">\n${kept}\n</${RESULT_TAG}>${notice ? `\n\n${notice}` : ""}`;
 				const result = { name: agent.record.name, id, status: record.state, body: kept, ...(notice && { notice }), ...details };
-				if (hold(this.held, agent.record.id, { text, result }) || this.notify(text, { results: [result] })) this.settle(records);
+				// A held notification leaves the outbox once a wait delivers it.
+				const settle = () => this.settle(records);
+				if (!hold(this.held, agent.record.id, { text, result, settle }) && this.notify(text, { results: [result] })) settle();
 			} finally {
 				release();
 			}

@@ -231,6 +231,32 @@ test("inputs that end because their owner went offline are reported in one write
 	await reopened.close();
 });
 
+test("a result a wait holds when its owner goes offline is reported when the owner is loaded again", async () => {
+	const root = await startRoot();
+	await root.session.prompt("hello");
+	const first = gate();
+	root.state.hold = first;
+	const done = idOf(await root.call({ action: "spawn", name: "done", message: "one" }));
+	await root.waitBusy(1);
+	root.state.hold = gate();
+	const running = idOf(await root.call({ action: "spawn", name: "running", message: "two" }));
+	await root.waitBusy(2);
+	const waiting = root.call({ action: "wait", target: ["done", "running"], timeout: 30 });
+	first.open();
+	await until(async () => (await root.callResult({ action: "list" })).details.agents.find((agent) => agent.name === "done")?.state === "idle", "done answered");
+	const file = root.session.sessionManager.getSessionFile();
+	await root.close();
+	await waiting.catch(() => {});
+
+	const reopened = await startRoot({}, file);
+	const [reported] = notificationsOf(reopened.session);
+	assert.equal(textOf(reported.content), [
+		`<agent-result name="done" id="${done}" status="completed">\nanswer:one|seen:one\n</agent-result>`,
+		`<agent-result name="running" id="${running}" status="aborted">\nInterrupted because you went offline.\n</agent-result>`,
+	].join("\n\n"));
+	await reopened.close();
+});
+
 const linesOf = (file) => readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
 const agentEntries = (file) => linesOf(file).filter((entry) => entry.customType === "pi-agents-agent" || entry.customType === "pi-agents-input");
 
