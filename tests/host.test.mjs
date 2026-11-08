@@ -102,6 +102,19 @@ test("Pi keeps running in its host when another terminal takes over or the termi
 	await until(async () => (await listHosts(paths)).length === 0, "idle exit", 15000);
 });
 
+test("a detached host outlives the idle limit while an extension answers that it is busy", async () => {
+	const opener = terminal([]);
+	const host = await until(async () => (await listHosts(paths)).find((entry) => entry.session), "host");
+	const busy = `${process.env.AGENTS_TEST_RELEASE}-busy`;
+	writeFileSync(busy, "");
+	opener.child.write("\x1a");
+	assert.equal((await opener.exited).exitCode, 0);
+	await delay(7000);
+	assert.deepEqual((await listHosts(paths)).map((entry) => entry.pid), [host.pid]);
+	rmSync(busy);
+	await until(async () => (await listHosts(paths)).length === 0, "idle exit", 15000);
+});
+
 test("a message given to a running Session reaches Pi only once the terminal is attached", async () => {
 	const opener = terminal([]);
 	const host = await until(async () => (await listHosts(paths)).find((entry) => entry.session), "host");

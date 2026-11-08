@@ -18,7 +18,7 @@ export interface Host {
 
 /**
  * Connects Pi to the host it runs in: reports the current Session, detaches on request,
- * disables suspend, and exits after the tree has been idle and detached, with no RPC client, for a while.
+ * disables suspend, and exits after the tree has been idle and detached, with no RPC client and no extension answering `session:busy` as busy, for a while.
  * Returns the host, if Pi runs in one.
  */
 export function hostExtension(pi: ExtensionAPI, { treeIdle, rpcClients }: { treeIdle: () => boolean; rpcClients: () => number }): Host | undefined {
@@ -50,8 +50,14 @@ export function hostExtension(pi: ExtensionAPI, { treeIdle, rpcClients }: { tree
 
 	// Pi suspends by stopping its process group; a host has no shell to resume it, so resume at once.
 	const resume = () => process.kill(process.pid, "SIGCONT");
+	// Other extensions, such as one running background commands, answer that they have work in progress.
+	const busy = () => {
+		const query = { busy: false };
+		pi.events.emit("session:busy", query);
+		return query.busy;
+	};
 	const checkIdle = () => {
-		if (!ctx || attached || !ctx.isIdle() || ctx.hasPendingMessages() || !treeIdle() || rpcClients() > 0) {
+		if (!ctx || attached || !ctx.isIdle() || ctx.hasPendingMessages() || !treeIdle() || rpcClients() > 0 || busy()) {
 			idleSince = undefined;
 			return;
 		}

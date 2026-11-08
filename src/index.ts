@@ -124,7 +124,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	let browsing = false;
 	createReporter(pi, { treeIdle: idle, liveWork: () => node ? liveWork(node) : 0, browsing: () => browsing, host });
 	// Event bus handlers run synchronously, so an extension that emits a query object reads the answer right after emit.
-	pi.events.on("busy:query", (query) => {
+	pi.events.on("session:busy", (query) => {
 		if (node && !treeIdle(node.rootId)) (query as { busy: boolean }).busy = true;
 	});
 

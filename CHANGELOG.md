@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The busy query on `pi.events` is renamed from `busy:query` to `session:busy`, and a detached Session in a host no longer exits for idleness while an extension answers it as busy.
+
 ### Fixed
 
 - A message another root Agent accepted is no longer lost when it exits before taking the message in; it is delivered once when it starts again.

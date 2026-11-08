@@ -364,7 +364,7 @@ Invalid settings produce a startup warning, and the defaults are used.
 
 Each Agent is a persistent Pi Session. A root Agent is an ordinary Session. An owned Agent is a child Session that records its owner and root, and runs in its owner's process.
 
-A delivered message enters the recipient's current branch. An offline root Agent is started in a host, detached, with its saved working directory and model and the current configuration (HOSTS §4). If a root process cannot finish cleanup within a grace period on exit, it is forcibly terminated. Before shutting down an idle Session, another extension can emit `busy:query` on `pi.events` with `{ busy: false }`; it is set to `true` while the tree has live work. One runtime uses a Session at a time. If a Session is occupied at startup, Pi reports it and exits.
+A delivered message enters the recipient's current branch. An offline root Agent is started in a host, detached, with its saved working directory and model and the current configuration (HOSTS §4). If a root process cannot finish cleanup within a grace period on exit, it is forcibly terminated. Before shutting down an idle Session, an extension can emit `session:busy` on `pi.events` with `{ busy: false }`; any extension with work in progress sets `busy` to `true`, as pi-agents does while the tree has live work. One runtime uses a Session at a time. If a Session is occupied at startup, Pi reports it and exits.
 
 An accepted message is kept until it enters the recipient's Session. A message that may not have arrived is sent again; it enters the Session once.
 
