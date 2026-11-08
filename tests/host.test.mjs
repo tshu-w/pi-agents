@@ -122,6 +122,11 @@ test("the workbench opens a Session once when Enter is pressed again while it op
 	assert.equal((await opener.exited).exitCode, 0);
 	const workbench = terminal(["agents"]);
 	await until(() => workbench.text().includes("twice"), "listed");
+	// Other tests' Sessions may be listed first.
+	for (let i = 0; i < 30 && !/❯ \S+ twice/.test(workbench.text()); i++) {
+		workbench.child.write("\x1b[B");
+		await delay(50);
+	}
 	workbench.child.write("\r\r");
 	await until(async () => (await listHosts(paths)).find((entry) => entry.pid === host.pid)?.attached, "attached");
 	// A second attach would take the terminal over from the first, which would return to the list.
