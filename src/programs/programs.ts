@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { shortId, trackTreeWork, type Notice } from "../agents/registry.ts";
+import { OFFLINE_RESULT, shortId, trackTreeWork, type Notice } from "../agents/registry.ts";
 import { deferred, hold, settlesBy, waitFor, type Deferred, type Held, type WaitEnd } from "../agents/wait.ts";
 import { boundText } from "../output.ts";
 import { CLEANUP_TIMEOUT_MS, PROGRAM_TOOL_NAME, type ProgramFiles, type ProgramOutcome, type ProgramRunResult } from "./execute.ts";
@@ -23,6 +23,8 @@ export interface ProgramRecord {
 	files?: ProgramFiles;
 	/** The tool calls its result lists, which the task viewer shows after a restart. */
 	calls?: unknown[];
+	/** Stopped because the caller went offline, which the caller has not been told of yet. */
+	offline?: boolean;
 }
 
 /** What the task viewer shows of a Program, as its tool call shows in the foreground. */
@@ -76,6 +78,8 @@ export class Programs {
 			appendEntry(customType: string, data: unknown): void;
 			/** Delivers a notification with Programs' results and their images. */
 			notify(text: string, notice: Notice): void;
+			/** Delivers a notification as a write. */
+			write(text: string, notice: Notice): void;
 			/** Called when a Program starts or ends. */
 			changed(): void;
 		},
@@ -109,6 +113,19 @@ export class Programs {
 			record.state = "stopped";
 			record.content = [{ type: "text", text: "Script failed\nOutput:\nScript error:\nScript aborted: the caller went offline" }];
 			record.isError = true;
+			record.offline = true;
+		}
+		this.reportOffline();
+	}
+
+	/** Reports the Programs that stopped because the caller went offline in one notification, as a write. */
+	private reportOffline(): void {
+		const records = this.list().filter((record) => record.offline).reverse();
+		if (records.length === 0) return;
+		const results = records.map((record) => ({ id: this.label(record), status: record.state, body: OFFLINE_RESULT }));
+		this.hooks.write(results.map(({ id, status }) => `<${PROGRAM_RESULT_TAG} id="${id}" status="${status}">\n${OFFLINE_RESULT}\n</${PROGRAM_RESULT_TAG}>`).join("\n\n"), { results });
+		for (const record of records) {
+			delete record.offline;
 			this.persist(record);
 		}
 	}
@@ -241,6 +258,7 @@ export class Programs {
 		record.state = outcome;
 		record.content = content;
 		record.isError = isError;
+		if (this.closing && outcome === "stopped") record.offline = true;
 		// Keeps the calls the result's details list, from the result or the last partial one.
 		program.result = { content, details: program.result?.details, isError };
 		const { calls, fullOutputPath } = (program.result.details ?? {}) as { calls?: unknown[]; fullOutputPath?: string };

@@ -175,6 +175,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		programs = new Programs(rootId, {
 			appendEntry: (customType, data) => pi.appendEntry(customType, data),
 			notify: (text, notice) => agents.notify(text, notice),
+			write: (text, notice) => pi.sendMessage(customMessage(text, "write", { notice }), { deliverAs: "steer" }),
 			changed: () => panel.update(),
 		});
 		created.programs = programs;

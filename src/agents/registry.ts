@@ -303,6 +303,8 @@ export function deliver(
 }
 
 export const MESSAGE_TAG = "agent-message";
+/** The result of work that ended because its caller or owner went offline, which it is told of when loaded again. */
+export const OFFLINE_RESULT = "Interrupted because you went offline.";
 const REPLY_NOTE = ' note="Reply with send"';
 
 /** The sender of a message as its element names it: its name and its short ID among the recipient's visible Agents. */

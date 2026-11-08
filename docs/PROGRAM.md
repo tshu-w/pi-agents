@@ -47,7 +47,7 @@ With `timeout`, an input that has not ended within that many seconds of `send()`
 
 When a Program ends, it cancels its unfinished tool calls and aborts its Agents' unfinished inputs, and waits for its Agents to go offline. It returns its result after cleanup. Work not stopped within the cleanup timeout is abandoned and may keep running; the Program's result and `stop` report it as an error, and the Program's state is unchanged.
 
-When the caller goes offline, its running Programs stop, as if it stopped them.
+When the caller goes offline, its running Programs stop, as if it stopped them; so do those running when its process exits. They are reported in one notification when the caller is loaded again, delivered as a write.
 
 ## 5. Limits
 

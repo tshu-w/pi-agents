@@ -26,6 +26,7 @@ import {
 	messageText,
 	MESSAGE_TYPE,
 	nodes,
+	OFFLINE_RESULT,
 	resolveTarget,
 	scheduler,
 	sender,
@@ -155,7 +156,6 @@ export function steerQueued(agent: AgentSession["agent"] | undefined): boolean {
 }
 
 export const RESULT_TAG = "agent-result";
-const OFFLINE_RESULT = "Interrupted because you went offline.";
 
 function ended(input: InputRecord): boolean {
 	return input.state === "completed" || input.state === "failed" || input.state === "aborted";

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -386,17 +386,33 @@ test("compaction lists the files of background Programs", async () => {
 	await root.close();
 });
 
-test("a caller going offline stops its Programs as if it stopped them", async () => {
+test("a caller going offline stops its Programs, and is told of them in one write when it is loaded again", async () => {
 	const root = await startRoot();
-	const id = idOf(await root.text({ action: "run", background: true, code: "while (true) await tools.read({ path: 'note.txt' })" }));
+	const ids = [];
+	for (let i = 0; i < 2; i++) ids.push(idOf(await root.text({ action: "run", background: true, code: "while (true) await tools.read({ path: 'note.txt' })" })));
 	const file = root.sessionManager.getSessionFile();
+	// As the Session was while they ran, when its process is killed.
+	const killed = join(root.cwd, "killed.jsonl");
+	copyFileSync(file, killed);
 	await root.close();
 	const reopened = await startRoot(root.cwd, file);
-	assert.equal(await reopened.text({ action: "wait", target: id, timeout: 10 }), "Nothing to wait for.");
-	assert.match(await reopened.text({ action: "list" }), new RegExp(`^${id}  stopped$`));
-	assert.match(programResult(reopened, id), /the caller went offline/);
-	assert.equal(notificationsOf(reopened.session).length, 0);
+	assert.equal(await reopened.text({ action: "wait", target: ids[0], timeout: 10 }), "Nothing to wait for.");
+	assert.match(await reopened.text({ action: "list" }), new RegExp(`^${ids[1]}  stopped\n${ids[0]}  stopped$`));
+	assert.match(programResult(reopened, ids[0]), /the caller went offline/);
+	const offline = "Interrupted because you went offline.";
+	const [reported, ...others] = notificationsOf(reopened.session);
+	assert.equal(others.length, 0);
+	assert.equal(textOf(reported.content), ids.map((id) => `<program-result id="${id}" status="stopped">\n${offline}\n</program-result>`).join("\n\n"));
+	assert.equal(reported.details.delivery, "write");
+	assert.equal(reopened.session.isStreaming, false);
 	await reopened.close();
+	// It is told once.
+	const again = await startRoot(root.cwd, file);
+	assert.equal(notificationsOf(again.session).length, 1);
+	await again.close();
+	const restarted = await startRoot(root.cwd, killed);
+	assert.equal(textOf(notificationsOf(restarted.session)[0].content), textOf(reported.content));
+	await restarted.close();
 });
 
 test("agent() handles return answers and submitted values, and schema inputs fail without a valid submission", async () => {
