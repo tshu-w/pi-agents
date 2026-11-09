@@ -178,7 +178,7 @@ test("pd main opens the one main Agent, named main and started in ~, from any di
 	second.child.write("hello\r");
 	await until(() => second.text().includes("answer:hello"), "answer");
 	// Its prompt carries the main Agent's instructions.
-	assert.match(readFileSync(hostSessionFile(host), "utf8"), /"main-agent":"<main-agent>\\nYou are the user's main Agent\./);
+	assert.match(readFileSync(hostSessionFile(host), "utf8"), /"main_agent":"<main_agent>\\nYou are the user's main Agent\./);
 	second.child.write("\x1a");
 	assert.equal((await second.exited).exitCode, 0);
 	process.kill(host.pid, "SIGTERM");

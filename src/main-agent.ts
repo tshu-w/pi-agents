@@ -43,6 +43,6 @@ export function registerMainAgent(pi: ExtensionAPI): void {
 		main = file !== undefined && Object.values(mains).some((entry) => same(entry, file));
 	});
 	pi.on("before_agent_start", (event) => {
-		if (main) event.systemPromptOptions.sections["main-agent"] = instructions;
+		if (main) event.systemPromptOptions.sections.main_agent = instructions;
 	});
 }
