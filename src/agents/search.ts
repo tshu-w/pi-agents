@@ -16,6 +16,8 @@ interface SavedModel {
 
 interface Parsed {
 	texts: SearchText[];
+	/** The text of the last assistant message on the current branch, if its turn ended normally; search does not match it. */
+	answer?: SearchText;
 	model?: SavedModel;
 }
 
@@ -43,7 +45,7 @@ function parse(sessionFile: string | undefined): Parsed {
 	if (cached?.stamp === stamp) return cached;
 	const texts: SearchText[] = [];
 	// The current branch runs from the last entry up through each entry's parent.
-	const parents = new Map<string, { parentId?: string; model?: { provider: string; modelId: string }; thinkingLevel?: string }>();
+	const parents = new Map<string, { parentId?: string; model?: { provider: string; modelId: string }; thinkingLevel?: string; reply?: SearchText | null }>();
 	let leaf: string | undefined;
 	for (const line of readFileSync(sessionFile, "utf8").split("\n")) {
 		if (!line) continue;
@@ -54,7 +56,7 @@ function parse(sessionFile: string | undefined): Parsed {
 			parents.set(entry.id, {
 				parentId: entry.parentId ?? undefined,
 				...(entry.type === "model_change" && { model: { provider: entry.provider, modelId: entry.modelId } }),
-				...(entry.type === "message" && entry.message?.role === "assistant" && { model: { provider: entry.message.provider, modelId: entry.message.model } }),
+				...(entry.type === "message" && entry.message?.role === "assistant" && { model: { provider: entry.message.provider, modelId: entry.message.model }, reply: replyOf(entry) }),
 				...(entry.type === "thinking_level_change" && { thinkingLevel: entry.thinkingLevel }),
 			});
 		}
@@ -74,16 +76,26 @@ function parse(sessionFile: string | undefined): Parsed {
 	}
 	let model: { provider: string; modelId: string } | undefined;
 	let thinkingLevel: string | undefined;
-	for (let id = leaf; id !== undefined && !(model && thinkingLevel);) {
+	let reply: SearchText | null | undefined;
+	for (let id = leaf; id !== undefined && !(model && thinkingLevel && reply !== undefined);) {
 		const entry = parents.get(id);
 		model ??= entry?.model;
 		thinkingLevel ??= entry?.thinkingLevel;
+		if (reply === undefined) reply = entry?.reply;
 		id = entry?.parentId;
 	}
+	const answer = reply ?? undefined;
 	// Pi's default for a Session that never set its thinking level.
-	const parsed = { stamp, texts, ...(model && { model: { ...model, thinkingLevel: thinkingLevel ?? "off" } }) };
+	const parsed = { stamp, texts, ...(answer && { answer }), ...(model && { model: { ...model, thinkingLevel: thinkingLevel ?? "off" } }) };
 	cache.set(sessionFile, parsed);
 	return parsed;
+}
+
+/** The answer an assistant message gives: its text, if its turn ended normally; null otherwise. */
+function replyOf(entry: Record<string, any>): SearchText | null {
+	const { content, stopReason } = entry.message;
+	const text = Array.isArray(content) ? content.flatMap((part: any) => part?.type === "text" ? [part.text] : []).join("\n").trim() : "";
+	return stopReason === "stop" && text ? { time: Date.parse(entry.timestamp ?? "") || 0, text } : null;
 }
 
 function matcher(query: string): (text: string) => string[] | undefined {
@@ -130,18 +142,22 @@ export function searchEntries(entries: Entry[], query: string | undefined): List
 	return items.sort((left, right) => right.time - left.time).map(({ time: _time, ...item }) => item);
 }
 
-/** An entry with its model, then its latest matching excerpt, else its latest request, and its time. */
+/**
+ * An entry with its model, then its latest matching excerpt; else, when idle, its latest answer, and otherwise its
+ * latest input, each marked as such; and its time.
+ */
 export function listLine(item: ListItem, ids: Iterable<string>, model?: string): string {
 	const line = entryLine(item.entry, ids, model);
-	const detail = item.match ?? latestRequest(item.entry.sessionFile);
+	const detail = item.match ?? preview(item.entry);
 	return detail ? `${line}\n  ${formatTime(detail.time)}  ${detail.excerpt}` : line;
 }
 
-function latestRequest(sessionFile: string | undefined): { time: number; excerpt: string } | undefined {
-	const text = sessionTexts(sessionFile).findLast((text) => text.request);
+function preview(entry: Entry): { time: number; excerpt: string } | undefined {
+	const answer = entry.state === "idle" ? parse(entry.sessionFile).answer : undefined;
+	const text = answer ?? sessionTexts(entry.sessionFile).findLast((text) => text.request);
 	if (!text) return undefined;
-	const flat = messageBody(text.text).replace(/\s+/g, " ").trim();
-	return { time: text.time, excerpt: flat.length > 120 ? `${flat.slice(0, 120)}…` : flat };
+	const flat = (answer ? text.text : messageBody(text.text)).replace(/\s+/g, " ").trim();
+	return { time: text.time, excerpt: `${answer ? "answer" : "input"}: ${flat.length > 120 ? `${flat.slice(0, 120)}…` : flat}` };
 }
 
 /** A message's body without its `agent-message` element. */

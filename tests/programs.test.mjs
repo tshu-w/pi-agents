@@ -483,7 +483,7 @@ test("a Program's Agents are invisible to the caller, count toward its limit, an
 	` }));
 	await waitBusy(2);
 	// Other roots may be listed; the Program's Agents share the caller's cwd.
-	assert.match(await root.text({ action: "list", query: root.cwd }, "agent"), /^outside \(\S+\)  running  faux\/model  \S+\n  .+  hold$/);
+	assert.match(await root.text({ action: "list", query: root.cwd }, "agent"), /^outside \(\S+\)  running  faux\/model  \S+\n  .+  input: hold$/);
 	await root.text({ action: "stop", target: id });
 	assert.match(programResult(root, id), /Input rejected: 2 inputs have not ended/);
 	await root.close();
