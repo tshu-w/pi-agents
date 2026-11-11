@@ -42,6 +42,7 @@ const { until, PI_PACKAGE } = await import("./pi.mjs");
 const { statePaths } = await import("../src/roots/paths.mjs");
 const { hostSessionFile, listHosts } = await import("../src/host/client.mjs");
 const { request } = await import("../src/roots/transport.mjs");
+const { readSessionId } = await import("../src/roots/guard.mjs");
 const paths = statePaths();
 const client = fileURLToPath(new URL("../bin/pd.mjs", import.meta.url));
 
@@ -217,6 +218,33 @@ test("pd main --name opens the main Agent of that entry", async () => {
 	third.child.write("\x1a");
 	assert.equal((await third.exited).exitCode, 0);
 	for (const host of [main, work]) process.kill(host.pid, "SIGTERM");
+	await until(async () => (await listHosts(paths)).length === 0, "host exit");
+});
+
+test("pd main --id prints the main Agent's Session ID, and --new starts the next main Agent of the entry", async () => {
+	const first = await run(["main", "--id"]);
+	assert.deepEqual(first, { code: 0, stdout: `${readSessionId(JSON.parse(readFileSync(paths.mainSession, "utf8")).main)}\n`, stderr: "" });
+	// An entry whose Session has no file and no host has none.
+	const none = await run(["main", "--name", "work", "--id"]);
+	assert.deepEqual([none.code, none.stdout, stripVTControlCharacters(none.stderr)], [1, "", 'No main Agent for "work".\n']);
+	// Options choosing another Session do not combine with them.
+	for (const [flag, option] of [["--new", "--continue"], ["--id", "--session"]]) {
+		const rejected = await run(["main", flag, option, "x"]);
+		assert.deepEqual([rejected.code, rejected.stdout, stripVTControlCharacters(rejected.stderr)], [2, "", `pd main ${flag} does not take ${option}.\n`]);
+	}
+	// A message after `--new` stays a message.
+	assert.deepEqual(await run(["main", "-p", "--new", "fresh"]), { code: 0, stdout: "answer:fresh\n", stderr: "" });
+	const host = (await listHosts(paths)).find((entry) => entry.session);
+	assert.deepEqual([host.session.name, host.session.cwd], ["main", realpathSync(homedir())]);
+	assert.notEqual(host.session.id, first.stdout.trim());
+	assert.deepEqual(await run(["main", "--id"]), { code: 0, stdout: `${host.session.id}\n`, stderr: "" });
+	// Without a message, it starts the Session with no file yet, which `--id` and `pd main` find in its host.
+	assert.equal((await run(["main", "--new", "--mode", "json"])).code, 0);
+	const next = (await listHosts(paths)).find((entry) => entry.session && entry.pid !== host.pid);
+	assert.deepEqual(await run(["main", "--id"]), { code: 0, stdout: `${next.session.id}\n`, stderr: "" });
+	assert.deepEqual(await run(["main", "-p", "again"]), { code: 0, stdout: "answer:again\n", stderr: "" });
+	assert.match(readFileSync(hostSessionFile(next), "utf8"), /answer:again/);
+	for (const entry of [host, next]) process.kill(entry.pid, "SIGTERM");
 	await until(async () => (await listHosts(paths)).length === 0, "host exit");
 });
 

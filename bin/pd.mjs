@@ -163,17 +163,41 @@ function headlessMode() {
 
 /**
  * Opens the main Agent of the entry `--name` picks (default `main`), from any directory, or starts one if there is none:
- * the default one in `~`, another in the current directory.
+ * the default one in `~`, another in the current directory. `--new` starts one even if there is one; `--id` prints its Session ID instead.
  */
 async function openMain() {
-  const named = parseArgs(args.slice(1)).name;
+  const flags = new Set();
+  // Pi does not know these, so it reads a message after one as its value.
+  const groups = argGroups(parseArgs, args.slice(1)).flatMap(([option, ...value]) => {
+    if (!['--new', '--id'].includes(option)) return [[option, ...value]];
+    flags.add(option);
+    return value.length ? [value] : [];
+  });
+  // They name the entry's Session, so options choosing another do not apply.
+  const choosing = groups.find(([option]) => ['--session', '--session-id', '--fork', '-c', '--continue', '-r', '--resume', '--no-session'].includes(option));
+  if (flags.size && choosing) {
+    process.stderr.write(`${error(`pd main ${[...flags].join(' ')} does not take ${choosing[0]}.`)}\n`);
+    process.exit(2);
+  }
+  const named = parseArgs(groups.flat()).name;
   const name = named ?? 'main';
   // `--name` picks the entry, so it does not rename the Session.
-  const options = argGroups(parseArgs, args.slice(1)).filter(([option]) => !['--name', '-n'].includes(option)).flat();
+  const options = groups.filter(([option]) => !['--name', '-n'].includes(option)).flat();
   const file = readMains(paths.mainSession)[name];
   // A main Agent without messages has no file yet, but its host may be running.
   const holds = host => holdsFile(host, file);
-  if (file && (existsSync(file) || (await settledHosts(paths, holds)).some(holds))) args = ['--session', file, ...options];
+  const host = file && !existsSync(file) && (await settledHosts(paths, holds)).find(holds);
+  const current = file && (existsSync(file) || host);
+  if (flags.has('--id')) {
+    const id = current && (host ? host.session.id : readSessionId(file));
+    if (!id) {
+      process.stderr.write(`${error(`No main Agent for "${name}".`)}\n`);
+      process.exit(1);
+    }
+    process.stdout.write(`${id}\n`);
+    process.exit(0);
+  }
+  if (current && !flags.has('--new')) args = ['--session', file, ...options];
   else {
     if (named === undefined) process.chdir(homedir());
     // These go first, as messages may follow `--`; with `=`, `--main` takes no other argument as its value.

@@ -38,6 +38,9 @@ pi install "$(npm root -g)/@tshu-w/pi-agents"
 - `pd agents` opens the workbench.
 - `pd attach <session>` attaches to a Session, starting it first if it is not running.
 - `pd main [--name <name>] [pi options]` opens the main Agent for `<name>` (default `main`), which hands work to other Agents, from any directory; `/new` in it starts a new one.
+  - `--new` starts a new main Agent for `<name>` even if it has one; later `pd main` opens the new one.
+  - `--id` prints the main Agent's Session ID and does not open it; with none for `<name>`, it reports that on stderr and exits with status 1.
+  - Neither takes the options that choose a Session, such as `-c` or `--session`.
 - Non-interactive starts (`-p`, `--mode json`, `--mode rpc`, piped stdin) work as in Pi, on the Session in a host, so several of them and an attached terminal can use one Session at once. Their commands act on that Session, as `abort` stops whichever turn is running. Unlike Pi:
   - Dialogs are not sent to them. A dialog waits while a terminal is attached and is cancelled otherwise.
   - Extensions see interactive mode, so what an extension writes to stdout does not reach them; `/program` prints as with `pi -p`.

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `pd main --new` starts a new main Agent for the entry, which later `pd main` opens, and `pd main --id` prints the main Agent's Session ID, exiting with status 1 if there is none, so that programs need not read `main.json`.
+
 ### Changed
 
 - The detach key is Pi's `app.suspend` keybinding; the `pi-agents.detach` keybinding is gone.
