@@ -2,7 +2,13 @@
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-11
+
+- Publishes the changes of 0.6.0, which was not published.
+
 ## [0.6.0] - 2026-11-11
+
+Not published; its changes ship in 0.6.1.
 
 ### Added
 

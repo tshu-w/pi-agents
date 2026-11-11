@@ -24,7 +24,8 @@ jobs:
         run: |
           awk -v version="${GITHUB_REF_NAME#v}" '/^## /{found = $2 == version || $2 == "[" version "]"; next} found' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
           grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"
-      - run: npm install -g @earendil-works/pi-coding-agent
+      # Pi 1.5.1 and later raise an uncaught AbortError when a `read` is aborted as its file opens, which a Program's timeout in the tests can hit.
+      - run: npm install -g @earendil-works/pi-coding-agent@1.5.0
       - run: npm ci
       - run: npm test
       - run: npm publish --access public
