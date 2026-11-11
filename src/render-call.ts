@@ -16,7 +16,7 @@ type ToolCallTheme = {
 	fg(color: "toolTitle" | "text", text: string): string;
 };
 
-/** A call in function-call form, like `agent(action="wait", target="w1")`, as in pi-control. */
+/** A call in function-call form, like `agent(action="wait", target="w1")`. */
 export function formatToolCall(name: string, args: unknown, theme: ToolCallTheme): string {
 	const entries = Object.entries((args ?? {}) as Record<string, unknown>).filter(([, value]) => value !== undefined);
 	const fields = entries.map(([key, value]) => `${key}=${JSON.stringify(value) ?? String(value)}`).join(", ");

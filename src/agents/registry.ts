@@ -261,7 +261,6 @@ export function resolveIn(entries: Entry[], target: string): Entry {
 	return matches[0]!;
 }
 
-/** Sends a message from one Agent to another visible Agent. */
 /** A result a notification carries, as it shows: a Program has no name, and may have a wall time. */
 export interface NotifiedResult extends Partial<Truncation> {
 	name?: string;
