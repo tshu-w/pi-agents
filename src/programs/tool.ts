@@ -291,7 +291,11 @@ export function registerProgramTools(
 		const self = requireNode(current);
 		const session = commandSession()!;
 		const [, file, args = ""] = /^(\S+)\s*([\s\S]*)$/.exec(text.trim()) ?? [];
-		if (!file) throw new Error("Usage: /program <path> [args]");
+		if (!file) {
+			// Without a UI, as in `pi -p`, the error reports it and sets the exit status.
+			if (!current.hasUI) throw new Error("Usage: /program <path> [args]");
+			return current.ui.notify("Usage: /program <path> [args]", "error");
+		}
 		const code = await readFile(path.resolve(current.cwd, file), "utf8");
 		const toolCallId = `program-command-${randomUUID()}`;
 		const call: ProgramCall = { path: file, ...(args ? { args } : {}), code };
