@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-11
+
 ### Added
 
 - `pd main --new` starts a new main Agent for the entry, which later `pd main` opens, and `pd main --id` prints the main Agent's Session ID, exiting with status 1 if there is none, so that programs need not read `main.json`.
@@ -9,10 +11,15 @@
 
 ### Changed
 
+- Pi 1.2.0 or later is required; on older Pi, pi-agents does not load and reports the version it needs.
 - The detach key is Pi's `app.suspend` keybinding; the `pi-agents.detach` keybinding is gone.
-- The daemon knows pi-agents' code by its git commit, or its package version outside a git checkout, so uncommitted edits in the installed directory no longer restart it.
-- pi-agents no longer reads pi-exec's state: an owned Agent runs in its owner's pi-exec environment, and disowning in one is refused, only with a pi-exec that answers `agent:spawn`.
 - The busy query on `pi.events` is renamed from `busy:query` to `session:busy`, and a detached Session in a host no longer exits for idleness while an extension answers it as busy.
+- An owned Agent runs in its owner's pi-exec environment, and disowning in one is refused, only with a pi-exec that answers `agent:spawn`; update pi-exec with pi-agents.
+- `list` previews an idle Agent with its latest answer, and other Agents with their latest input.
+- A failed `send` to another root Agent says what happened and, where the sender can act, what to do, such as `reviewer (01a1c823) is offline, and a write does not start it. Send an input instead.`
+- `program list` gives each Program's ID and state in its details, and `No Programs.` past the last page.
+- `/program` without a path shows its usage as a notification.
+- The daemon restarts for an update only once it is committed, or installed outside a git checkout, so uncommitted edits in the installed directory no longer restart it.
 
 ### Fixed
 
@@ -28,6 +35,9 @@
 - An owner's Session file grows by one small entry per input change, instead of a copy of all its owned Agent's inputs and results.
 - An offline root Agent whose Session file is reachable by two paths, as through a symlinked session directory, is listed once and found by its ID, instead of twice with `matches several Agents`; main Agents and running hosts are recognized by either path.
 - Background Programs stopped because their caller went offline, or whose process exited, are reported in one write when the caller is loaded again, as owned Agent inputs are.
+- An input that ended while a `wait` held its notification keeps its result when its owner goes offline, instead of reporting it as aborted, and the result is kept until the wait delivers it.
+- A new input to an Agent whose aborted turn is still running waits for that turn to end, instead of starting a second turn beside it.
+- Opening a Session in the workbench while it is still opening no longer opens it twice.
 
 ## [0.5.0] - 2026-11-06
 

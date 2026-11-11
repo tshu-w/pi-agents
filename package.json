@@ -1,6 +1,6 @@
 {
   "name": "@tshu-w/pi-agents",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Multi-agent runtime for Pi: hand work to agents that run in the background, persist past your terminal, and report back.",
   "license": "AGPL-3.0-only",
   "repository": {
