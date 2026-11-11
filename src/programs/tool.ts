@@ -255,12 +255,13 @@ export function registerProgramTools(
 					const offset = params.offset ?? 0;
 					const limit = params.limit ?? 20;
 					const records = programs.list();
-					if (records.length === 0) return { content: [{ type: "text", text: "No Programs." }], details: { total: 0 } };
 					const page = records.slice(offset, offset + limit);
+					const details = { total: records.length, programs: page.map(({ id, state }) => ({ id, state })) };
+					if (page.length === 0) return { content: [{ type: "text", text: "No Programs." }], details };
 					const lines = page.map((record) => programListLine(record, programs.ids()));
 					const remaining = records.length - offset - page.length;
 					if (remaining > 0) lines.push(`[${remaining} more results. Use offset=${offset + page.length} to continue.]`);
-					return { content: [{ type: "text", text: lines.join("\n") }], details: { total: records.length } };
+					return { content: [{ type: "text", text: lines.join("\n") }], details };
 				}
 				case "stop": {
 					rejectFields(params, "stop", ["code", "background", "timeout", "limit", "offset"]);

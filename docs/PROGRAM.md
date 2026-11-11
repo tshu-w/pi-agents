@@ -168,11 +168,19 @@ When more entries remain:
 [N more results. Use offset=X to continue.]
 ```
 
-When there are no background Programs:
+When no background Programs are at `offset`, as when there are none:
 
 ```text
 No Programs.
 ```
+
+Details:
+
+```text
+{ total, programs: [{ id, state }] }
+```
+
+`programs` is the current page; `total` counts all background Programs.
 
 `stop`:
 

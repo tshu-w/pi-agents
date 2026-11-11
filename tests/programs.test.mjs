@@ -132,6 +132,10 @@ test("a background Program runs on after run returns and notifies its caller wit
 	await until(() => root.messages.some((message) => message.startsWith(`<program-result id="${id}" status="completed">`) && message.includes("done")), "notification");
 	assert.equal(await root.text({ action: "wait", timeout: 10 }), "Nothing to wait for.");
 	assert.match(await root.text({ action: "list" }), new RegExp(`^${id}  completed$`));
+	const { details } = await root.call({ action: "list" });
+	assert.deepEqual([details.total, details.programs.map((program) => [program.id.startsWith(id), program.state])], [1, [[true, "completed"]]]);
+	const past = await root.call({ action: "list", offset: 1 });
+	assert.deepEqual([past.content[0].text, past.details], ["No Programs.", { total: 1, programs: [] }]);
 	// The notification also carries the images of the result.
 	const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 	const pictured = idOf(await root.text({ action: "run", background: true, code: `image("data:image/png;base64,${png}"); return 'pic'` }));
