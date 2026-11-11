@@ -34,7 +34,7 @@ function bounded(run, { signal, timeoutMs }, interruption) {
 
 function validateAck(value, message) {
   if (value?.accepted !== true || value.messageId !== message.id) {
-    throw fault('INVALID_ACK', `Invalid acknowledgement for Message ${message.id}; the recipient may have received it`, true);
+    throw fault('INVALID_ACK', 'Invalid acknowledgement; the recipient may have received the message', true);
   }
   return value;
 }
@@ -58,7 +58,7 @@ export function createRouter({ deliverToSession, wake }) {
         options.signal.throwIfAborted();
         return wake(recipient, { ...options, launch });
       }), { signal: shared.controller.signal, timeoutMs: WAKE_TIMEOUT_MS },
-      code => fault(code, `Wake ${code === 'ABORT_ERR' ? 'cancelled' : 'timed out'} for Agent ${recipient}`))
+      code => fault(code, `Starting the recipient ${code === 'ABORT_ERR' ? 'was cancelled' : 'timed out'}`))
         .finally(() => {
           shared.settled = true;
           if (waking.get(recipient) === shared) waking.delete(recipient);

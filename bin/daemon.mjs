@@ -55,8 +55,8 @@ async function savedModel(file, signal) {
 async function accepting(root, signal) {
   try {
     const status = await request(paths.session(root.id), { action: 'status' }, { signal, timeoutMs: 1000 });
-    if (status.id !== root.id || status.cwd !== root.cwd) throw new Error('Awakened Agent identity or cwd does not match its Session');
-    if (status.availabilityError) throw new Error(status.availabilityError);
+    if (status.id !== root.id || status.cwd !== root.cwd) throw new Error('The Agent could not be started.');
+    if (status.availabilityError) throw Object.assign(new Error(status.availabilityError), { code: 'UNAVAILABLE' });
     if (status.ready) return status;
   } catch (error) {
     signal.throwIfAborted();
@@ -71,7 +71,7 @@ async function ready(root, model, signal) {
     const status = await accepting(root, signal);
     if (status) {
       if (model && (status.model?.provider !== model.provider || status.model?.modelId !== model.modelId)) {
-        throw new Error(`Saved model ${model.provider}/${model.modelId} was not restored; refusing model fallback.`);
+        throw Object.assign(new Error(`its saved model ${model.provider}/${model.modelId} is unavailable`), { code: 'UNAVAILABLE' });
       }
       return;
     }
@@ -82,14 +82,14 @@ async function ready(root, model, signal) {
 const router = createRouter({
   deliverToSession: (message, options) => request(paths.session(message.recipient), { action: 'deliver', message }, options),
   async wake(id, { signal, launch }) {
-    if (!launch) throw Object.assign(new Error(`Agent ${id} is offline`), { code: 'OFFLINE' });
+    if (!launch) throw Object.assign(new Error('The recipient is offline.'), { code: 'OFFLINE' });
     waking++;
     try {
       const combined = AbortSignal.any([signal, stop.signal]);
       const root = await findRoot(sessionDir, id, { extraFiles: sessions.files(), signal: combined });
-      if (!root) throw Object.assign(new Error(`No root Agent ${id}`), { code: 'UNKNOWN_AGENT' });
+      if (!root) throw Object.assign(new Error('The recipient has no saved Session.'), { code: 'UNKNOWN_AGENT' });
       if (!isAbsolute(root.cwd)) {
-        throw Object.assign(new Error(`Agent ${id} requires a nonempty absolute working directory; refusing cwd fallback.`), { code: 'INVALID_CWD' });
+        throw Object.assign(new Error(`Its saved working directory "${root.cwd}" is not an absolute path.`), { code: 'INVALID_CWD' });
       }
       // A host still starting Pi in the Session's cwd, as when a terminal has just opened the Session, may be
       // starting this Session. The wait leaves the rest of the wake time for starting the Session here.

@@ -150,7 +150,7 @@ test("a root whose Session another process holds without answering is busy", asy
 
 test("a write to an offline root is rejected and does not wake it", async () => {
 	const target = offlineRoot("offline-w", "dormant");
-	await assert.rejects(sender.call({ action: "send", target: "dormant", message: "note", deliverAs: "write" }), /dormant \(\S+\) is offline\./);
+	await assert.rejects(sender.call({ action: "send", target: "dormant", message: "note", deliverAs: "write" }), /dormant \(\S+\) is offline, and a write does not start it\. Send an input instead\./);
 	reserve(paths.locks, target.file, target.id).release();
 	assert.equal(existsSync(paths.session(target.id)), false);
 	assert.equal(entriesOf(target.file).length, 3);
@@ -167,7 +167,7 @@ test("an offline root the workbench marks by its real path behind a symlinked se
 	marks.sessions["linked-e"] = { sessionFile: file };
 	writeFileSync(paths.workbench, JSON.stringify(marks));
 	assert.equal((await sender.call({ action: "list", query: "linked-e" })).match(/linked-e/g)?.length, 1);
-	await assert.rejects(sender.call({ action: "send", target: "linked", message: "note", deliverAs: "write" }), / linked-e is offline\./);
+	await assert.rejects(sender.call({ action: "send", target: "linked", message: "note", deliverAs: "write" }), / linked-e is offline, and a write/);
 });
 
 test("a root in another process is listed with its state and cannot be opened twice", async () => {

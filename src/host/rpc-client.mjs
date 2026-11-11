@@ -35,7 +35,7 @@ async function connect(paths, id, handlers, live, role = 'rpc') {
     try {
       const status = await request(socket, { action: 'status' });
       if (status.ready) {
-        if (status.availabilityError) throw new Error(status.availabilityError);
+        if (status.availabilityError) throw new Error(`The Session cannot run unattended: ${status.availabilityError}. Open it in Pi first.`);
         return { status, stream: await openStream(socket, { action: 'stream', role }, handlers) };
       }
     } catch (error) { if (!NOT_READY.includes(error.code)) throw error; }

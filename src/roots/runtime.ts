@@ -41,6 +41,29 @@ export interface RootHooks {
 	receivedIds(ctx: ExtensionContext): Iterable<string>;
 }
 
+type SendError = Error & { code?: string; uncertainDelivery?: boolean };
+
+/** What the sender is told when a message to `label`, another root Agent, fails with `error`. */
+function sendFailure(error: SendError, label: string): string {
+	switch (error.code) {
+		case "ENOENT":
+		case "ECONNREFUSED":
+			return `${label} is offline, and a write does not start it. Send an input instead.`;
+		case "NOT_READY":
+			return `${label} is still starting. Try again shortly.`;
+		case "UNAVAILABLE":
+			return `${label} cannot take messages: ${error.message}.`;
+		case "SESSION_OCCUPIED":
+			return `${label} is open in another Pi and cannot take messages.`;
+		case "UNKNOWN_AGENT":
+			return `No saved Session of ${label} was found.`;
+		case "ETIMEDOUT":
+			return `${label} did not accept the message in time. Try again later.`;
+		default:
+			return `Sending to ${label} failed: ${error.message}`;
+	}
+}
+
 function piCli(): string {
 	const dir = getPackageDir();
 	const bundled = join(dir, "dist/bundle/cli.js");
@@ -61,16 +84,15 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 	let redelivered: Promise<void> = Promise.resolve();
 	const rpc = createRpc();
 
+	/** Why the Session cannot run unattended, as a clause about it. */
 	function availabilityError(): string | undefined {
 		const ctx = active!;
-		if (!ctx.model) return "The recipient has no available model. Open the Session interactively and select a model.";
+		if (!ctx.model) return "it has no available model";
 		const saved = buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId()).model;
 		if (saved && (saved.provider !== ctx.model.provider || saved.modelId !== ctx.model.id)) {
-			return `Saved model ${saved.provider}/${saved.modelId} is unavailable; refusing model fallback.`;
+			return `its saved model ${saved.provider}/${saved.modelId} is unavailable`;
 		}
-		if (hasTrustRequiringProjectResources(ctx.cwd) && !ctx.isProjectTrusted()) {
-			return `Interactive project authorization is required in ${ctx.cwd}. Open the Session interactively first.`;
-		}
+		if (hasTrustRequiringProjectResources(ctx.cwd) && !ctx.isProjectTrusted()) return `its project in ${ctx.cwd} is not trusted`;
 	}
 
 	function idle(): boolean {
@@ -93,10 +115,10 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 	}
 
 	async function accept(message: RootMessage, { signal }: { signal: AbortSignal }) {
-		if (!ready || !active) throw new Error("The recipient is not ready.");
+		if (!ready || !active) throw Object.assign(new Error("The recipient is not ready."), { code: "NOT_READY" });
 		if (message.recipient !== active.sessionManager.getSessionId()) throw new Error("Message recipient does not match this Agent.");
 		const error = availabilityError();
-		if (error) throw new Error(error);
+		if (error) throw Object.assign(new Error(error), { code: "UNAVAILABLE" });
 		signal.throwIfAborted();
 		await redelivered;
 		if (!seen.has(message.id)) {
@@ -195,21 +217,14 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 
 		/** Sends to another root: inputs start it in a host through the daemon, writes reach it only while it runs. */
 		async send(target: { id: string; label: string }, delivery: RootDelivery, body: string, signal?: AbortSignal): Promise<void> {
-			if (!active || !ready) throw new Error("Root messaging is not ready; only persistent root Sessions participate.");
+			if (!active || !ready) throw new Error("This Session is not saved, so it cannot message other root Agents.");
 			const sender = { id: active.sessionManager.getSessionId(), ...(pi.getSessionName() ? { name: pi.getSessionName() } : {}) };
 			const message: RootMessage = { id: randomUUID(), sender, recipient: target.id, body, deliverAs: delivery };
 			const deliver = async () => {
 				if (delivery === "write") {
-					let receipt: { accepted?: boolean; messageId?: string };
-					try {
-						receipt = await request(paths.session(target.id), { action: "deliver", message }, { signal });
-					} catch (error) {
-						const code = (error as NodeJS.ErrnoException).code;
-						if (code === "ENOENT" || code === "ECONNREFUSED") throw new Error(`${target.label} is offline.`);
-						throw error;
-					}
+					const receipt: { accepted?: boolean; messageId?: string } = await request(paths.session(target.id), { action: "deliver", message }, { signal });
 					if (receipt?.accepted !== true || receipt.messageId !== message.id) {
-						throw Object.assign(new Error(`Invalid acknowledgement from ${target.label}; it may have received the message.`), { uncertainDelivery: true });
+						throw Object.assign(new Error("Invalid acknowledgement"), { uncertainDelivery: true });
 					}
 					return;
 				}
@@ -220,12 +235,20 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 				const launch = { command: process.execPath, args: [piCli(), "-e", extension], env };
 				await sendViaDaemon(paths, message, { sessionDir, launch, signal });
 			};
+			let resent = false;
 			try {
-				await deliver();
+				try {
+					await deliver();
+				} catch (error) {
+					// The recipient adds each message ID to its Session once, so a message that may not have arrived is sent again once.
+					if (!(error as SendError).uncertainDelivery || signal?.aborted) throw error;
+					resent = true;
+					await deliver();
+				}
 			} catch (error) {
-				// The recipient adds each message ID to its Session once, so a message that may not have arrived is sent again once.
-				if (!(error as { uncertainDelivery?: boolean }).uncertainDelivery || signal?.aborted) throw error;
-				await deliver();
+				if (signal?.aborted) throw new Error(`Sending to ${target.label} was cancelled.`);
+				if (resent) throw new Error(`${target.label} did not confirm the message. It may have received it.`);
+				throw new Error(sendFailure(error as SendError, target.label));
 			}
 		},
 
