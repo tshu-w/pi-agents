@@ -133,17 +133,26 @@ test("an owned Agent whose Session fails to load after its owner closed releases
 	await until(() => !lockFiles().some((name) => hashes.includes(name.slice(0, 64))), "released locks", 2000);
 });
 
-test("an owned Agent runs in its owner's execution environment, with cwd resolved there", async () => {
+test("agent:spawn lets a listener add entries to a child Session, take its cwd, or refuse it", async () => {
 	const root = await startRoot();
 	try {
-		root.session.sessionManager.appendCustomEntry("env-state", { environment: "docker:box:/work", home: "/root" });
+		const events = [];
+		root.session.resourceLoader.eventBus.on("agent:spawn", (child) => {
+			events.push(structuredClone(child));
+			if (child.disown) child.error = "No disowned Agents here.";
+			child.entries.push({ customType: "listener-state", data: { cwd: child.cwd } });
+			child.cwd = undefined;
+		});
 		await root.call({ action: "spawn", name: "worker", message: "hello", cwd: "src" });
 		await root.call({ action: "wait", target: "worker", timeout: 10 });
+		await assert.rejects(root.call({ action: "spawn", name: "keeper", message: "hello", disown: true }), /^Error: No disowned Agents here\.$/);
+		const id = (await root.callResult({ action: "list" })).details.agents[0].id;
+		const spawnerId = root.session.sessionManager.getSessionId();
+		assert.deepEqual(events, [{ id, spawnerId, disown: false, cwd: "src", entries: [] }, { id: events[1].id, spawnerId, disown: true, cwd: undefined, entries: [] }]);
 		const dir = join(root.session.sessionManager.getSessionDir(), "subagents");
 		const entries = readdirSync(dir).flatMap((file) => readFileSync(join(dir, file), "utf8").trim().split("\n").map((line) => JSON.parse(line)));
-		const header = entries.find((entry) => entry.type === "session");
-		assert.equal(header.cwd, root.session.sessionManager.getCwd());
-		assert.deepEqual(entries.find((entry) => entry.customType === "env-state").data, { environment: "docker:box:/work/src", home: "/root" });
+		assert.equal(entries.find((entry) => entry.type === "session").cwd, root.session.sessionManager.getCwd());
+		assert.deepEqual(entries.find((entry) => entry.customType === "listener-state").data, { cwd: "src" });
 	} finally {
 		await root.close();
 	}

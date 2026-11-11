@@ -5,11 +5,13 @@
 ### Added
 
 - `pd main --new` starts a new main Agent for the entry, which later `pd main` opens, and `pd main --id` prints the main Agent's Session ID, exiting with status 1 if there is none, so that programs need not read `main.json`.
+- Before creating an Agent's Session, pi-agents emits `agent:spawn` on `pi.events`, through which an extension can add entries to the Session, change its working directory, or refuse it.
 
 ### Changed
 
 - The detach key is Pi's `app.suspend` keybinding; the `pi-agents.detach` keybinding is gone.
 - The daemon knows pi-agents' code by its git commit, or its package version outside a git checkout, so uncommitted edits in the installed directory no longer restart it.
+- pi-agents no longer reads pi-exec's state: an owned Agent runs in its owner's pi-exec environment, and disowning in one is refused, only with a pi-exec that answers `agent:spawn`.
 - The busy query on `pi.events` is renamed from `busy:query` to `session:busy`, and a detached Session in a host no longer exits for idleness while an extension answers it as busy.
 
 ### Fixed

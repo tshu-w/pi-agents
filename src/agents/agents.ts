@@ -60,6 +60,15 @@ type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 type Model = NonNullable<ExtensionContext["model"]>;
 type QueuedMessage = Parameters<AgentSession["agent"]["steer"]>[0];
 type CreateOptions = NonNullable<Parameters<typeof createAgentSession>[0]>;
+/** The payload of `agent:spawn`, which listeners may change; SPEC §9. */
+type Spawn = {
+	id: string;
+	spawnerId: string;
+	disown: boolean;
+	cwd: string | undefined;
+	entries: { customType: string; data: unknown }[];
+	error?: string;
+};
 
 export interface Limits {
 	maxConcurrent: number;
@@ -913,17 +922,17 @@ export class Agents {
 	disown(request: Omit<SpawnRequest, "message" | "context">): { id: string; name: string } {
 		const ctx = this.ctx;
 		const name = request.name.trim();
-		const env = ctx.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "env-state").pop();
-		if (env?.type === "custom" && (env.data as { environment?: string | null }).environment) throw new Error("An Agent in a pi-exec environment cannot disown an Agent.");
 		const { model, thinkingLevel } = this.resolveModel(request);
-		const cwd = path.resolve(ctx.cwd, request.cwd ?? ".");
+		const child = this.announce(randomUUID(), true, request.cwd);
+		const cwd = path.resolve(ctx.cwd, child.cwd ?? ".");
 		// Where Pi keeps the cwd's Sessions without `--session-dir`, which the daemon searches.
 		const configured = path.resolve(rootSessionDir());
 		const sessionDir = configured === path.resolve(this.agentDir, "sessions") ? defaultSessionDir(cwd, this.agentDir) : configured;
-		const sessionManager = SessionManager.create(cwd, sessionDir);
+		const sessionManager = SessionManager.create(cwd, sessionDir, { id: child.id });
 		sessionManager.appendSessionInfo(name);
 		sessionManager.appendModelChange(model.provider, model.id);
 		sessionManager.appendThinkingLevelChange(thinkingLevel);
+		for (const entry of child.entries) sessionManager.appendCustomEntry(entry.customType, entry.data);
 		try {
 			writePreparedSession(sessionManager);
 		} finally {
@@ -931,6 +940,15 @@ export class Agents {
 			releaseSession(sessionManager);
 		}
 		return { id: sessionManager.getSessionId(), name };
+	}
+
+	/** Tells other extensions about a child Session before it is created; a listener can add entries to it, change its `cwd`, or refuse it. */
+	private announce(id: string, disown: boolean, cwd: string | undefined): Spawn {
+		const child: Spawn = { id, spawnerId: this.ctx.sessionManager.getSessionId(), disown, cwd, entries: [] };
+		// Event bus handlers run synchronously and their exceptions are only logged, so a listener refuses through `error`.
+		this.pi.events.emit("agent:spawn", child);
+		if (child.error) throw new Error(child.error);
+		return child;
 	}
 
 	private resolveModel(request: Pick<SpawnRequest, "model" | "thinkingLevel">): Pick<Prepared, "model" | "thinkingLevel"> {
@@ -950,14 +968,10 @@ export class Agents {
 	private prepare(request: Omit<SpawnRequest, "message">, name: string, id?: string): Prepared {
 		const ctx = this.ctx;
 		const { model, thinkingLevel } = this.resolveModel(request);
-		// In a pi-exec execution environment, the Agent runs in the same environment and `cwd` is a path there.
-		const envEntry = ctx.sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "env-state").pop();
-		const envState = envEntry?.type === "custom" ? structuredClone(envEntry.data) as { environment?: string | null } : undefined;
-		const envTarget = envState?.environment?.match(/^((?:docker|ssh):[^:]+):(.+)$/);
-		if (envTarget && request.cwd !== undefined) envState!.environment = `${envTarget[1]}:${path.posix.resolve(envTarget[2], request.cwd)}`;
-		const cwd = envTarget ? ctx.cwd : path.resolve(ctx.cwd, request.cwd ?? ".");
+		const child = this.announce(id ?? randomUUID(), false, request.cwd);
+		const cwd = path.resolve(ctx.cwd, child.cwd ?? ".");
 		const sessionManager = SessionManager.create(cwd, childSessionDirectory(cwd, ctx.cwd, ctx.sessionManager.getSessionDir(), this.agentDir), {
-			id: id ?? randomUUID(),
+			id: child.id,
 			parentSession: ctx.sessionManager.getSessionFile(),
 		});
 		try {
@@ -967,7 +981,7 @@ export class Agents {
 			sessionManager.appendSessionInfo(name);
 			sessionManager.appendModelChange(model.provider, model.id);
 			sessionManager.appendThinkingLevelChange(thinkingLevel);
-			if (envState) sessionManager.appendCustomEntry("env-state", envState);
+			for (const entry of child.entries) sessionManager.appendCustomEntry(entry.customType, entry.data);
 			if (request.context === "fork") {
 				// Tools run after Pi persists the assistant message that called them; fork before it
 				// so the child never inherits a tool call without its result.
