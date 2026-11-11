@@ -9,7 +9,7 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { styleText } from 'node:util';
 import { attach, holdsFile, hostSessionFile, settledHosts, startHost } from '../src/host/client.mjs';
-import { detachKey, detachMatcher } from '../src/host/keys.mjs';
+import { detachMatcher } from '../src/host/keys.mjs';
 import { discoverRoots, findRoot } from '../src/roots/discovery.mjs';
 import { defaultSessionDir, resolvePath, sessionDir, statePaths } from '../src/roots/paths.mjs';
 import { piPackage } from '../src/pi.mjs';
@@ -57,8 +57,9 @@ function error(text) {
 /** Attaches the terminal to the host at `socket`; `send`, if given, sends messages once attached, and its error is reported once detached. */
 async function attachAndReport(socket, send) {
   const tui = await import(pathToFileURL(createRequire(join(piPackage(real), 'package.json')).resolve('@earendil-works/pi-tui')).href);
+  const { KeybindingsManager } = await dist('core/keybindings.js');
   let sent;
-  const result = await attach(socket, { isDetach: detachMatcher(tui, detachKey(getAgentDir())), onAttach: () => { sent = send?.(); } });
+  const result = await attach(socket, { isDetach: detachMatcher(tui, KeybindingsManager.create(getAgentDir())), onAttach: () => { sent = send?.(); } });
   const failure = await sent;
   if (failure) process.stderr.write(`${error(failure)}\n`);
   const id = result.session?.id;

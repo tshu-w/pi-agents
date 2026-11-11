@@ -57,7 +57,7 @@ Only one terminal is attached at a time. A new terminal takes over, and the prev
 
 On attach, the host restores Pi's screen and the terminal modes Pi has set. Pi detects the colors and keyboard protocol of the first terminal that attaches, as it would without a host.
 
-Closing the window, pressing `Ctrl+Z` (`pi-agents.detach`), or running `/detach` detaches. The Session keeps running, and the terminal prints:
+Closing the window, pressing `Ctrl+Z` (`app.suspend`), or running `/detach` detaches. The Session keeps running, and the terminal prints:
 
 ```text
 Pi keeps running. To reattach: pd attach <session>
@@ -92,7 +92,7 @@ Keys:
   - `Esc` (`tui.select.cancel`) clears a typed message; with none typed, it or `Space` closes the preview, as `Ctrl+Z` always does.
 - `Ctrl+X` stops the current turn, as `app.interrupt` does.
 - `Ctrl+D` (`app.session.delete`) removes the selected Session from the list. Its file stays, and `/resume` brings it back. An idle Session in a host that no terminal is attached to quits first; any other running Session must quit itself.
-- `Ctrl+Z` (`pi-agents.detach`) exits the workbench, as detaching leaves a Session; every Session keeps running.
+- `Ctrl+Z` (`app.suspend`) exits the workbench, as detaching leaves a Session; every Session keeps running.
 
 The input at the bottom:
 

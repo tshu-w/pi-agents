@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { styleText } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { alive, attach, drain, listHosts, settledHosts, startHost } from './host/client.mjs';
-import { detachKey, detachMatcher } from './host/keys.mjs';
+import { detachMatcher } from './host/keys.mjs';
 import { piPackage } from './pi.mjs';
 import { ensureDaemon, sendViaDaemon } from './daemon/client.mjs';
 import { openStream } from './roots/transport.mjs';
@@ -223,8 +223,8 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
   themes.initTheme(settings.getTheme());
   T.setCapabilityOverrides(settings.getTerminalCapabilityOverrides());
   const keybindings = keys.KeybindingsManager.create(agentDir);
-  const detach = detachKey(agentDir), isDetach = detachMatcher(T, detach);
   T.setKeybindings(keybindings);
+  const detach = hints.keyText('app.suspend'), isDetach = detachMatcher(T, keybindings);
 
   const terminal = new T.ProcessTerminal();
   const ui = new T.TuiMainScreen(terminal);
@@ -335,10 +335,10 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
       hints.keyHint('app.tools.expand', 'attach'),
       hints.rawKeyHint(['lineUp', 'halfPageUp', 'pageUp', 'lineDown', 'halfPageDown', 'pageDown']
         .map(name => hints.keyText(`tui.altScreen.${name}`)).filter(Boolean).join('/'), 'scroll'),
-      hints.rawKeyHint(`${detach}/${hints.keyText('tui.select.cancel')}`, 'close'),
+      hints.rawKeyHint([detach, hints.keyText('tui.select.cancel')].filter(Boolean).join('/'), 'close'),
     ].join(theme.fg('muted', ' · ')) : [
       hints.keyHint('tui.select.confirm', 'attach'),
-      hints.rawKeyHint(detach, 'quit'),
+      hints.keyHint('app.suspend', 'quit'),
       hints.rawKeyHint('space', 'preview'),
       hints.rawKeyHint('ctrl+x', 'stop'),
       hints.keyHint('app.session.delete', 'remove'),
