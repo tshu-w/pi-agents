@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- `pd --mode rpc` sends a read, such as `get_state`, again once it reconnects to its Session, instead of failing it with `The Session stopped.` when its connection closes before the answer, as on a reload.
 - A message another root Agent accepted is no longer lost when it exits before taking the message in; it is delivered once when it starts again.
 - A message whose delivery is uncertain is sent again once, with the same ID, before `send` reports an error.
 - An owner that went offline while its owned Agents had inputs gets one notification of them when it is loaded again.

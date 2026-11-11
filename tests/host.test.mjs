@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { createRequire } from "node:module";
@@ -514,10 +514,14 @@ test("RPC clients share a Session, dialogs wait only for an attached terminal, a
 	assert.notEqual(forked.sessionId, sessionId);
 	assert.equal((await second.call({ type: "get_state" })).data.sessionId, sessionId);
 
-	// A client whose host stops opens its Session again; a command sent as it stops fails instead of hanging.
-	process.kill(host.pid, "SIGTERM");
-	let state;
-	do state = await second.call({ type: "get_state" }); while (!state.success && state.error === "The Session stopped.");
+	// A client whose Pi stops opens its Session again, and sends again a read still waiting for its answer.
+	const pi = Number(execFileSync("pgrep", ["-P", String(host.pid)], { encoding: "utf8" }));
+	process.kill(pi, "SIGSTOP");
+	const reading = second.call({ type: "get_state" });
+	await delay(300);
+	process.kill(pi, "SIGKILL");
+	const state = await reading;
+	assert.equal(state.success, true);
 	const reopened = state.data;
 	assert.equal(reopened.sessionId, sessionId);
 	assert.ok(reopened.messageCount > 0);

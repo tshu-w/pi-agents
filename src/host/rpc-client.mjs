@@ -13,6 +13,9 @@ import { PROGRAM_MESSAGE, runOutput } from '../programs/run-output.mjs';
 const TIMEOUT_MS = 30000;
 const NOT_READY = ['ENOENT', 'ECONNREFUSED', 'NOT_READY'];
 const GONE = ['ENOENT', 'ECONNREFUSED', 'ECONNRESET'];
+// Commands that only read the Session, which a client sends again when its connection closes before the answer.
+const READS = new Set(['get_state', 'get_entries', 'get_messages', 'get_tree', 'get_commands', 'get_available_models',
+  'get_available_thinking_levels', 'get_session_stats', 'get_fork_messages', 'get_last_assistant_text']);
 // Options that choose the Session; another Session opens with the rest.
 const SESSION_OPTIONS = new Set(['--session', '--session-id', '--fork', '--name', '-n', '-c', '--continue', '-r', '--resume']);
 
@@ -316,12 +319,19 @@ async function rpc({ start, open, dist }) {
       },
       onClose() {
         if (conn.retired) return;
+        const reads = conn.pending.filter(({ command }) => READS.has(command?.type));
+        conn.pending = conn.pending.filter(entry => !reads.includes(entry));
         retire(conn, 'The Session stopped.');
-        // The host stopped or moved to another Session: open this one again.
+        // The host stopped, reloaded, or moved to another Session: open this one again.
         reopening = connection(handlers => open(conn.status.sessionFile, conn.status.cwd, handlers)).then(next => {
-          if (current === conn) return use(next);
+          if (current === conn) {
+            use(next);
+            for (const { command, resolve } of reads) send(command, resolve);
+            return;
+          }
           next.retired = true;
           next.stream.close();
+          for (const { command, resolve } of reads) (resolve ?? write)(failure(command, 'The Session stopped.'));
         }, fail);
       },
     }));
