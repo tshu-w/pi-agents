@@ -51,6 +51,8 @@ function sendFailure(error: SendError, label: string): string {
 			return `${label} is offline, and a write does not start it. Send an input instead.`;
 		case "NOT_READY":
 			return `${label} is still starting. Try again shortly.`;
+		case "HOST_START_FAILED":
+			return `${label} could not start: ${error.message}`;
 		case "UNAVAILABLE":
 			return `${label} cannot take messages: ${error.message}.`;
 		case "SESSION_OCCUPIED":

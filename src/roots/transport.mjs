@@ -198,6 +198,7 @@ export async function listen(socketPath, { status, accept, stream, serialize = t
   if (lstatSync(parent).mode & 0o077) throw fault('UNSAFE_PATH', 'Socket parent must be private to the current user');
   if (stat(socketPath)) throw fault('EADDRINUSE', 'Socket path already exists');
   const clients = new Map();
+  const streams = new Set();
   const queued = new Map();
   const closedError = Object.assign(fault('SERVER_CLOSED', 'Server is closing; request was not invoked'), { uncertainDelivery: false });
   let queue = Promise.resolve(), pending = 0, closing, lastActivity = Date.now();
@@ -214,7 +215,7 @@ export async function listen(socketPath, { status, accept, stream, serialize = t
     socket.on('error', () => { disconnect(); socket.destroy(); });
     // Bounds reading the request; the handler bounds its own work.
     const timer = setTimeout(() => { disconnect(); socket.destroy(); }, TIMEOUT_MS);
-    socket.on('close', () => { disconnect(); clearTimeout(timer); clients.delete(socket); lastActivity = Date.now(); });
+    socket.on('close', () => { disconnect(); clearTimeout(timer); clients.delete(socket); streams.delete(socket); lastActivity = Date.now(); });
     function respond(error, result) {
       if (socket.destroyed || socket.writableEnded) return;
       let bytes;
@@ -237,6 +238,7 @@ export async function listen(socketPath, { status, accept, stream, serialize = t
         let result;
         try { result = stream(input, opened); }
         catch (failure) { return respond(failure); }
+        streams.add(socket);
         socket.write(encode({ ok: true, result: { pid: process.pid, ...result } }));
         opened.send = send;
         for (const value of early) send(value);
@@ -267,6 +269,11 @@ export async function listen(socketPath, { status, accept, stream, serialize = t
   server.maxConnections = MAX_CONNECTIONS;
   await listenPrivate(server, socketPath);
   return {
+    // Retiring daemons drain request acknowledgements before disconnecting long-lived streams.
+    closeIfDrained() {
+      if (pending || [...clients.keys()].some(socket => !streams.has(socket))) return;
+      return this.close();
+    },
     closeIfIdle(idleMs) {
       if (clients.size || pending || Date.now() - lastActivity < idleMs) return;
       return this.close();
@@ -334,7 +341,7 @@ export async function request(socketPath, input, { signal, timeoutMs = TIMEOUT_M
       if (record(response) && response.ok === true && Object.hasOwn(response, 'result')) return finish(null, response.result);
       if (record(response) && response.ok === false && record(response.error)
         && text(response.error.code) && typeof response.error.message === 'string') {
-        const failure = fault(response.error.code, response.error.message);
+        const failure = Object.assign(fault(response.error.code, response.error.message), { remote: true });
         if (typeof response.error.uncertainDelivery === 'boolean') failure.uncertainDelivery = response.error.uncertainDelivery;
         return finish(failure, undefined, true);
       }

@@ -94,7 +94,7 @@ export function createRouter({ deliverToSession, wake }) {
           return validateAck(await deliver(), message);
         } catch (error) {
           options.signal.throwIfAborted();
-          if (error?.uncertainDelivery || !['ENOENT', 'ECONNREFUSED'].includes(error?.code)) throw error;
+          if (error?.uncertainDelivery || error?.remote || !['ENOENT', 'ECONNREFUSED'].includes(error?.code)) throw error;
         }
         delivering = false;
         await wakeOnce(message.recipient, { signal: options.signal, launch });

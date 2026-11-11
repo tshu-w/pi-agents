@@ -1,6 +1,7 @@
 // The per-user daemon: tracks root Sessions, routes messages between them, and starts a host for
 // a Session that is offline. Runs while a Session or the workbench is connected, exits once idle
 // otherwise, and restarts after pi-agents is updated as soon as no message is being delivered.
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -190,6 +191,10 @@ const server = await listen(paths.daemon, {
   serialize: false,
   status: () => ({ ready: true, pid: process.pid, version }),
   async accept(message, options) {
+    if (!existsSync(process.execPath)) retiring = true;
+    if (retiring) {
+      throw Object.assign(new Error('Server is retiring; request was not invoked'), { code: 'SERVER_CLOSED', uncertainDelivery: false });
+    }
     delivering++;
     try { return await router.accept(message, options); }
     finally { delivering--; }
@@ -204,8 +209,13 @@ const server = await listen(paths.daemon, {
 });
 
 const idleTimer = setInterval(() => {
+  if (!existsSync(process.execPath)) retiring = true;
   if (closing || waking || delivering) return;
-  if (retiring) return shutdown(server.close());
+  if (retiring) {
+    const closed = server.closeIfDrained();
+    if (closed) shutdown(closed);
+    return;
+  }
   if (Date.now() - lastActivity < IDLE_MS) return;
   const closed = server.closeIfIdle(IDLE_MS);
   if (closed) shutdown(closed);

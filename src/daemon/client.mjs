@@ -69,7 +69,7 @@ export async function sendViaDaemon(paths, message, { sessionDir, launch, signal
         return await request(paths.daemon, { action: 'deliver', message, launch }, { signal: stop, timeoutMs });
       } catch (error) {
         // Replay only when the transport guarantees the handler was not invoked.
-        if (error.uncertainDelivery || !(['ENOENT', 'ECONNREFUSED'].includes(error.code)
+        if (error.uncertainDelivery || !((!error.remote && ['ENOENT', 'ECONNREFUSED'].includes(error.code))
           || (error.code === 'SERVER_CLOSED' && error.uncertainDelivery === false))) throw error;
         await delay(50, undefined, { signal: stop });
       }

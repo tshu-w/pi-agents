@@ -130,6 +130,25 @@ test("an accepted message survives the recipient's exit and enters its Session o
 	assert.equal(existsSync(mailboxFile), false);
 });
 
+test("a host startup failure is reported immediately without an offline-write hint", async (t) => {
+	const { listen } = await import("../src/roots/transport.mjs");
+	const target = "failed-start-recipient";
+	let calls = 0;
+	const server = await listen(statePaths().session(target), {
+		status: () => ({}),
+		accept: () => {
+			calls++;
+			throw Object.assign(new Error("Host launch failed: spawn /missing/node ENOENT"), { code: "HOST_START_FAILED" });
+		},
+	});
+	t.after(() => server.close());
+	const { runtime } = await startRuntime(t, pi.SessionManager.create(home, join(home, "sessions")), () => {});
+	await assert.rejects(runtime.send({ id: target, label: "worker" }, "write", "hello"), {
+		message: "worker could not start: Host launch failed: spawn /missing/node ENOENT",
+	});
+	assert.equal(calls, 1);
+});
+
 test("a send whose delivery is uncertain is sent again once with the same message ID", async (t) => {
 	const { listen } = await import("../src/roots/transport.mjs");
 	const target = "uncertain-recipient";

@@ -124,8 +124,12 @@ export async function startHost(paths, { pi, args, cwd, cols = 120, rows = 40, e
       env: { ...env, PI_AGENTS_HOST_CONFIG: JSON.stringify({ pi, args, cwd, cols, rows, waitForTerminal }) },
     });
     // A spawn error, such as a missing cwd, is emitted before the log closes.
-    child.on('error', error => { failure = error; });
-    child.once('exit', code => { failure ??= new Error(`Host exited (${code}). See ${logPath}`); });
+    child.on('error', error => {
+      failure = Object.assign(new Error(`Host launch failed: ${error.message}`, { cause: error }), { code: 'HOST_START_FAILED' });
+    });
+    child.once('exit', code => {
+      failure ??= Object.assign(new Error(`Host exited (${code}). See ${logPath}`), { code: 'HOST_START_FAILED' });
+    });
   } finally { await log.close(); }
   child.unref();
   const socket = paths.host(child.pid);
@@ -134,7 +138,7 @@ export async function startHost(paths, { pi, args, cwd, cols = 120, rows = 40, e
     if (failure) throw failure;
     try { await hostStatus(socket); return socket; }
     catch (error) { if (!['ENOENT', 'ECONNREFUSED'].includes(error.code)) throw error; }
-    if (performance.now() > deadline) throw new Error(`Host did not start. See ${logPath}`);
+    if (performance.now() > deadline) throw Object.assign(new Error(`Host did not start. See ${logPath}`), { code: 'HOST_START_FAILED' });
     await delay(25);
   }
 }
