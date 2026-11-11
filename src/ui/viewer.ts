@@ -450,7 +450,7 @@ class AgentViewer implements Component, Focusable {
 			this.transcript.addChild(new Spacer(1));
 			const skill = parseSkillBlock(text);
 			if (skill) {
-				const component = new SkillInvocationMessageComponent(skill, markdown, pad);
+				const component = new SkillInvocationMessageComponent(skill, markdown, pad, transformers);
 				component.setExpanded(this.expanded);
 				this.transcript.addChild(component);
 				if (skill.userMessage) {
@@ -467,7 +467,7 @@ class AgentViewer implements Component, Focusable {
 				this.transcript.addChild(new UserMessageComponent(message.content, markdown, pad, transformers));
 			} else {
 				// The component starts with its own blank line.
-				const component = new CustomMessageComponent(message, runner.getMessageRenderer(message.customType), markdown, pad);
+				const component = new CustomMessageComponent(message, runner.getMessageRenderer(message.customType), markdown, pad, transformers);
 				component.setExpanded(this.expanded);
 				this.transcript.addChild(component);
 			}
@@ -480,8 +480,8 @@ class AgentViewer implements Component, Focusable {
 		} else if (message.role === "compactionSummary" || message.role === "branchSummary") {
 			this.transcript.addChild(new Spacer(1));
 			const component = message.role === "compactionSummary"
-				? new CompactionSummaryMessageComponent(message, markdown, pad)
-				: new BranchSummaryMessageComponent(message, markdown, pad);
+				? new CompactionSummaryMessageComponent(message, markdown, pad, transformers)
+				: new BranchSummaryMessageComponent(message, markdown, pad, transformers);
 			component.setExpanded(this.expanded);
 			this.transcript.addChild(component);
 		}
