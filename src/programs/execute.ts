@@ -203,17 +203,16 @@ async function patchSandbox(): Promise<void> {
 		if (!current || current.used) return execute.call(this, code, options);
 		current.used = true;
 		for (const global of current.globals) this.globalsByName.set(global.name, global);
-		// Before Pi 1.2.0, the sandbox starts its worker itself, with no limit.
-		const worker = typeof this.launch === "function" ? programWorker(codemode, wasmPath, workerUrl) : undefined;
-		if (worker) this.launch = worker.launch;
+		const worker = programWorker(codemode, wasmPath, workerUrl);
+		this.launch = worker.launch;
 		const timeoutMs = Math.min(current.timeoutMs, (options.timeoutMs as number | undefined) ?? this.timeoutMs);
 		return execute.call(this, current.prepare(code), { ...options, timeoutMs }).then((result: CodemodeResult) => {
-			worker?.ended();
+			worker.ended();
 			current.result = result;
 			current.ended();
 			return result;
 		}, (error: unknown) => {
-			worker?.ended();
+			worker.ended();
 			current.ended();
 			throw error;
 		});

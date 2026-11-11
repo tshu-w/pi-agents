@@ -79,7 +79,7 @@ export function readSettings(agentDir: string): Settings {
 	return settings;
 }
 
-const MIN_PI_VERSION = "1.0.0";
+const MIN_PI_VERSION = "1.2.0";
 /** How long a root process may take to clean up on exit before it is killed. */
 const EXIT_GRACE_MS = 30_000;
 

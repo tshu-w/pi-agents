@@ -217,8 +217,7 @@ export function installRpcPatches(Session: typeof AgentSession, Runner: typeof E
 	};
 	// While a job holds the Session, a run that is not part of it, as one an input hook delayed past the job's turn
 	// or an Agent's message started, waits until the job ends; a run started by then takes its messages as follow-ups.
-	// Pi 1.2 starts runs with `_startRun(trigger, onStarted)`, Pi 1.1 with `_runAgentPrompt(messages)`. A run that
-	// need not wait starts at once: Pi marks the Session busy only when the run starts.
+	// A run that need not wait starts at once: Pi marks the Session busy only when the run starts.
 	const heldByOtherJob = (self: Patchable): boolean => {
 		const current = lane(self);
 		const store = admitting.getStore();
@@ -233,32 +232,20 @@ export function installRpcPatches(Session: typeof AgentSession, Runner: typeof E
 			current.deferred--;
 		}
 	};
-	if (typeof session._startRun === "function") {
-		const startRun = session._startRun;
-		session._startRun = async function (this: Patchable, trigger: Patchable, onStarted?: () => void) {
-			if (!heldByOtherJob(this)) return startRun.call(this, trigger, onStarted);
-			// Another job may take the Session before this continues.
-			do await waitForJob(this); while (heldByOtherJob(this));
-			if (this._isEmittingAgentSettled) return void this._deferredSettledActions.push(() => this._startRun(trigger, onStarted));
-			if (this.isStreaming) {
-				// Queued as Pi queues input while it streams, without preparing another run.
-				if (trigger.messageType === "custom") this.agent.followUp(trigger.message);
-				else void this._queueFollowUp(trigger.prompt, trigger.images);
-				return void onStarted?.();
-			}
-			return startRun.call(this, trigger, onStarted);
-		};
-	} else {
-		const runAgentPrompt = session._runAgentPrompt;
-		session._runAgentPrompt = async function (this: Patchable, messages: unknown) {
-			if (!heldByOtherJob(this)) return runAgentPrompt.call(this, messages);
-			// Another job may take the Session before this continues.
-			do await waitForJob(this); while (heldByOtherJob(this));
-			if (this._isEmittingAgentSettled) return void this._deferredSettledActions.push(() => this._runAgentPrompt(messages));
-			if (this.isStreaming) return void [messages].flat().forEach((message) => this.agent.followUp(message));
-			return runAgentPrompt.call(this, messages);
-		};
-	}
+	const startRun = session._startRun;
+	session._startRun = async function (this: Patchable, trigger: Patchable, onStarted?: () => void) {
+		if (!heldByOtherJob(this)) return startRun.call(this, trigger, onStarted);
+		// Another job may take the Session before this continues.
+		do await waitForJob(this); while (heldByOtherJob(this));
+		if (this._isEmittingAgentSettled) return void this._deferredSettledActions.push(() => this._startRun(trigger, onStarted));
+		if (this.isStreaming) {
+			// Queued as Pi queues input while it streams, without preparing another run.
+			if (trigger.messageType === "custom") this.agent.followUp(trigger.message);
+			else void this._queueFollowUp(trigger.prompt, trigger.images);
+			return void onStarted?.();
+		}
+		return startRun.call(this, trigger, onStarted);
+	};
 	const runner = Runner.prototype as Patchable;
 	const setUIContext = runner.setUIContext;
 	runner.setUIContext = function (this: Patchable, ui: Patchable | undefined, mode: string) {
