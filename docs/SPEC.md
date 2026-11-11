@@ -52,11 +52,11 @@ When the user of a root Agent clears its queued messages, messages from other Ag
 
 An Agent is `running` while a turn is in progress, `waiting` while its turn waits in `wait` (§4), `queued` while its next turn waits for a slot (§4), and `idle` otherwise. An Agent goes offline when its runtime unloads it; it stays `idle`.
 
-`send` returns once the recipient's runtime accepts the message, waking it if needed. Acceptance does not mean the recipient has handled it (§10).
+`send` returns once the recipient's runtime accepts the message, waking it if needed. Acceptance does not mean the recipient has handled it (§9).
 
 An input to an offline Agent wakes it; a write to one is rejected.
 
-Owned Agents run independently of their owner's turns and go offline with it (§10). They return as `idle` when their owner is loaded again.
+Owned Agents run independently of their owner's turns. When an owner goes offline, its owned Agents go offline too, from the bottom of the tree up, and their unfinished inputs end as `aborted`, as do inputs unfinished when a process exits. They return as `idle` when their owner is loaded again.
 
 On abort or when going offline, work that has not stopped within a timeout is abandoned: it no longer counts as live work and may keep running until the process exits; the timeout is reported.
 
@@ -367,9 +367,3 @@ Each Agent is a persistent Pi Session. A root Agent is an ordinary Session. An o
 A delivered message enters the recipient's current branch. An offline root Agent is started in a host, detached, with its saved working directory and model and the current configuration (HOSTS §4). If a root process cannot finish cleanup within a grace period on exit, it is forcibly terminated. Before shutting down an idle Session, an extension can emit `session:busy` on `pi.events` with `{ busy: false }`; any extension with work in progress sets `busy` to `true`, as pi-agents does while the tree has live work. One runtime uses a Session at a time. If a Session is occupied at startup, Pi reports it and exits.
 
 An accepted message is kept until it enters the recipient's Session. A message that may not have arrived is sent again; it enters the Session once.
-
-## 10. Limitations
-
-In this version:
-
-- When an owner goes offline, its owned Agents go offline too, from the bottom of the tree up, and their unfinished inputs end as `aborted`, as do inputs unfinished when a process exits.
