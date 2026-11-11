@@ -4,6 +4,7 @@
 
 ### Changed
 
+- The daemon knows pi-agents' code by its git commit, or its package version outside a git checkout, so uncommitted edits in the installed directory no longer restart it.
 - The busy query on `pi.events` is renamed from `busy:query` to `session:busy`, and a detached Session in a host no longer exits for idleness while an extension answers it as busy.
 
 ### Fixed
