@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- A message from an Agent other than the recipient's owner notes `The sender does not see your answer; use send to reply` instead of `Reply with send`, and `deliverAs` describes `write` as for notes the recipient need not act on.
+
 ## [0.6.1] - 2026-11-11
 
 - Publishes the changes of 0.6.0, which was not published.
