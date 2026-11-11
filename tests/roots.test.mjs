@@ -103,7 +103,7 @@ test("an input starts the offline root in a host on its active branch, which ans
 	assert.match(await sender.call({ action: "list", query: "reviewer" }), /reviewer \(offline-\)  idle  agents-test\/fake  \//);
 	assert.equal(await sender.call({ action: "send", target: "reviewer", message: "hello" }), "Input accepted by reviewer (offline-).");
 	const answered = await until(() => entriesOf(target.file).find((entry) => entry.type === "message" && entry.message.role === "assistant"), "answer");
-	assert.match(textOf(answered.message.content), /^answer:<agent-message name="sender" [^>]*note="Reply with send">\nhello\n/);
+	assert.match(textOf(answered.message.content), /^answer:<agent-message name="sender" [^>]*note="The sender does not see your answer; use send to reply">\nhello\n/);
 	const [host] = (await listHosts(paths)).filter((entry) => entry.session?.id === target.id);
 	assert.equal(host.attached, false);
 	// The host gives up the Session once Pi exits.
@@ -129,7 +129,7 @@ test("a disowned Agent is a root in a host of its own, which replies to its spaw
 	assert.equal(entriesOf(file)[0].cwd, cwd);
 	assert.ok(!entriesOf(file).some((entry) => entry.customType === "pi-agents-tree"));
 	const answered = await until(() => entriesOf(file).find((entry) => entry.type === "message" && entry.message.role === "assistant"), "answer");
-	assert.match(textOf(answered.message.content), /^answer:<agent-message name="sender" [^>]*note="Reply with send">\nhello\n/);
+	assert.match(textOf(answered.message.content), /^answer:<agent-message name="sender" [^>]*note="The sender does not see your answer; use send to reply">\nhello\n/);
 	process.kill(listed.pid, "SIGTERM");
 	await until(async () => !(await listHosts(paths)).some((entry) => entry.pid === listed.pid), "host exit");
 });

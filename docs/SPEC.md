@@ -74,7 +74,7 @@ An input is outstanding from acceptance until its turn ends or it is withdrawn. 
 
 ## 5. Results and notifications
 
-An input sent to an owned Agent ends as `completed` when its turn answers it, `failed` when its turn fails, or `aborted` when it is aborted or withdrawn. Its result is the answer or the error. Only inputs from the owner have results; the recipient replies to other senders with `send`.
+An input sent to an owned Agent ends as `completed` when its turn answers it, `failed` when its turn fails, or `aborted` when it is aborted or withdrawn. Its result is the answer or the error. Only inputs from the owner have results; the recipient can reply to other senders with `send`.
 
 When an input ends, its owner receives a notification carrying the result, unless the owner aborted it or is going offline. Inputs that a turn ends with the same outcome and result share one notification. The notification is an input delivered as `steer` (a write after the owner's turn is stopped, §2.2).
 
@@ -114,7 +114,7 @@ parameters:
 - `thinkingLevel`: Thinking level for `spawn`: off, minimal, low, medium, high, xhigh, or max (default: the caller's level).
 - `disown`: For `spawn`, start a root Agent the caller does not own (default: false).
 - `target`: Agent ID, name, or unique ID prefix for `send`, `wait`, or `abort`. `wait` and `send` with `deliverAs='write'` also accept an array. When omitted for `wait`, selects all owned Agents with pending inputs.
-- `deliverAs`: Delivery for `send` (default: followUp). followUp waits until the recipient's current turn ends; steer delivers after its current tool calls, before the next model call; write delivers like steer but does not wake an idle recipient and has no result.
+- `deliverAs`: Delivery for `send` (default: followUp). followUp waits until the recipient's current turn ends; steer delivers after its current tool calls, before the next model call; write delivers like steer but does not wake an idle recipient and has no result, for notes the recipient need not act on.
 - `timeout`: Maximum seconds for `wait` (default: 30, min: 10, max: 3600). Timeout does not abort Agents.
 - `query`: Search query for `list`, matching ID, name, cwd, summaries, and user messages. Case-insensitive; spaces mean AND; `|` means OR.
 - `state`: State for `list`: running, waiting, queued, or idle.
@@ -265,7 +265,7 @@ A notification to the owner:
 
 A notification that a `wait` held holds one such block per result, separated by blank lines.
 
-A recipient sees each message in an `agent-message` element naming the sender. An input from a sender other than the owner also carries a note asking for a reply:
+A recipient sees each message in an `agent-message` element naming the sender. An input from a sender other than the owner also carries a note that the sender does not see its answer:
 
 ```text
 <agent-message name="<name>" id="<id>">
@@ -274,7 +274,7 @@ A recipient sees each message in an `agent-message` element naming the sender. A
 ```
 
 ```text
-<agent-message name="<name>" id="<id>" note="Reply with send">
+<agent-message name="<name>" id="<id>" note="The sender does not see your answer; use send to reply">
 <body>
 </agent-message>
 ```

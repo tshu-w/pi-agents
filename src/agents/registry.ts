@@ -304,7 +304,9 @@ export function deliver(
 export const MESSAGE_TAG = "agent-message";
 /** The result of work that ended because its caller or owner went offline, which it is told of when loaded again. */
 export const OFFLINE_RESULT = "Interrupted because you went offline.";
-const REPLY_NOTE = ' note="Reply with send"';
+const REPLY_NOTE = ' note="The sender does not see your answer; use send to reply"';
+// The note older messages carry.
+const OLD_REPLY_NOTE = ' note="Reply with send"';
 
 /** The sender of a message as its element names it: its name and its short ID among the recipient's visible Agents. */
 export interface Sender {
@@ -321,7 +323,7 @@ function messageOpen({ id, name }: Sender): string {
 	return `<${MESSAGE_TAG}${name === undefined ? "" : ` name="${name}"`} id="${id}"`;
 }
 
-/** A message in an element naming its sender; an input from a sender other than the owner asks for a reply. */
+/** A message in an element naming its sender; an input from a sender other than the owner notes that the sender does not see its answer. */
 export function messageText(from: { id: string; name?: string }, fromOwner: boolean, delivery: Delivery, body: string, ids: Iterable<string>): string {
 	const note = !fromOwner && delivery !== "write" ? REPLY_NOTE : "";
 	return `${messageOpen(sender(from, ids))}${note}>\n${body}\n</${MESSAGE_TAG}>`;
@@ -331,7 +333,7 @@ export function messageText(from: { id: string; name?: string }, fromOwner: bool
 export function messageBody(text: string, sender: Sender): string | undefined {
 	const open = messageOpen(sender);
 	const close = `\n</${MESSAGE_TAG}>`;
-	const header = [`${open}>\n`, `${open}${REPLY_NOTE}>\n`].find((start) => text.startsWith(start));
+	const header = [`${open}>\n`, `${open}${REPLY_NOTE}>\n`, `${open}${OLD_REPLY_NOTE}>\n`].find((start) => text.startsWith(start));
 	return header && text.length >= header.length + close.length && text.endsWith(close) ? text.slice(header.length, -close.length) : undefined;
 }
 
