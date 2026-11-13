@@ -116,6 +116,27 @@ test("a detached host outlives the idle limit while an extension answers that it
 	await until(async () => (await listHosts(paths)).length === 0, "idle exit", 15000);
 });
 
+test("an idle owned Agent's extension keeps its detached host alive until its work ends", async (t) => {
+	const settingsFile = join(agentDir, "settings.json");
+	const settings = readFileSync(settingsFile, "utf8");
+	writeFileSync(settingsFile, JSON.stringify({ ...JSON.parse(settings), "pi-agents": { extensions: [dialog] } }));
+	t.after(() => writeFileSync(settingsFile, settings));
+	const busy = `${process.env.AGENTS_TEST_RELEASE}-kid-busy`;
+	writeFileSync(busy, "");
+	t.after(() => rmSync(busy, { force: true }));
+	const opener = terminal([]);
+	const host = await until(async () => (await listHosts(paths)).find((entry) => entry.session), "host");
+	opener.child.write("spawn\r");
+	await until(() => opener.text().includes("answer:"), "root reply");
+	await until(() => readFileSync(hostSessionFile(host), "utf8").includes('"status":"completed"'), "owned Agent reply");
+	opener.child.write("\x1a");
+	assert.equal((await opener.exited).exitCode, 0);
+	await delay(7000);
+	assert.deepEqual((await listHosts(paths)).map((entry) => entry.pid), [host.pid]);
+	rmSync(busy);
+	await until(async () => (await listHosts(paths)).length === 0, "idle exit after owned work ends", 15000);
+});
+
 test("the workbench opens a Session once when Enter is pressed again while it opens", async () => {
 	const opener = terminal(["--name", "twice"]);
 	const host = await until(async () => (await listHosts(paths)).find((entry) => entry.session?.name === "twice"), "host");

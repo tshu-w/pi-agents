@@ -30,6 +30,8 @@ export interface AgentNode {
 	name(): string | undefined;
 	cwd(): string;
 	busy(): boolean;
+	/** Background work reported by this Session's extensions. */
+	extensionsBusy?(): boolean;
 	sessionFile(): string | undefined;
 	/** An Agent's current model, as `modelLabel` writes it. */
 	model?(): string | undefined;
@@ -366,9 +368,10 @@ export function receivedMessageIds(ctx: ExtensionContext): string[] {
 			: []);
 }
 
-/** Whether a tree has no live work: unended inputs, owned Agents that are not idle, background Programs, or undelivered notifications. */
+/** Whether a tree has no live work: unended inputs, owned Agents' extension work, background Programs, or undelivered notifications. */
 export function treeIdle(rootId: string): boolean {
 	return shared.scheduler.outstanding(rootId) === 0 &&
 		![...work.values()].includes(rootId) &&
-		![...shared.nodes.values()].some((node) => node.rootId === rootId && node.agents.live());
+		![...shared.nodes.values()].some((node) => node.rootId === rootId &&
+			(node.agents.live() || (node.ownerId !== undefined && node.extensionsBusy?.())));
 }

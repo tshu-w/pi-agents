@@ -4,12 +4,12 @@ import { existsSync, rmSync } from "node:fs";
  * `/ask` opens an editor dialog and reports the text in a notification; `/relay <text>` sends the text as a prompt.
  * With `AGENTS_TEST_RELEASE`, input starting with "gate " waits until `<release>-gate` exists; a turn settles only
  * once `<release>-pause` is gone, and if `<release>-chain` exists then, a message starts another turn. While
- * `<release>-busy` exists, it answers `session:busy` as busy.
+ * `<release>-busy` exists, it answers `session:busy` as busy; `<release>-kid-busy` applies only to the Agent named kid.
  */
 export default function (pi) {
 	const release = process.env.AGENTS_TEST_RELEASE;
 	pi.events.on("session:busy", (query) => {
-		if (release && existsSync(`${release}-busy`)) query.busy = true;
+		if (release && (existsSync(`${release}-busy`) || (pi.getSessionName() === "kid" && existsSync(`${release}-kid-busy`)))) query.busy = true;
 	});
 	pi.registerCommand("ask", {
 		description: "Ask for text",

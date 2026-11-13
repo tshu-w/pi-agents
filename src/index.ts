@@ -98,6 +98,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	let node: AgentNode | undefined;
 	let programs: Programs | undefined;
 	let ctx!: ExtensionContext;
+	let queryingBusy = false;
 	const panel = createPanel(() => node);
 
 	installGuard({ SessionManager, AgentSession, AgentSessionRuntime, parseSessionEntries, stateDir: statePaths().locks });
@@ -125,7 +126,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	createReporter(pi, { treeIdle: idle, liveWork: () => node ? liveWork(node) : 0, browsing: () => browsing, host });
 	// Event bus handlers run synchronously, so an extension that emits a query object reads the answer right after emit.
 	pi.events.on("session:busy", (query) => {
-		if (node && !treeIdle(node.rootId)) (query as { busy: boolean }).busy = true;
+		if (!queryingBusy && node && !treeIdle(node.rootId)) (query as { busy: boolean }).busy = true;
 	});
 
 	const requireNode = (current: ExtensionContext): AgentNode => {
@@ -156,6 +157,14 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			agents,
 			cwd: () => ctx.cwd,
 			busy: () => !ctx.isIdle(),
+			extensionsBusy: () => {
+				const query = { busy: false };
+				// Query this Session's extensions without recursing into the whole tree.
+				queryingBusy = true;
+				try { pi.events.emit("session:busy", query); }
+				finally { queryingBusy = false; }
+				return query.busy;
+			},
 			sessionFile: () => ctx.sessionManager.getSessionFile(),
 			model: () => {
 				const model = ctx.model;
