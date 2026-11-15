@@ -37,7 +37,7 @@ A Program also creates idle Agents with `agent()`, typed in the Agent API (§6).
 
 A result is the Agent's answer. If the input fails or is aborted, the result throws an Error. A write returns `undefined` once accepted.
 
-With `schema`, the Agent must call `submit_result` with a value that matches the schema, and the result is that value. If it does not, the input fails.
+With `schema`, the Agent must call `submit_result` with a value that matches the schema, and the result is that value. If it does not, even after one reminder, the input fails.
 
 With `timeout`, an input that has not ended within that many seconds of `send()`, including time queued for a slot, is aborted; the Agent's queued inputs are unaffected. The result throws a timeout Error.
 

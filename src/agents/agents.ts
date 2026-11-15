@@ -728,6 +728,7 @@ export class Agents {
 			this.persist(agent);
 			this.changed();
 			let batch: Message[] = turn.inputs.map(({ text, user, sender, notice }) => ({ text, user, sender, notice }));
+			let reminded = false;
 			while (batch.length > 0 && !turn.abort.signal.aborted) {
 				for (const { text, ...rest } of batch.slice(0, -1)) await session.sendCustomMessage(customMessage(text, "steer", rest), { triggerTurn: false });
 				const { text, ...rest } = batch.at(-1)!;
@@ -741,6 +742,11 @@ export class Agents {
 					...turn.pending.splice(0),
 					...leftover.flatMap((message) => message.details.delivery === "write" ? [] : [messageParts(message)]),
 				];
+				// An input with a schema that the turn answered without a submission gets one reminder.
+				if (batch.length === 0 && !reminded && turn.inputs.some((input) => input.schema !== undefined && !input.submitted) && lastAnswer(session, before).outcome === "completed") {
+					reminded = true;
+					batch = [{ text: `You have not called \`${SUBMIT_RESULT_TOOL_NAME}\` yet. Call it with a \`value\` that matches the JSON Schema.` }];
+				}
 			}
 			const last = lastAnswer(session, before);
 			answer = !turn.abort.signal.aborted ? last : { outcome: "aborted", result: last.outcome === "failed" ? "" : last.result };

@@ -5,6 +5,7 @@
 ### Changed
 
 - An input from an Agent other than the recipient's owner notes `The sender does not see your answer; use send to reply` instead of `Reply with send`, and `deliverAs` describes `write` as for notes the recipient need not act on.
+- A Program's input with a `schema` whose turn ends without `submit_result` reminds the Agent once before it fails.
 
 ## [0.6.1] - 2026-11-11
 

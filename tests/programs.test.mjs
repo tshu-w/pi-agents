@@ -21,7 +21,7 @@ const bodyOf = (text) => text.split("\n").slice(1, -1).join("\n").split("\n\nWhe
  * `state.declared` holds the tool declarations the root's model saw last.
  *
  * Agents answer `answer:<body>`. A body `submit:<json>[|<json>]` calls `submit_result` with the
- * first value, and with the second after an error; `hold` counts itself in `state.busy` and answers
+ * first value, and with the second after an error; `late:<json>` answers without calling it and submits the value when reminded; `hold` counts itself in `state.busy` and answers
  * once `state.hold` opens, and `stuck` does so even after an abort; `call:<json>` and `program:<json>` call `agent` or `program` with those
  * arguments and answer with the result; `calls:<json>` makes `agent` calls with each arguments in turn.
  */
@@ -38,6 +38,11 @@ async function startRoot(cwd = mkdtempSync(join(agentDir, "cwd-")), sessionFile 
 			const input = textOf(context.messages.findLast((message) => message.role === "user").content);
 			state.inputs.push(input);
 			const body = bodyOf(input);
+			const late = /^late:(.*)$/s.exec(bodyOf(first))?.[1];
+			if (late && !input.startsWith("<agent-message ")) {
+				if (last.role !== "toolResult") return ai.fauxAssistantMessage(ai.fauxToolCall("submit_result", { value: JSON.parse(late) }));
+				return ai.fauxAssistantMessage(textOf(last.content));
+			}
 			if (body.startsWith("submit:")) {
 				const [value, retry] = body.slice("submit:".length).split("|").map((json) => JSON.parse(json));
 				if (last.role !== "toolResult") return ai.fauxAssistantMessage(ai.fauxToolCall("submit_result", { value }));
@@ -419,7 +424,7 @@ test("a caller going offline stops its Programs, and is told of them in one writ
 	await restarted.close();
 });
 
-test("agent() handles return answers and submitted values, and schema inputs fail without a valid submission", async () => {
+test("agent() handles return answers and submitted values, and schema inputs fail without a valid submission after a reminder", async () => {
 	const root = await startRoot();
 	const schema = "{ type: 'object', properties: { n: { type: 'number' } }, required: ['n'] }";
 	const result = await root.text({ action: "run", code: `
@@ -427,13 +432,14 @@ test("agent() handles return answers and submitted values, and schema inputs fai
 		const b = agent();
 		const answers = await Promise.all([a.send('hello'), b.send('submit:{"n":"x"}|{"n":2}', { schema: ${schema} })]);
 		const errors = [];
+		answers.push(await agent().send('late:{"n":3}', { schema: ${schema} }));
 		try { await a.send('submit:{"m":1}', { schema: ${schema} }); } catch (error) { errors.push(error.message); }
 		return { names: [a.name, b.name], answers, errors };
 	` });
 	const value = JSON.parse(result.slice(result.indexOf("Output:\n") + 8));
 	assert.deepEqual(value.names, ["w", "agent-1"]);
-	assert.deepEqual(value.answers, ["answer:hello", { n: 2 }]);
-	assert.equal(value.errors.length, 1);
+	assert.deepEqual(value.answers, ["answer:hello", { n: 2 }, { n: 3 }]);
+	assert.match(value.errors[0], /without calling submit_result\.$/);
 	await root.close();
 });
 
