@@ -3,12 +3,12 @@
  * `AgentSession` and `ExtensionRunner`, so check them when Pi is updated.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { AgentSession, ExtensionRunner } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ExtensionRunner, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { CODEMODE_TOOL_NAME } from "./codemode.ts";
 import { PROGRAM_TOOL_NAME } from "./execute.ts";
 
 const PATCHED = Symbol.for("pi-agents:patched");
-const MCP_EXTENSION_PATH = "builtin:mcp";
+export const MCP_EXTENSION_PATH = "builtin:mcp";
 
 interface DetachedCall {
 	signal?: AbortSignal;
@@ -25,6 +25,8 @@ const nestedCalls = ((globalThis as Record<symbol, unknown>)[Symbol.for("pi-agen
 	patched: boolean;
 	run?: (this: Patchable, execute: Function, callerId: string, name: string, args: unknown, options?: Record<string, unknown>) => Promise<unknown>;
 };
+/** Each Session's extension runner, by its Session manager. */
+const runners = ((globalThis as Record<symbol, unknown>)[Symbol.for("pi-agents:runners")] ??= new WeakMap<object, Patchable>()) as WeakMap<object, Patchable>;
 /** Set while the built-in MCP extension runs, including work it started. */
 const inMcp = new AsyncLocalStorage<true>();
 
@@ -73,6 +75,11 @@ export async function runDetached<T>(session: Patchable, signal: AbortSignal | u
 	}
 }
 
+/** The executable definition of a tool registered in the Session that `sessionManager` belongs to. */
+export function toolDefinition(sessionManager: object, name: string): ToolDefinition | undefined {
+	return runners.get(sessionManager)!.getToolDefinition(name);
+}
+
 /** Stands in for the assistant message Pi passes to hooks of nested calls, which a command's Session may lack. */
 function commandMessage() {
 	const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
@@ -90,6 +97,8 @@ function commandMessage() {
  * - The built-in MCP extension sees `program` as `codemode`: it activates `program` when its tools
  *   need a script tool and neither is active, counts an active `program` as reaching its tools,
  *   and makes a Program wait for the servers its code names, as it does for `codemode` scripts.
+ * - A Session's tool definitions can be read through `toolDefinition()`, so owned Agents can use
+ *   their owner's MCP tools.
  */
 export function installProgramPatches(
 	session: typeof AgentSession,
@@ -127,6 +136,7 @@ export function installProgramPatches(
 		const bindCore = runnerProto.bindCore;
 		runnerProto.bindCore = function (this: Patchable, ...args: unknown[]) {
 			bindCore.apply(this, args);
+			runners.set(this.sessionManager, this);
 			const mcp = (this.extensions as Patchable[]).find((extension) => extension.path === MCP_EXTENSION_PATH);
 			if (mcp) aliasProgramForMcp(this, mcp, codemodeSchema);
 		};

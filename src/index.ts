@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
-import { Agents, type Limits } from "./agents/agents.ts";
+import { Agents, notePromptSections, type Limits } from "./agents/agents.ts";
 import {
 	customMessage,
 	liveWork,
@@ -197,7 +197,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		if (node) node.stopped = false;
 	});
 
-	pi.on("before_agent_start", (_event, current) => {
+	pi.on("before_agent_start", (event, current) => {
+		notePromptSections(current, event.systemPromptOptions.sections);
 		const active = pi.getActiveTools();
 		if (warnedBothScriptTools || !active.includes(PROGRAM_TOOL_NAME) || !active.includes(CODEMODE_TOOL_NAME)) return;
 		warnedBothScriptTools = true;

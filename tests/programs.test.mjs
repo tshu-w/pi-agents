@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -687,6 +688,56 @@ test("MCP activates program, and a Program waits for the MCP server its code nam
 	assert.ok(!session.getAllTools().some((tool) => tool.name === "mcp__echo__shout"));
 	await session.prompt("shout");
 	assert.match(textOf(session.messages.findLast((message) => message.role === "toolResult").content), /HI$/);
+	await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+	session.dispose();
+});
+
+test("owned Agents reach their owner's MCP tools as the owner does, over the owner's connections", async () => {
+	const servers = fileURLToPath(new URL("./fixtures/mcp-servers.mjs", import.meta.url));
+	// The Agent's own extensions register the same servers, which stay unconnected.
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ "pi-agents": { extensions: [servers] } }));
+	const cwd = mkdtempSync(join(agentDir, "cwd-"));
+	const section = (messages) => messages.filter((message) => message.role === "system").reduce((current, message) => message.sections && "mcp_servers" in message.sections ? message.sections.mcp_servers : current, undefined);
+	const code = `
+		const out = [];
+		for (const name of ['mcp__alpha__shout', 'mcp__alpha__loud', 'mcp__beta__whisper']) out.push((await tools[name]({ text: name })).content[0].text);
+		out.push((await searchTools('whisper')).map((tool) => tool.name).join());
+		return out.join(' ');
+	`;
+	const child = {};
+	// The root asks a Program's Agent, which asks one of its own; that one reaches the tools.
+	const route = (context) => {
+		const messages = context.messages;
+		const results = messages.filter((message) => message.role === "toolResult").map((message) => textOf(message.content));
+		const first = textOf(messages.find((message) => message.role === "user").content);
+		if (!first.startsWith("<agent-message ") || bodyOf(first) === "nest") {
+			return results.length === 0
+				? ai.fauxAssistantMessage(ai.fauxToolCall("program", { action: "run", code: `return await agent().send('${first.startsWith("<agent-message ") ? "mcp" : "nest"}')` }))
+				: ai.fauxAssistantMessage(results[0]);
+		}
+		if (results.length === 0) {
+			child.declared = messages.filter((message) => message.role === "system").flatMap((message) => message.toolsAdded ?? []).map((tool) => tool.name);
+			child.section = section(messages);
+			return ai.fauxAssistantMessage(ai.fauxToolCall("program", { action: "run", code }));
+		}
+		if (results.length === 1) return ai.fauxAssistantMessage(ai.fauxToolCall("tool_search", { query: "whisper" }));
+		return ai.fauxAssistantMessage(results.join("\n"));
+	};
+	const session = await createSession({
+		cwd, route, sessionManager: pi.SessionManager.create(cwd, join(cwd, "sessions")), tools: ["+agent", "+program"],
+		extensionFactories: ["codemode", "tool_search", "mcp"].map((name) => ({ name, builtin: true, factory: pi[`create${{ codemode: "Codemode", tool_search: "ToolSearch", mcp: "Mcp" }[name]}Extension`]() })),
+		extensions: ["builtin:codemode", "builtin:tool_search", "builtin:mcp", EXTENSION, servers],
+	});
+	await session.bindExtensions({ mode: "print" });
+	await until(() => ["mcp__alpha__shout", "mcp__beta__whisper"].every((name) => session.getAllTools().some((tool) => tool.name === name)), "servers connected");
+	await session.prompt("go");
+	const result = textOf(session.messages.findLast((message) => message.role === "toolResult").content);
+	assert.match(result, /MCP__ALPHA__SHOUT MCP__ALPHA__LOUD MCP__BETA__WHISPER mcp__beta__whisper\nLoaded 1 tool/);
+	// The Agent declares what its owner declares: `loud`, and `tool_search` for `beta`, but no codemode or deferred tool.
+	assert.deepEqual(["program", "tool_search", "mcp__alpha__loud", "mcp__alpha__shout", "mcp__beta__whisper"].map((name) => child.declared.includes(name)), [true, true, true, false, false]);
+	assert.ok(child.section.includes("alpha"));
+	assert.equal(child.section, section(session.messages));
+	assert.equal(execFileSync("pgrep", ["-f", "mcp-server.mjs 0 "], { encoding: "utf8" }).trim().split("\n").length, 2);
 	await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 	session.dispose();
 });

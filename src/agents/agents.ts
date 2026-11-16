@@ -1,5 +1,7 @@
 import {
 	createAgentSession,
+	createCodemodeExtension,
+	createToolSearchExtension,
 	DefaultResourceLoader,
 	hasTrustRequiringProjectResources,
 	ProjectTrustStore,
@@ -9,6 +11,7 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 	type ExtensionError,
+	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
@@ -45,6 +48,7 @@ import {
 } from "./registry.ts";
 import { deferred, hold, settlesBy, waitFor, type Deferred, type Held, type WaitEnd } from "./wait.ts";
 import { releaseSession } from "../roots/guard.mjs";
+import { MCP_EXTENSION_PATH, toolDefinition } from "../programs/pi-patches.ts";
 import { defaultSessionDir, sessionDir as rootSessionDir } from "../roots/paths.mjs";
 import { readMailbox, updateMailbox } from "../roots/mailbox.ts";
 
@@ -54,6 +58,15 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 const EXTENSION_PATH = fileURLToPath(new URL("../index.ts", import.meta.url));
 export const SUBMIT_RESULT_TOOL_NAME = "submit_result";
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+// The system prompt section in which Pi's MCP extension lists the servers whose tools are not declared.
+const MCP_SERVERS_SECTION = "mcp_servers";
+
+/** Each Session's system prompt sections of its latest run, by its Session manager; handlers that run later still edit them. */
+const promptSections = new WeakMap<object, Record<string, string>>();
+
+export function notePromptSections(ctx: ExtensionContext, sections: Record<string, string>): void {
+	promptSections.set(ctx.sessionManager, sections);
+}
 
 export type Outcome = "completed" | "failed" | "aborted";
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
@@ -1017,18 +1030,56 @@ export class Agents {
 		const ctx = this.ctx;
 		const { cwd, sessionFile } = agent.record;
 		const settingsManager = SettingsManager.create(cwd, this.agentDir, { projectTrusted: resolveProjectTrust(cwd, ctx, this.agentDir) });
+		const mcpTools = () => this.pi.getAllTools()
+			.filter((tool) => tool.sourceInfo.path === MCP_EXTENSION_PATH && tool.exposure !== "hidden")
+			.map((tool) => toolDefinition(this.ctx.sessionManager, tool.name)!);
+		const ownerMcp = (child: ExtensionAPI) => {
+			const registered = new Map<string, ToolDefinition>();
+			const sync = () => {
+				const current = new Map(mcpTools().map((definition) => [definition.name, definition]));
+				// Pi cannot unregister a tool; as the owner's MCP extension does, one the owner no longer has becomes hidden.
+				for (const [name, definition] of registered) {
+					if (!current.has(name)) current.set(name, definition.exposure === "hidden" ? definition : { ...definition, exposure: "hidden" });
+				}
+				for (const [name, definition] of current) {
+					if (registered.get(name) === definition) continue;
+					registered.set(name, definition);
+					child.registerTool(definition);
+				}
+			};
+			sync();
+			// The owner connects MCP servers; handling this event keeps those registered here unconnected.
+			child.on("mcp_servers_change", () => {});
+			child.on("before_agent_start", (event) => {
+				sync();
+				const section = promptSections.get(this.ctx.sessionManager)?.[MCP_SERVERS_SECTION];
+				if (section) event.systemPromptOptions.sections[MCP_SERVERS_SECTION] = section;
+				else delete event.systemPromptOptions.sections[MCP_SERVERS_SECTION];
+			});
+		};
 		const resourceLoader = new DefaultResourceLoader({
 			cwd,
 			agentDir: this.agentDir,
 			settingsManager,
 			noExtensions: true,
-			additionalExtensionPaths: [EXTENSION_PATH, ...this.extensions],
+			// The owner's ways to reach MCP tools: `program`, which pi-agents registers, `codemode`, and `tool_search`.
+			extensionFactories: [
+				{ name: "codemode", builtin: true, factory: createCodemodeExtension() },
+				{ name: "tool_search", builtin: true, factory: createToolSearchExtension() },
+				// It stands in for the built-in MCP extension, so the Agents this Agent owns find these tools as MCP tools too.
+				{ name: "mcp", builtin: true, factory: ownerMcp },
+			],
+			additionalExtensionPaths: [EXTENSION_PATH, "builtin:codemode", "builtin:tool_search", MCP_EXTENSION_PATH, ...this.extensions],
 		});
 		await resourceLoader.reload();
 		const loadErrors = resourceLoader.getExtensions().errors;
 		if (loadErrors.length > 0) throw new Error(`Extension loading failed: ${loadErrors.map((error) => `${error.path}: ${error.error}`).join("; ")}`);
 		if (!agent.prepared && !existsSync(sessionFile)) throw new Error(`Session file is missing: ${sessionFile}`);
 		const sessionManager = agent.prepared?.sessionManager ?? SessionManager.open(sessionFile, path.dirname(sessionFile), cwd);
+		const active = [
+			...this.pi.getActiveTools().filter((name) => name !== SUBMIT_RESULT_TOOL_NAME),
+			...(this.program ? [SUBMIT_RESULT_TOOL_NAME] : []),
+		];
 		const { session, modelFallbackMessage } = await createAgentSession({
 			cwd,
 			agentDir: this.agentDir,
@@ -1039,12 +1090,11 @@ export class Agents {
 			sessionManager,
 			model: agent.prepared?.model,
 			thinkingLevel: agent.prepared?.thinkingLevel,
-			tools: [
-				...this.pi.getActiveTools().filter((name) => name !== SUBMIT_RESULT_TOOL_NAME),
-				...(this.program ? [SUBMIT_RESULT_TOOL_NAME] : []),
-			],
+			// Naming an MCP tool allows only the MCP tools named, so all of them are, and only the owner's active tools stay active.
+			tools: [...active, ...mcpTools().map((tool) => tool.name), "mcp__*"],
 			sessionStartEvent: { type: "session_start", reason: agent.prepared ? "new" : "resume" },
 		});
+		session.setActiveToolsByName(active);
 		if (!session.model) {
 			session.dispose();
 			throw new Error(modelFallbackMessage ?? "No model available.");

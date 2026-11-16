@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Owned Agents can use their owner's MCP tools, with the same exposure, over the owner's connections.
+
 ### Changed
 
 - An input from an Agent other than the recipient's owner notes `The sender does not see your answer; use send to reply` instead of `Reply with send`, and `deliverAs` describes `write` as for notes the recipient need not act on.
