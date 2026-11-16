@@ -43,6 +43,8 @@ export function registerAgentTool(
 	pi.registerTool({
 		name: "agent",
 		label: "Agent",
+		// The calls of one message run in order, so that a `wait` sees the inputs that calls before it sent.
+		executionMode: "sequential",
 		renderCall: (args, theme, context) => {
 			startDuration(context.state as DurationState, args.action === "wait", context.executionStarted);
 			return renderToolCall("agent", args, theme, context.lastComponent);
