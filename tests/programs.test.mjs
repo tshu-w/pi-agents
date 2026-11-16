@@ -570,7 +570,7 @@ test("a child Agent's Programs show under it: in the panel while they have live 
 	await root.close();
 });
 
-test("an owned Agent is waiting while its wait blocks on its own Agent, and the viewer's list shows each Agent's latest activity", async () => {
+test("an owned Agent is waiting while its wait blocks on its own Agent, and list and the viewer show each Agent's latest activity", async () => {
 	const root = await startRoot(undefined, undefined, {}, {}, [fileURLToPath(new URL("./fixtures/tree-extension.ts", import.meta.url))]);
 	const { nodes, ownedEntries, latestActivity } = globalThis.piAgentsTree;
 	const self = nodes.get(root.session.sessionManager.getSessionId());
@@ -578,10 +578,11 @@ test("an owned Agent is waiting while its wait blocks on its own Agent, and the 
 	await root.text({ action: "spawn", name: "outer", message: `calls:${JSON.stringify(calls)}` }, "agent");
 	const entry = (name) => ownedEntries(self).find((entry) => entry.name === name);
 	const state = (name) => entry(name)?.state;
-	const activity = (name) => latestActivity(entry(name)?.sessionFile);
+	const activity = (name) => latestActivity(entry(name)?.sessionFile)?.text;
 	await until(() => state("outer") === "waiting", "outer Agent waiting");
 	assert.equal(state("inner"), "running");
-	assert.equal(activity("outer"), "wait inner");
+	assert.equal(activity("outer"), 'agent(action="wait", target="inner", timeout=60)');
+	assert.match(await root.text({ action: "list", query: "" }, "agent"), /outer \(\S+\)  waiting .*\n  \S+ \S+  agent\(action="wait", target="inner", timeout=60\)\n/);
 	assert.equal(activity("inner"), "hold");
 	root.state.hold.open();
 	assert.equal(await root.text({ action: "wait", target: "outer", timeout: 10 }, "agent"), "Wait completed.");

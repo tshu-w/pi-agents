@@ -92,8 +92,8 @@ test("an owned Agent answers its first input, and its owner waits for it and is 
 	await root.call({ action: "send", target: "worker", message: "zebra" });
 	await root.call({ action: "wait", target: "worker", timeout: 10 });
 	assert.match(await root.call({ action: "list", query: "zebra" }), /zebra/);
-	// An idle Agent shows its latest answer; a running one its latest input.
-	assert.match(await root.call({ action: "list" }), /\n  \d{4}-\d\d-\d\d \d\d:\d\d  answer: answer:zebra\|seen:hello,zebra$/);
+	// An idle Agent shows its latest answer; a running one its latest input when that is newer than its activity.
+	assert.match(await root.call({ action: "list" }), /\n  \d{4}-\d\d-\d\d \d\d:\d\d  answer:zebra\|seen:hello,zebra$/);
 	root.state.hold = gate();
 	await root.call({ action: "send", target: "worker", message: "yak" });
 	await root.waitBusy(1);

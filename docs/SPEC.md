@@ -42,7 +42,7 @@ When the user of a root Agent clears its queued messages, messages from other Ag
 
 ### 2.4 list
 
-`list` returns visible Agents with their ID, name, state, model, working directory, and a preview: an idle Agent's latest answer, otherwise its latest request, the last user message or input it received.
+`list` returns visible Agents with their ID, name, state, model, working directory, and a preview: an idle Agent's latest answer; otherwise its latest tool call or text, or the last user message or input it received if that is newer.
 
 ### 2.5 abort
 
@@ -173,7 +173,7 @@ Details:
 { pending: [{ id, name }], timedOut?, interrupted? }
 ```
 
-`list` returns one entry per Agent, followed by its preview, prefixed `answer:` or `input:`, if any, and its time. With a query, entries are ordered by their most recent match, and a matching summary or user message shows its latest excerpt instead:
+`list` returns one entry per Agent, followed by its preview, if any, and its time; a request is prefixed `input:`. An activity shows a tool call as `name(argument=value, …)` with JSON values, and text as its last line. With a query, entries are ordered by their most recent match, and a matching summary or user message shows its latest excerpt instead:
 
 ```text
 <name> (<id>)  <state>  <provider>/<modelId>[:<thinkingLevel>]  <cwd>

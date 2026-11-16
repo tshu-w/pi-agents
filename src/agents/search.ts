@@ -144,7 +144,7 @@ export function searchEntries(entries: Entry[], query: string | undefined): List
 
 /**
  * An entry with its model, then its latest matching excerpt; else, when idle, its latest answer, and otherwise its
- * latest input, each marked as such; and its time.
+ * latest activity, or its latest request, marked as input, if that is newer; and its time.
  */
 export function listLine(item: ListItem, ids: Iterable<string>, model?: string): string {
 	const line = entryLine(item.entry, ids, model);
@@ -153,11 +153,16 @@ export function listLine(item: ListItem, ids: Iterable<string>, model?: string):
 }
 
 function preview(entry: Entry): { time: number; excerpt: string } | undefined {
+	const cut = (text: string) => {
+		const flat = flatten(text);
+		return flat.length > 120 ? `${flat.slice(0, 120)}…` : flat;
+	};
 	const answer = entry.state === "idle" ? parse(entry.sessionFile).answer : undefined;
-	const text = answer ?? sessionTexts(entry.sessionFile).findLast((text) => text.request);
-	if (!text) return undefined;
-	const flat = (answer ? text.text : messageBody(text.text)).replace(/\s+/g, " ").trim();
-	return { time: text.time, excerpt: `${answer ? "answer" : "input"}: ${flat.length > 120 ? `${flat.slice(0, 120)}…` : flat}` };
+	if (answer) return { time: answer.time, excerpt: cut(answer.text) };
+	const request = sessionTexts(entry.sessionFile).findLast((text) => text.request);
+	const activity = latestActivity(entry.sessionFile);
+	if (activity?.time !== undefined && !(request && request.time > activity.time)) return { time: activity.time, excerpt: cut(activity.text) };
+	return request && { time: request.time, excerpt: `input: ${cut(messageBody(request.text))}` };
 }
 
 /** A message's body without its `agent-message` element. */
@@ -166,11 +171,12 @@ function messageBody(content: string): string {
 }
 
 /**
- * An Agent's latest activity on one line: its last tool call, as `$ <command>` for bash, the tool and
- * its path for file tools, or the `agent` action and its targets; or the last line of its last reply; before it has any, its first input without the sender header. A forked
- * conversation is not its input.
+ * An Agent's latest activity on one line, with its time: the last block of its last reply other than thinking, a tool
+ * call as `name(argument=value, …)` with JSON values and text as its last line; before it has any, its first input
+ * without the sender header, with no time. A forked conversation is not its input; a Session without an input from
+ * an Agent, such as one the user talks to, counts from its start.
  */
-export function latestActivity(sessionFile: string | undefined): string | undefined {
+export function latestActivity(sessionFile: string | undefined): { text: string; time?: number } | undefined {
 	if (!sessionFile || !existsSync(sessionFile)) return undefined;
 	const size = statSync(sessionFile).size;
 	// A long Session is read at its end for the latest activity, which counts after an input there or at its start.
@@ -180,16 +186,19 @@ export function latestActivity(sessionFile: string | undefined): string | undefi
 			const tail = linesAt(file, size - CHUNK_BYTES, CHUNK_BYTES);
 			const activity = scan(tail, false).activity
 				?? (scan(linesAt(file, 0, CHUNK_BYTES), false).input !== undefined ? scan(tail, true).activity : undefined);
-			if (activity !== undefined) return flatten(activity);
+			if (activity !== undefined) return { text: flatten(activity.text), time: activity.time };
 		} finally { closeSync(file); }
 	}
-	const { input, activity } = scan(readFileSync(sessionFile, "utf8").split("\n"), false);
-	return flatten(activity ?? input);
+	const lines = readFileSync(sessionFile, "utf8").split("\n");
+	const { input, activity: afterInput } = scan(lines, false);
+	const activity = afterInput ?? (input === undefined ? scan(lines, true).activity : undefined);
+	if (activity) return { text: flatten(activity.text), time: activity.time };
+	return input === undefined ? undefined : { text: flatten(input) };
 }
 
 const CHUNK_BYTES = 256 * 1024;
 
-const flatten = (text: string | undefined) => text?.replace(/\s+/g, " ").trim();
+const flatten = (text: string) => text.replace(/\s+/g, " ").trim();
 
 /** The lines in `length` bytes from `start`, without a line cut at `start`; a line cut at the end does not parse. */
 function linesAt(file: number, start: number, length: number): string[] {
@@ -200,9 +209,9 @@ function linesAt(file: number, start: number, length: number): string[] {
 }
 
 /** The first input and the latest activity after it, or after the start when `started`. */
-function scan(lines: string[], started: boolean): { input?: string; activity?: string } {
+function scan(lines: string[], started: boolean): { input?: string; activity?: { text: string; time: number } } {
 	let input: string | undefined;
-	let activity: string | undefined;
+	let activity: { text: string; time: number } | undefined;
 	for (const line of lines) {
 		let entry: Record<string, any>;
 		try { entry = JSON.parse(line); } catch { continue; }
@@ -210,25 +219,16 @@ function scan(lines: string[], started: boolean): { input?: string; activity?: s
 			input = messageBody(entry.content);
 		}
 		if ((started || input !== undefined) && entry.type === "message" && entry.message?.role === "assistant" && Array.isArray(entry.message.content)) {
-			activity = replyActivity(entry.message.content) ?? activity;
+			const text = replyActivity(entry.message.content);
+			if (text !== undefined) activity = { text, time: Date.parse(entry.timestamp ?? "") || 0 };
 		}
 	}
 	return { input, activity };
 }
 
-function toolActivity(name: string, args: Record<string, any>): string {
-	if (name === "bash" && typeof args.command === "string") return `$ ${args.command}`;
-	if (typeof args.path === "string") return `${name} ${args.path}`;
-	if (name === "agent" && typeof args.action === "string") {
-		const targets = [args.target, args.name].flat().filter((target) => typeof target === "string");
-		return [args.action, targets.join(", ")].filter(Boolean).join(" ");
-	}
-	return name;
-}
-
 function replyActivity(content: Array<Record<string, any>>): string | undefined {
 	for (const block of [...content].reverse()) {
-		if (block.type === "toolCall") return toolActivity(block.name, block.arguments ?? {});
+		if (block.type === "toolCall") return `${block.name}(${Object.entries(block.arguments ?? {}).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(", ")})`;
 		if (block.type === "text" && typeof block.text === "string" && block.text.trim()) return block.text.trim().split("\n").at(-1);
 	}
 	return undefined;

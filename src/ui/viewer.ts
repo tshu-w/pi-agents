@@ -673,7 +673,7 @@ export async function openTaskViewer(ctx: ExtensionContext, self: AgentNode, pad
 		...entries.map((entry) => ({ live: entry.state !== "idle", at: entry.createdAt ?? "", item: {
 			value: entry.id,
 			label: path(entry),
-			description: [entry.state, latestActivity(entry.sessionFile) ?? ""].filter(Boolean).join("  "),
+			description: [entry.state, latestActivity(entry.sessionFile)?.text ?? ""].filter(Boolean).join("  "),
 		} })),
 		...records.map(({ caller, programs, record }) => ({ live: record.state === "running", at: new Date(record.startedAt).toISOString(), item: {
 			value: PROGRAM_ITEM + record.id,
