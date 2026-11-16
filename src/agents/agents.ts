@@ -1052,6 +1052,12 @@ export class Agents {
 			child.on("mcp_servers_change", () => {});
 			child.on("before_agent_start", (event) => {
 				sync();
+				// Direct MCP tools are active as in the owner; registering one activates it, even if the owner turned it off.
+				const owner = this.pi.getActiveTools();
+				const direct = mcpTools().filter((tool) => tool.exposure === "direct").map((tool) => tool.name);
+				const active = child.getActiveTools();
+				const next = [...active.filter((name) => !direct.includes(name) || owner.includes(name)), ...direct.filter((name) => owner.includes(name) && !active.includes(name))];
+				if (next.length !== active.length || next.some((name) => !active.includes(name))) child.setActiveTools(next);
 				const section = promptSections.get(this.ctx.sessionManager)?.[MCP_SERVERS_SECTION];
 				if (section) event.systemPromptOptions.sections[MCP_SERVERS_SECTION] = section;
 				else delete event.systemPromptOptions.sections[MCP_SERVERS_SECTION];

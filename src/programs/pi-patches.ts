@@ -8,6 +8,7 @@ import { CODEMODE_TOOL_NAME } from "./codemode.ts";
 import { PROGRAM_TOOL_NAME } from "./execute.ts";
 
 const PATCHED = Symbol.for("pi-agents:patched");
+const RECORDS_RUNNERS = Symbol.for("pi-agents:records-runners");
 export const MCP_EXTENSION_PATH = "builtin:mcp";
 
 interface DetachedCall {
@@ -136,9 +137,17 @@ export function installProgramPatches(
 		const bindCore = runnerProto.bindCore;
 		runnerProto.bindCore = function (this: Patchable, ...args: unknown[]) {
 			bindCore.apply(this, args);
-			runners.set(this.sessionManager, this);
 			const mcp = (this.extensions as Patchable[]).find((extension) => extension.path === MCP_EXTENSION_PATH);
 			if (mcp) aliasProgramForMcp(this, mcp, codemodeSchema);
+		};
+	}
+	// Patched apart from the above, so that a copy loaded by /reload adds it over the patches of an earlier copy without it.
+	if (!runnerProto[RECORDS_RUNNERS]) {
+		runnerProto[RECORDS_RUNNERS] = true;
+		const bindCore = runnerProto.bindCore;
+		runnerProto.bindCore = function (this: Patchable, ...args: unknown[]) {
+			runners.set(this.sessionManager, this);
+			return bindCore.apply(this, args);
 		};
 	}
 }
