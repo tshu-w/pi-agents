@@ -29,8 +29,6 @@ async function startRoot(limits = {}, sessionFile) {
 		const first = textOf(messages.find((message) => message.role === "user")?.content ?? "");
 		const last = textOf(messages.at(-1)?.content ?? "");
 		if (!first.startsWith("<agent-message ")) {
-			// `calls:<json>` makes the agent calls of each arguments in one message.
-			if (messages.at(-1).role === "user" && last.startsWith("calls:")) return ai.fauxAssistantMessage(JSON.parse(last.slice("calls:".length)).map((args) => ai.fauxToolCall("agent", args)));
 			state.rootMessages.push(last);
 			return ai.fauxAssistantMessage("noted");
 		}
@@ -213,15 +211,13 @@ test("collapsed, notifications show their result and Agent messages their sender
 	}
 });
 
-test("the calls of one message run in order, so a wait after a send waits for its input", async () => {
+test("a wait that starts while a send resolves its target waits for the input it sends", async () => {
 	const root = await startRoot();
 	await root.call({ action: "spawn", name: "worker", message: "one" });
 	await root.call({ action: "wait", target: "worker", timeout: 10 });
-	await notification(root.session, /^<agent-result /);
-	await root.session.waitForIdle();
-	await root.session.prompt(`calls:${JSON.stringify([{ action: "send", target: "worker", message: "two" }, { action: "wait", target: "worker", timeout: 10 }])}`);
-	const waited = root.session.messages.filter((message) => message.role === "toolResult").at(-1);
-	assert.equal(textOf(waited.content), "Wait completed.");
+	// As when the host runs the calls of one message in parallel.
+	const [, waited] = await Promise.all([root.call({ action: "send", target: "worker", message: "two" }), root.call({ action: "wait", target: "worker", timeout: 10 })]);
+	assert.equal(waited, "Wait completed.");
 	await root.close();
 });
 

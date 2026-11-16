@@ -40,11 +40,9 @@ export function registerAgentTool(
 	const { maxConcurrent, maxOutstanding } = limits;
 	const slotsBusy = `all ${maxConcurrent} slots are busy`;
 
-	pi.registerTool({
+	pi.registerTool(waitingForSends(requireNode, {
 		name: "agent",
 		label: "Agent",
-		// The calls of one message run in order, so that a `wait` sees the inputs that calls before it sent.
-		executionMode: "sequential",
 		renderCall: (args, theme, context) => {
 			startDuration(context.state as DurationState, args.action === "wait", context.executionStarted);
 			return renderToolCall("agent", args, theme, context.lastComponent);
@@ -186,5 +184,30 @@ export function registerAgentTool(
 				}
 			}
 		},
-	});
+	}));
+}
+
+/**
+ * A `wait` first waits for the sends of its Agent that are still resolving their target, as when the host runs the calls
+ * of one message in parallel, so that it sees the inputs they send.
+ */
+function waitingForSends<T extends { execute(...args: any[]): Promise<unknown> }>(requireNode: (current: ExtensionContext) => AgentNode, definition: T): T {
+	const sending = new WeakMap<AgentNode, Set<Promise<unknown>>>();
+	const execute = definition.execute;
+	return {
+		...definition,
+		async execute(...args: any[]) {
+			const [, params, , , current] = args as [string, { action?: string }, unknown, unknown, ExtensionContext];
+			const self = requireNode(current);
+			const sends = sending.get(self) ?? new Set();
+			sending.set(self, sends);
+			if (params.action === "wait") await Promise.allSettled([...sends]);
+			const run = execute.apply(definition, args);
+			if (params.action === "send") {
+				sends.add(run);
+				run.finally(() => sends.delete(run)).catch(() => {});
+			}
+			return run;
+		},
+	};
 }
