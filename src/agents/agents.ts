@@ -1106,11 +1106,15 @@ export class Agents {
 			throw new Error(modelFallbackMessage ?? "No model available.");
 		}
 		const errors: ExtensionError[] = [];
+		let started = false;
 		const unsupported = async (): Promise<never> => { throw new Error("Session control is not supported in owned Agents."); };
 		try {
 			await session.bindExtensions({
 				mode: "print",
-				onError: (error) => errors.push(error),
+				// Errors after startup, as in a handler during a turn, do not fail the turn; the owner's user is told of them.
+				onError: (error) => started
+					? this.ctx.ui.notify(`Agent ${label(agent.record, this.ids())}: ${error.extensionPath} (${error.event}): ${error.error}`, "error")
+					: errors.push(error),
 				commandContextActions: {
 					waitForIdle: () => session.waitForIdle(),
 					newSession: unsupported,
@@ -1123,6 +1127,7 @@ export class Agents {
 			if (errors.length > 0) {
 				throw new Error(`Extension initialization failed: ${errors.map((error) => `${error.extensionPath} (${error.event}): ${error.error}`).join("; ")}`);
 			}
+			started = true;
 		} catch (error) {
 			try { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); }
 			finally { session.dispose(); }
