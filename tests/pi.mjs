@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -20,7 +20,9 @@ export const PI_PACKAGE = bin.endsWith(join("dist", "bundle", "cli.js"))
 export const EXTENSION = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 
 export const pi = await import(join(PI_PACKAGE, "dist/index.js"));
-export const ai = await import(join(PI_PACKAGE, "node_modules/@earendil-works/pi-ai/dist/index.js"));
+// Nested in a global install, beside it in a project's node_modules.
+const AI_PACKAGE = [join(PI_PACKAGE, "node_modules/@earendil-works/pi-ai"), join(dirname(PI_PACKAGE), "pi-ai")].find((dir) => existsSync(dir));
+export const ai = await import(join(AI_PACKAGE, "dist/index.js"));
 
 export const textOf = (content) => typeof content === "string"
 	? content
