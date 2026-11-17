@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { boundText } from "../output.ts";
@@ -40,7 +40,7 @@ export function registerAgentTool(
 	const { maxConcurrent, maxOutstanding } = limits;
 	const slotsBusy = `all ${maxConcurrent} slots are busy`;
 
-	pi.registerTool(waitingForSends(requireNode, {
+	pi.registerTool(waitingForSends(requireNode, defineTool({
 		name: "agent",
 		label: "Agent",
 		renderCall: (args, theme, context) => {
@@ -184,7 +184,7 @@ export function registerAgentTool(
 				}
 			}
 		},
-	}));
+	})));
 }
 
 /**

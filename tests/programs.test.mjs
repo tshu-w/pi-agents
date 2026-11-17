@@ -737,7 +737,7 @@ test("owned Agents reach their owner's MCP tools as the owner does, over the own
 	assert.deepEqual(["program", "tool_search", "mcp__alpha__loud", "mcp__alpha__shout", "mcp__beta__whisper"].map((name) => child.declared.includes(name)), [true, true, true, false, false]);
 	assert.ok(child.section.includes("alpha"));
 	assert.equal(child.section, section(session.messages));
-	assert.equal(execFileSync("pgrep", ["-f", "mcp-server.mjs 0 "], { encoding: "utf8" }).trim().split("\n").length, 2);
+	assert.equal(execFileSync("pgrep", ["-P", String(process.pid), "-f", "mcp-server.mjs 0 "], { encoding: "utf8" }).trim().split("\n").length, 2);
 	await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 	session.dispose();
 });
