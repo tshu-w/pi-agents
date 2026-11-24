@@ -627,7 +627,8 @@ export async function workbench({ pi: executable, paths, sessionDir }) {
         const top = ['', border('─'.repeat(width))];
         const bar = width > 1 ? settings.getFullscreenScrollbar() : 'hidden';
         // The conversation starts right below the border.
-        const lines = body.render(bar === 'always' ? width - 1 : width);
+        // A copy: Pi's components return lines they keep.
+        const lines = [...body.render(bar === 'always' ? width - 1 : width)];
         while (lines.length && !T.stripTerminalSequences(lines[0]).trim()) lines.shift();
         page = Math.max(1, max - 2);
         scroll = Math.min(scroll, Math.max(0, lines.length - page));

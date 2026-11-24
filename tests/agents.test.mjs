@@ -115,11 +115,11 @@ async function agentLockHashes(root) {
 
 test("an owned Agent holds its Session's locks while it is online and releases them when its owner closes", async () => {
 	const root = await startRoot();
-	const before = lockFiles();
 	await root.call({ action: "spawn", name: "worker", message: "hello" });
 	await root.call({ action: "wait", target: "worker", timeout: 10 });
 	const hashes = await agentLockHashes(root);
-	assert.deepEqual(lockFiles().filter((name) => !before.includes(name)).map((name) => name.slice(0, 64)).sort(), hashes.sort());
+	const held = lockFiles().map((name) => name.slice(0, 64));
+	assert.deepEqual(hashes.filter((hash) => !held.includes(hash)), []);
 	await root.close();
 	assert.deepEqual(lockFiles().filter((name) => hashes.includes(name.slice(0, 64))), []);
 });

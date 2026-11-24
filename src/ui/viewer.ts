@@ -189,7 +189,7 @@ class AgentViewer implements Component, Focusable {
 		this.attach();
 		this.fullscreen = isViewportTUI(tui);
 		if (isViewportTUI(tui)) {
-			const part = (render: (width: number) => string[]): Component => ({ render, invalidate: () => this.invalidate() });
+			const part = (render: (width: number) => readonly string[]): Component => ({ render, invalidate: () => this.invalidate() });
 			this.disposers.push(mountViewer(tui, theme, ctx, part((width) => this.renderTranscript(width)), [
 				part((width) => [" ".repeat(width), ...this.renderQueue(width)]),
 				this.editor,
@@ -231,7 +231,7 @@ class AgentViewer implements Component, Focusable {
 		return [...padding, ...shown, blank, ...queue, ...editor, ...footer];
 	}
 
-	private renderTranscript(width: number): string[] {
+	private renderTranscript(width: number): readonly string[] {
 		this.prepare();
 		return this.transcript.render(width);
 	}
@@ -450,7 +450,6 @@ class AgentViewer implements Component, Focusable {
 			this.transcript.addChild(new Spacer(1));
 			const skill = parseSkillBlock(text);
 			if (skill) {
-				// @ts-expect-error Pi 1.5.0 has no transformers parameter; remove once CI moves to a Pi release with #12025.
 				const component = new SkillInvocationMessageComponent(skill, markdown, pad, transformers);
 				component.setExpanded(this.expanded);
 				this.transcript.addChild(component);
@@ -468,7 +467,6 @@ class AgentViewer implements Component, Focusable {
 				this.transcript.addChild(new UserMessageComponent(message.content, markdown, pad, transformers));
 			} else {
 				// The component starts with its own blank line.
-				// @ts-expect-error Pi 1.5.0 has no transformers parameter; remove once CI moves to a Pi release with #12025.
 				const component = new CustomMessageComponent(message, runner.getMessageRenderer(message.customType), markdown, pad, transformers);
 				component.setExpanded(this.expanded);
 				this.transcript.addChild(component);
@@ -482,9 +480,7 @@ class AgentViewer implements Component, Focusable {
 		} else if (message.role === "compactionSummary" || message.role === "branchSummary") {
 			this.transcript.addChild(new Spacer(1));
 			const component = message.role === "compactionSummary"
-				// @ts-expect-error Pi 1.5.0 has no transformers parameter; remove once CI moves to a Pi release with #12025.
 				? new CompactionSummaryMessageComponent(message, markdown, pad, transformers)
-				// @ts-expect-error Pi 1.5.0 has no transformers parameter; remove once CI moves to a Pi release with #12025.
 				: new BranchSummaryMessageComponent(message, markdown, pad, transformers);
 			component.setExpanded(this.expanded);
 			this.transcript.addChild(component);
