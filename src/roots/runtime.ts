@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { MESSAGE_TYPE, modelLabel, trackTreeWork, treeMetadata } from "../agents/registry.ts";
 import { sendViaDaemon } from "../daemon/client.mjs";
+import { piLaunch } from "../pi.mjs";
 import { prepareDirectory, statePaths, sessionDir as resolveSessionDir } from "./paths.mjs";
 import { readMailbox, updateMailbox } from "./mailbox.ts";
 import { createRpc } from "./rpc.ts";
@@ -234,7 +235,7 @@ export function createRootRuntime(pi: ExtensionAPI, hooks: RootHooks) {
 				// The daemon has checked the recipient's acknowledgement.
 				const extension = pi.getAllTools().find((tool) => tool.name === "agent")!.sourceInfo.path;
 				const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-				const launch = { command: process.execPath, args: [piCli(), "-e", extension], env };
+				const launch = { ...piLaunch(piCli(), ["-e", extension], env), env };
 				await sendViaDaemon(paths, message, { sessionDir, launch, signal });
 			};
 			let resent = false;

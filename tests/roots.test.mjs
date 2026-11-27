@@ -119,6 +119,34 @@ test("an input starts the offline root in a host on its active branch, which ans
 	assert.equal(existsSync(paths.session(target.id)), false);
 });
 
+test("the daemon recovers launch paths supplied by a sender whose installation was removed", async () => {
+	const target = offlineRoot("upgraded-root", "upgraded-root");
+	const { sendViaDaemon } = await import("../src/daemon/client.mjs");
+	const message = { id: "upgraded-message", sender: { id: "sender" }, recipient: target.id, body: "hello" };
+	const receipt = await sendViaDaemon(paths, message, {
+		sessionDir,
+		launch: { command: join(home, "removed-node"), args: [join(home, "removed-cli.js"), "-e", extension], env: process.env },
+	});
+	assert.equal(receipt.messageId, message.id);
+	assert.equal(receipt.accepted, true);
+	await until(() => entriesOf(target.file).some((entry) => entry.type === "message" && entry.message.role === "assistant"), "upgraded root answer");
+	const host = (await listHosts(paths)).find((entry) => entry.session?.id === target.id);
+	process.kill(host.pid, "SIGTERM");
+});
+
+test("a Pi that exits before accepting the message reports a startup failure", async () => {
+	const target = offlineRoot("failed-start", "failed-start");
+	const { sendViaDaemon } = await import("../src/daemon/client.mjs");
+	const script = join(home, "broken-pi.mjs");
+	writeFileSync(script, 'import "./missing-module.mjs";');
+	await assert.rejects(sendViaDaemon(paths, {
+		id: "failed-start-message", sender: { id: "sender" }, recipient: target.id, body: "hello",
+	}, {
+		sessionDir, timeoutMs: 5000,
+		launch: { command: process.execPath, args: [script], env: process.env },
+	}), { code: "HOST_START_FAILED", remote: true });
+});
+
 test("a disowned Agent is a root in a host of its own, which replies to its spawner", async () => {
 	const cwd = mkdtempSync(join(home, "cwd-"));
 	await assert.rejects(sender.call({ action: "spawn", name: "x", message: "m", disown: true, context: "fork" }), /Only an owned Agent can fork the caller's context/);

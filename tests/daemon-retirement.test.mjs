@@ -83,6 +83,7 @@ test('a missing host runtime fails immediately with HOST_START_FAILED', async t 
     import { startHost } from '${new URL('../src/host/client.mjs', import.meta.url).href}';
     import { statePaths } from '${new URL('../src/roots/paths.mjs', import.meta.url).href}';
     const executable = process.execPath;
+    process.env.PATH = '';
     Object.defineProperty(process, 'execPath', { value: ${JSON.stringify(join(directory, 'missing-node'))} });
     await assert.rejects(startHost(statePaths(), {
       pi: executable, args: [], cwd: ${JSON.stringify(directory)},

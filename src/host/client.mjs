@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { executableOnPath } from '../pi.mjs';
 import { constants } from 'node:fs';
 import { open, readdir, stat, unlink } from 'node:fs/promises';
 import net from 'node:net';
@@ -119,7 +120,7 @@ export async function startHost(paths, { pi, args, cwd, cols = 120, rows = 40, e
   const log = await open(logPath, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
   let child, failure;
   try {
-    child = spawn(process.execPath, [HOST], {
+    child = spawn(executableOnPath('node', process.execPath), [HOST], {
       cwd, detached: true, stdio: ['ignore', log.fd, log.fd],
       env: { ...env, PI_AGENTS_HOST_CONFIG: JSON.stringify({ pi, args, cwd, cols, rows, waitForTerminal }) },
     });
@@ -137,7 +138,7 @@ export async function startHost(paths, { pi, args, cwd, cols = 120, rows = 40, e
   for (;;) {
     if (failure) throw failure;
     try { await hostStatus(socket); return socket; }
-    catch (error) { if (!['ENOENT', 'ECONNREFUSED'].includes(error.code)) throw error; }
+    catch (error) { if (!['ENOENT', 'ECONNREFUSED', 'ECONNRESET'].includes(error.code)) throw error; }
     if (performance.now() > deadline) throw Object.assign(new Error(`Host did not start. See ${logPath}`), { code: 'HOST_START_FAILED' });
     await delay(25);
   }

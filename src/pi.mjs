@@ -1,8 +1,29 @@
 // pd and the workbench run outside Pi, so they load Pi's modules from the package of the `pi` they run.
-import { readFileSync, realpathSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { accessSync, constants, existsSync, readFileSync, realpathSync } from 'node:fs';
+import { delimiter, dirname, join, resolve } from 'node:path';
 
 const PACKAGE = '@earendil-works/pi-coding-agent';
+
+/** Keep a matching PATH entry unresolved so an installation upgrade can retarget it. */
+export function executableOnPath(name, current, env = process.env) {
+  const identity = name === 'pi' ? piPackage : realpathSync;
+  const missing = !existsSync(current);
+  for (const dir of (env.PATH ?? '').split(delimiter)) {
+    const candidate = resolve(dir, name);
+    try {
+      accessSync(candidate, constants.X_OK);
+      if (missing || identity(candidate) === identity(current)) return candidate;
+    } catch {}
+  }
+  return current;
+}
+
+/** PATH's Pi may be a wrapper, so run it directly rather than passing it to Node. */
+export function piLaunch(cli, args, env = process.env) {
+  const command = executableOnPath('pi', cli, env);
+  if (command !== cli && (!existsSync(cli) || realpathSync(command) !== realpathSync(cli))) return { command, args };
+  return { command: executableOnPath('node', process.execPath, env), args: [command, ...args] };
+}
 
 /** Pi's package directory, found from its executable: an npm bin link or a Homebrew wrapper. */
 export function piPackage(executable) {

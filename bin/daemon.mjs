@@ -5,7 +5,8 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { settledHosts, startHost } from '../src/host/client.mjs';
+import { hostStatus, settledHosts, startHost } from '../src/host/client.mjs';
+import { executableOnPath, piLaunch } from '../src/pi.mjs';
 import { acquireLock, pruneLocks, reserve } from '../src/roots/locks.mjs';
 import { prepareDirectory, statePaths } from '../src/roots/paths.mjs';
 import { findRoot } from '../src/roots/discovery.mjs';
@@ -67,7 +68,7 @@ async function accepting(root, signal) {
 }
 
 /** Waits until the woken Session accepts messages with its saved model. */
-async function ready(root, model, signal) {
+async function ready(root, model, signal, host) {
   for (;;) {
     const status = await accepting(root, signal);
     if (status) {
@@ -75,6 +76,13 @@ async function ready(root, model, signal) {
         throw Object.assign(new Error(`its saved model ${model.provider}/${model.modelId} is unavailable`), { code: 'UNAVAILABLE' });
       }
       return;
+    }
+    try { await hostStatus(host); }
+    catch (error) {
+      if (['ENOENT', 'ECONNREFUSED', 'ECONNRESET'].includes(error.code)) {
+        throw Object.assign(new Error(`Pi stopped before accepting messages. See ${paths.hostLog}`), { code: 'HOST_START_FAILED' });
+      }
+      if (error.code !== 'ETIMEDOUT') throw error;
     }
     await delay(50, undefined, { signal });
   }
@@ -105,9 +113,17 @@ const router = createRouter({
       }
       // Pi restores a Session's model before extensions register their providers; name it explicitly.
       const model = await savedModel(root.sessionFile, combined);
+      // Older senders supply Node and a CLI script; newer ones can supply a PATH wrapper.
+      if (isAbsolute(launch.args[0] ?? '')) {
+        if (!existsSync(launch.command) || !existsSync(launch.args[0])) {
+          launch = { ...launch, ...piLaunch(launch.args[0], launch.args.slice(1), launch.env) };
+        }
+      } else if (!existsSync(launch.command)) {
+        launch = { ...launch, command: executableOnPath('pi', launch.command, launch.env) };
+      }
       const args = [...launch.args, '--session', root.sessionFile, ...(model ? ['--model', `${model.provider}/${model.modelId}`] : [])];
       const socket = await startHost(paths, { pi: launch.command, args, cwd: root.cwd, env: launch.env });
-      try { await ready(root, model, combined); }
+      try { await ready(root, model, combined, socket); }
       catch (error) {
         // A Session that cannot take the message does not stay running unseen.
         try { process.kill(Number(/h-(\d+)\.sock$/.exec(socket)[1]), 'SIGTERM'); } catch {}

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { executableOnPath } from '../pi.mjs';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -29,19 +30,18 @@ export async function ensureDaemon(paths, { sessionDir, signal }) {
     }
     await prepareDirectory(paths.state);
     const log = await open(paths.daemonLog, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
-    let child;
+    let child, launchError;
     try {
       const info = await log.stat();
       if (!info.isFile() || info.uid !== process.getuid() || (info.mode & 0o077)) throw new Error('Daemon log must be a private regular file');
-      child = spawn(process.execPath, [fileURLToPath(new URL('../../bin/daemon.mjs', import.meta.url)), sessionDir], {
+      child = spawn(executableOnPath('node', process.execPath), [fileURLToPath(new URL('../../bin/daemon.mjs', import.meta.url)), sessionDir], {
         cwd: paths.runtime, detached: true, stdio: ['ignore', log.fd, log.fd],
       });
+      child.on('error', error => { launchError = error; });
+      child.once('exit', code => {
+        if (code !== 0) launchError = new Error(`Daemon exited (${code}). See ${paths.daemonLog}`);
+      });
     } finally { await log.close(); }
-    let launchError;
-    child.on('error', error => { launchError = error; });
-    child.once('exit', code => {
-      if (code !== 0) launchError = new Error(`Daemon exited (${code}). See ${paths.daemonLog}`);
-    });
     child.unref();
     for (;;) {
       signal?.throwIfAborted();
