@@ -2,7 +2,7 @@
 // The `pd` command: runs Pi in a host, attaching this terminal to interactive Pi and connecting
 // non-interactive Pi to the hosted Session; `--no-session` and package commands run Pi directly.
 import { spawn } from 'node:child_process';
-import { accessSync, constants, existsSync } from 'node:fs';
+import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
@@ -20,7 +20,8 @@ import { canonicalPath } from '../src/roots/locks.mjs';
 import { argGroups } from '../src/host/rpc-client.mjs';
 
 const real = process.env.PATH.split(':').map(dir => join(dir, 'pi')).find(file => {
-  try { accessSync(file, constants.X_OK); return true; } catch { return false; }
+  // A directory passes X_OK too.
+  try { accessSync(file, constants.X_OK); return statSync(file).isFile(); } catch { return false; }
 });
 if (!real) {
   process.stderr.write(`${error('pd needs Pi: install it so that pi is on PATH.')}\n`);

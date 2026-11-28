@@ -36,3 +36,13 @@ test('launches keep matching PATH entries and recover after their old targets di
   assert.deepEqual(piLaunch(cli, [], env), { command: join(bin, 'pi'), args: [] });
   assert.equal(executableOnPath('pi', cli, { PATH: '' }), cli);
 });
+
+test('a directory on PATH named like the program is skipped', t => {
+  const dir = mkdtempSync('/tmp/pa-launch-');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const [first, second] = [join(dir, 'first'), join(dir, 'second')];
+  mkdirSync(join(first, 'node'), { recursive: true });
+  mkdirSync(second);
+  writeFileSync(join(second, 'node'), '', { mode: 0o755 });
+  assert.equal(executableOnPath('node', join(dir, 'gone'), { PATH: [first, second].join(':') }), join(second, 'node'));
+});

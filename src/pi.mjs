@@ -1,5 +1,5 @@
 // pd and the workbench run outside Pi, so they load Pi's modules from the package of the `pi` they run.
-import { accessSync, constants, existsSync, readFileSync, realpathSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
 
 const PACKAGE = '@earendil-works/pi-coding-agent';
@@ -12,6 +12,8 @@ export function executableOnPath(name, current, env = process.env) {
     const candidate = resolve(dir, name);
     try {
       accessSync(candidate, constants.X_OK);
+      // A directory passes X_OK too.
+      if (!statSync(candidate).isFile()) continue;
       if (missing || identity(candidate) === identity(current)) return candidate;
     } catch {}
   }
